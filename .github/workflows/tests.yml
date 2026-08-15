@@ -1,0 +1,67 @@
+# SDK suites — offline. Path filters so a Python-only PR does not wait on npm ci.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python SDK (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # cryptography is NOT optional. Without it, Ed25519 audit-verify and
+      # policy-sign tests skip and CI stays green.
+      - name: Install test deps
+        run: pip install pytest httpx cryptography pyyaml
+
+      - name: Python SDK suite
+        env:
+          PYTHONPATH: src
+        run: python -m pytest tests/ -q
+
+  typescript:
+    name: TypeScript SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Build (tsc doubles as the type/lint gate)
+        run: npm run build
+
+      - name: Test
+        run: npm test

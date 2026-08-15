@@ -1,0 +1,104 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "artzain"
+version = "0.3.1"
+description = "OWASP-aligned LLM prompt defence, runtime destructive-action guard, agent kill switch, and audit logging"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Odenthal", email = "tylerodenthal@gmail.com" },
+]
+maintainers = [
+    { name = "Odenthal", email = "tylerodenthal@gmail.com" },
+]
+keywords = [
+    "llm",
+    "security",
+    "prompt-injection",
+    "prompt-defense",
+    "owasp",
+    "ai-safety",
+    "audit",
+    "guardrails",
+    "agent-kill-switch",
+    "destructive-action-guard",
+    "agent-safety",
+    "agentic-ai",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+
+# Zero mandatory runtime dependencies — pure stdlib.
+dependencies = []
+
+[project.scripts]
+artzain = "artzain.cli:main"
+
+[project.optional-dependencies]
+# Required only if you load custom detection patterns from YAML files via
+# load_prompt_injection_config().
+yaml = ["pyyaml>=6.0"]
+
+# Required only for `artzain audit verify` Ed25519 signature checking. Leaf-hash,
+# chain, and Merkle integrity verify with pure stdlib; signatures need this.
+verify = ["cryptography>=41"]
+
+# Required only for `artzain policy keygen|sign` — Ed25519 keypair generation
+# and bundle signing happen client-side (private keys never leave your machine).
+policy = ["cryptography>=41"]
+
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+    "build",
+    "twine",
+    "pyyaml>=6.0",
+]
+
+[project.urls]
+Homepage    = "https://github.com/CogNEXUSlabs/cognexus-tools"
+Source      = "https://github.com/CogNEXUSlabs/cognexus-tools"
+Issues      = "https://github.com/CogNEXUSlabs/cognexus-tools/issues"
+Changelog   = "https://github.com/CogNEXUSlabs/cognexus-tools/releases"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/artzain"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/",
+    "tests/",
+    "cognexus-logo.png",
+    "README.md",
+    "LICENSE",
+    "pyproject.toml",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts   = "-v"
+# Src layout — required when pytest is run without PYTHONPATH=src (e.g. build-pypi.sh).
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["E501"]

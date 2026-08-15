@@ -1,0 +1,13 @@
+# Development / integration-test extras for artzain (pypi-package).
+# Install: pip install -r requirements-dev.txt
+
+pytest>=8.0
+ruff>=0.4
+build
+twine
+pyyaml>=6.0
+
+# Optional: examples/protected_inference.py and test_optional_qwen_smoke_inference
+torch>=2.0
+transformers>=4.40
+accelerate>=0.27
