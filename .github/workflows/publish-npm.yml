@@ -1,0 +1,56 @@
+name: Publish TypeScript SDK
+
+# Publishes @cognexus/sdk to npm with provenance attestation.
+# Trigger by pushing a tag like sdk-ts-v0.1.0 (must match package.json version),
+# or run manually from the Actions tab.
+#
+# Required repo secret: NPM_TOKEN — a granular automation token with publish
+# rights on @cognexus/sdk.
+
+on:
+  push:
+    tags:
+      - "sdk-ts-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # npm --provenance attestation
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: npm ci
+
+      - name: Verify tag matches package version
+        if: github.ref_type == 'tag'
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#sdk-ts-v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) != package.json version ($PKG_VERSION)" >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Publish to npm
+        run: npm publish --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

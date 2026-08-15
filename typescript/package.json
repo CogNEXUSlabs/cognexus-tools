@@ -1,0 +1,52 @@
+{
+  "name": "@cognexus/sdk",
+  "version": "0.1.0",
+  "description": "CogNEXUS Decision API client for Node.js \u00e2\u20ac\u201d governed agent actions with sealed audit decisions.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CogNEXUSlabs/cognexus-tools.git",
+    "directory": "typescript"
+  },
+  "homepage": "https://cognexuslabs.ai",
+  "bugs": {
+    "url": "https://github.com/CogNEXUSlabs/cognexus-tools/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "keywords": [
+    "cognexus",
+    "ai-governance",
+    "decision-api",
+    "audit",
+    "llm-safety"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}
