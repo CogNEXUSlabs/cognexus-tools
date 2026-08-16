@@ -3,9 +3,12 @@ name: Publish Python SDK (artzain)
 # Publishes artzain to PyPI. Trigger by pushing a tag like python-v0.3.1
 # (must match python/pyproject.toml version), or run manually.
 #
-# Required: repo secret PYPI_API_TOKEN, or a Trusted Publisher for
-# CogNEXUSlabs/cognexus-tools. Do not reuse a bare v* tag — that prefix
-# belonged to the old personal cognexus-tools repo.
+# Prefer a pending Trusted Publisher (PyPI project artzain, workflow
+# publish-pypi.yml, Environment blank — this file has no `environment:`).
+# Do not pass password: secrets.PYPI_API_TOKEN unless that secret is set;
+# an empty password skips OIDC. Token fallback: add
+#   password: ${{ secrets.PYPI_API_TOKEN }}
+# under the publish step. Do not reuse a bare v* tag.
 
 on:
   push:
@@ -44,7 +47,7 @@ jobs:
     name: Build and publish to PyPI
     runs-on: ubuntu-latest
     needs: test
-    # Add `environment: pypi` when Trusted Publisher is configured.
+    # No GitHub Environment: pending publisher Environment must stay blank.
     steps:
       - uses: actions/checkout@v4
 
@@ -78,5 +81,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: python/dist
-          password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
+          # Omit password so OIDC / Trusted Publisher is used. If using a
+          # repo secret instead, add:
+          #   password: ${{ secrets.PYPI_API_TOKEN }}

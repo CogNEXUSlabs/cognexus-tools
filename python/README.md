@@ -123,14 +123,15 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from artzain import augment_system_prompt, screen_user_input, should_block
 
-model_name = "Qwen/Qwen3-4B-Instruct-2507"
+# Gemma 4 E4B — © Google, Apache License 2.0; downloaded at runtime from
+# Hugging Face, not distributed with this package.
+model_name = "google/gemma-4-E4B-it"
 
-tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
-    torch_dtype="auto",
+    dtype="auto",
     device_map="auto",
-    trust_remote_code=True,
 )
 
 # Defence layers applied before the prompt reaches the model
@@ -474,5 +475,12 @@ python -m pytest tests/test_api_key_integration.py -v
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE). (Versions ≤ 0.3.x were published under MIT.)
+
+**Third-party models.** The examples and the `artzain quickstart` demo
+reference [google/gemma-4-E4B-it](https://huggingface.co/google/gemma-4-E4B-it)
+(© Google, [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0)).
+Model weights are downloaded at runtime from Hugging Face by the user and are
+**not** distributed with this package; this package contains no model weights.
+Substitute any chat model you prefer — the guards are model-agnostic.
 
 Detection rules and evaluator logic originally derived from [microsoft/agent-governance-toolkit](https://github.com/microsoft/agent-governance-toolkit) (MIT; original notices retained in the vendored files and in LICENSE's third-party section). The destructive-action guard and kill switch were added in v0.2.0 in response to the PocketOS / Cursor / Claude incident ([Guardian, Apr 2026](https://www.theguardian.com/technology/2026/apr/29/claude-ai-deletes-firm-database)).

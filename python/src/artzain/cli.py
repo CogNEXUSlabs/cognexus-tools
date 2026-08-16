@@ -620,7 +620,7 @@ def run_quickstart_demo(api_key: str, *, base_url: str) -> None:
     demo_path = _write_quickstart_demo_file(base_url)
     print(f"Created {demo_path.resolve()}")
     print(
-        "  • Guardrail assertions + optional Qwen3-4B inference (same flows as this tour).\n"
+        "  • Guardrail assertions + optional Gemma 4 E4B inference (same flows as this tour).\n"
         "  • Install deps for local GPU/CPU generation:\n"
         "      pip install torch transformers accelerate\n"
         "  • Run:\n"

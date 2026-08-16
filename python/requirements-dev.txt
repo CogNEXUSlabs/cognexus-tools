@@ -7,7 +7,8 @@ build
 twine
 pyyaml>=6.0
 
-# Optional: examples/protected_inference.py and test_optional_qwen_smoke_inference
+# Optional: examples/protected_inference.py and test_optional_model_smoke_inference
+# (the Gemma 4 demo model needs transformers >= 5.5)
 torch>=2.0
-transformers>=4.40
+transformers>=5.5
 accelerate>=0.27
