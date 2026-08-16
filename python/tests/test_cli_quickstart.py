@@ -58,5 +58,5 @@ def test_quickstart_demo_template_substitutes_metadata() -> None:
     body = _quickstart_demo_file_contents("https://example.test")
     assert "https://example.test" in body
     assert __version__ in body
-    assert "Qwen/Qwen3-4B-Instruct-2507" in body
+    assert "google/gemma-4-E4B-it" in body
     assert "run_guard_tests" in body

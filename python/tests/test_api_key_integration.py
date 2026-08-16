@@ -11,11 +11,11 @@ Run::
     export COGNEXUS_API_KEY="your-dashboard-api-key"
     python -m pytest tests/test_api_key_integration.py -v
 
-Optional local inference smoke (pulls ``Qwen/Qwen3-4B-Instruct-2507``; heavy)::
+Optional local inference smoke (pulls ``google/gemma-4-E4B-it``; heavy)::
 
     pip install torch transformers accelerate
     export COGNEXUS_RUN_MODEL_SMOKE=1
-    python -m pytest tests/test_api_key_integration.py::test_optional_qwen_smoke_inference -v
+    python -m pytest tests/test_api_key_integration.py::test_optional_model_smoke_inference -v
 
 Static defense scenarios follow every vector in :data:`artzain.prompt_defense.VECTOR_COUNT`
 (currently 15). OWASP coverage pairs **LLM01–LLM10 (2025)** with **ASI01–ASI10 (agentic)**
@@ -505,16 +505,16 @@ def test_owasp_asi10_rogue_agents(integration_env) -> None:
 
 @pytest.mark.skipif(
     os.environ.get("COGNEXUS_RUN_MODEL_SMOKE") != "1",
-    reason="Set COGNEXUS_RUN_MODEL_SMOKE=1 to download/run the Qwen smoke test.",
+    reason="Set COGNEXUS_RUN_MODEL_SMOKE=1 to download/run the model smoke test.",
 )
-def test_optional_qwen_smoke_inference(integration_env) -> None:
+def test_optional_model_smoke_inference(integration_env) -> None:
     pytest.importorskip("torch")
     pytest.importorskip("transformers")
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
     import torch
 
-    model_id = "Qwen/Qwen3-4B-Instruct-2507"
+    model_id = "google/gemma-4-E4B-it"
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     kwargs: dict = {"dtype": dtype, "trust_remote_code": True}
@@ -535,12 +535,12 @@ def test_optional_qwen_smoke_inference(integration_env) -> None:
     assert report.grade in {"A", "B"}
 
     safe_user = "Summarise two benefits of unit testing in one sentence."
-    safe_result = screen_user_input(safe_user, source="integration.qwen_smoke.safe")
+    safe_result = screen_user_input(safe_user, source="integration.model_smoke.safe")
     assert not safe_result.is_injection
-    maybe_log_prompt_defense(__import__("logging").getLogger("integration"), system, context="qwen_smoke")
+    maybe_log_prompt_defense(__import__("logging").getLogger("integration"), system, context="model_smoke")
 
     malicious_user = tp.DEFENSE_INSTRUCTION_OVERRIDE
-    bad_result = screen_user_input(malicious_user, source="integration.qwen_smoke.blocked")
+    bad_result = screen_user_input(malicious_user, source="integration.model_smoke.blocked")
     assert bad_result.is_injection
 
     messages = [
@@ -562,8 +562,8 @@ def test_optional_qwen_smoke_inference(integration_env) -> None:
     assert len(text) > 0
 
     post_sdk_event(
-        "integration_qwen_smoke",
-        title="artzain.integration.qwen_smoke",
+        "integration_model_smoke",
+        title="artzain.integration.model_smoke",
         payload={
             "model": model_id,
             "safe_screen_clean": not safe_result.is_injection,

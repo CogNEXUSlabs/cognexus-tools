@@ -5,7 +5,7 @@ After ``pip install artzain``, run::
 
     export COGNEXUS_API_KEY="your-dashboard-api-key"
     export COGNEXUS_API_BASE_URL="https://your-host"   # optional; defaults for SaaS
-    pip install torch transformers accelerate          # optional; for local Qwen inference
+    pip install torch transformers accelerate          # optional; for local model inference
     python examples/protected_inference.py
 
 Environment variables
@@ -15,7 +15,7 @@ Environment variables
 ``COGNEXUS_API_BASE_URL``
     API origin (no trailing slash). Omit to use the package default.
 ``COGNEXUS_SKIP_MODEL``
-    Set to ``1`` to skip downloading ``Qwen/Qwen3-4B-Instruct-2507`` (defence checks only).
+    Set to ``1`` to skip downloading ``google/gemma-4-E4B-it`` (defence checks only).
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ def _effective_api_key() -> str | None:
     return (os.environ.get("COGNEXUS_API_KEY") or os.environ.get("MYAPP_API_KEY") or "").strip() or None
 
 
-def _maybe_load_qwen():
+def _maybe_load_model():
     """Return ``(tokenizer, model)`` or ``(None, None)`` if deps / weights unavailable."""
 
     if (os.environ.get("COGNEXUS_SKIP_MODEL") or "").strip().lower() in ("1", "true", "yes", "on"):
@@ -78,10 +78,13 @@ def _maybe_load_qwen():
         print()
         return None, None
 
-    model_id = "Qwen/Qwen3-4B-Instruct-2507"
+    # Demo model: Gemma 4 E4B — (c) Google, Apache License 2.0. Weights are
+    # downloaded at runtime from Hugging Face and are NOT distributed with
+    # this package: https://huggingface.co/google/gemma-4-E4B-it
+    model_id = "google/gemma-4-E4B-it"
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-    kwargs: dict = {"dtype": dtype, "trust_remote_code": True}
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    kwargs: dict = {"dtype": dtype}
     try:
         import accelerate  # noqa: F401
 
@@ -147,7 +150,7 @@ def main() -> int:
     print(f"Static audit        : grade={report.grade}  score={report.score}  coverage={report.coverage}")
     print()
 
-    tokenizer, model = _maybe_load_qwen()
+    tokenizer, model = _maybe_load_model()
 
     # ── Section 2: Safe user input ────────────────────────────────────────
     _section("2 · Safe user input screening")
