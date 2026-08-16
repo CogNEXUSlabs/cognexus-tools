@@ -7,13 +7,13 @@ This is the public home of:
 | Package | Install | What it is |
 |---|---|---|
 | **`artzain`** | `pip install artzain` | Python SDK — local guards, `decide()`, CLI (`login`, `quickstart`, `audit`, `policy`, `registry`) |
-| **`@cognexus/sdk`** | `npm i @cognexus/sdk` | TypeScript SDK — remote-only Node client (`decide`, events, identity) |
+| **`@cognexuslabs/artzain`** | `npm i @cognexuslabs/artzain` | TypeScript SDK — remote-only Node client (`decide`, events, identity) |
 
 Both are Apache-2.0. The decision engine itself lives in a separate private repository.
 
 ```
 python/       # PyPI package artzain (Hatchling src-layout)
-typescript/   # npm package @cognexus/sdk
+typescript/   # npm package @cognexuslabs/artzain
 ```
 
 ## Python (`artzain`)
@@ -46,14 +46,14 @@ Zero mandatory runtime dependencies. Offline `decide()` runs the same local guar
 
 See [`python/README.md`](python/README.md) for guards, CLI, and extras.
 
-## TypeScript (`@cognexus/sdk`)
+## TypeScript (`@cognexuslabs/artzain`)
 
 ```bash
-npm install @cognexus/sdk   # Node >= 18, zero runtime dependencies
+npm install @cognexuslabs/artzain   # Node >= 18, zero runtime dependencies
 ```
 
 ```ts
-import { configure, decide, DecisionError } from "@cognexus/sdk";
+import { configure, decide, DecisionError } from "@cognexuslabs/artzain";
 
 configure({ apiKey: process.env.COGNEXUS_API_KEY });
 

@@ -1,14 +1,14 @@
-# @cognexus/sdk — CogNEXUS Decision API client for Node.js
+# @cognexuslabs/artzain — CogNEXUS Decision API client for Node.js
 
 Gate agent actions through the CogNEXUS decision engine and get back a
 sealed, auditable `allow` / `deny` / `review` outcome.
 
 ```bash
-npm install @cognexus/sdk   # Node >= 18, zero runtime dependencies
+npm install @cognexuslabs/artzain   # Node >= 18, zero runtime dependencies
 ```
 
 ```ts
-import { configure, decide, DecisionError } from "@cognexus/sdk";
+import { configure, decide, DecisionError } from "@cognexuslabs/artzain";
 
 configure({ apiKey: process.env.COGNEXUS_API_KEY }); // or just set the env var
 
