@@ -10,10 +10,10 @@ readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 authors = [
-    { name = "Odenthal", email = "tylerodenthal@gmail.com" },
+    { name = "CogNEXUS Labs", email = "hello@cognexuslabs.ai" },
 ]
 maintainers = [
-    { name = "Odenthal", email = "tylerodenthal@gmail.com" },
+    { name = "CogNEXUS Labs", email = "hello@cognexuslabs.ai" },
 ]
 keywords = [
     "llm",
