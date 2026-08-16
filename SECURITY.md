@@ -7,7 +7,7 @@ an unfixed security defect.
 - GitHub: [Security advisory](https://github.com/CogNEXUSlabs/cognexus-tools/security/advisories/new) if enabled on this repo
 
 Include a description, reproduction steps, and affected package (`artzain` or
-`@cognexus/sdk`) plus version.
+`@cognexuslabs/artzain`) plus version.
 
 The decision engine (audit chain, Decision API) is a separate private
 codebase. Reports that only affect a hosted deployment can go to the same

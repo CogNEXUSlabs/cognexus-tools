@@ -1,11 +1,11 @@
 name: Publish TypeScript SDK
 
-# Publishes @cognexus/sdk to npm with provenance attestation.
+# Publishes @cognexuslabs/artzain to npm with provenance attestation.
 # Trigger by pushing a tag like sdk-ts-v0.1.0 (must match package.json version),
 # or run manually from the Actions tab.
 #
 # Required repo secret: NPM_TOKEN — a granular automation token with publish
-# rights on @cognexus/sdk.
+# rights on @cognexuslabs/artzain.
 
 on:
   push:
