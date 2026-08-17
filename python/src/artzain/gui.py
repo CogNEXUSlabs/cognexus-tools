@@ -1232,7 +1232,7 @@ def launch_gui(
     Parameters
     ----------
     base_url:
-        CogNEXUS platform origin, e.g. ``https://cognexuslabs.ai``.
+        CogNEXUS platform origin, e.g. ``https://app.cognexuslabs.ai``.
     api_key:
         Dashboard API key (``COGNEXUS_API_KEY``).  When present the browser
         goes straight to the chat — no login form shown.

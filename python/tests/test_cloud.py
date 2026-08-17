@@ -29,7 +29,7 @@ def test_configure_override(monkeypatch):
     assert cloud._effective_base() == "https://example.com"
     configure(api_key=None, base_url=None)
     assert cloud._effective_key() is None
-    assert cloud._effective_base() == "https://cognexuslabs.ai"
+    assert cloud._effective_base() == "https://app.cognexuslabs.ai"
 
 
 def test_flush_cloud_events_waits_for_background_post(monkeypatch):

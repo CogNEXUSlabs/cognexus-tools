@@ -58,7 +58,7 @@ describe("config", () => {
   });
 
   it("defaults to the production host", () => {
-    expect(effectiveBaseUrl()).toBe("https://cognexuslabs.ai");
+    expect(effectiveBaseUrl()).toBe("https://app.cognexuslabs.ai");
   });
 });
 
