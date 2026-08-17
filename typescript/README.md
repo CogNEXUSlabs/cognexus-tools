@@ -31,7 +31,7 @@ if (decision.outcome === "allow") {
 |---|---|
 | `configure({ apiKey, baseUrl })` | explicit, wins |
 | `COGNEXUS_API_KEY` (or `MYAPP_API_KEY`) | API key from Account → API Keys |
-| `COGNEXUS_API_BASE_URL` | your deployment (default `https://cognexuslabs.ai`) |
+| `COGNEXUS_API_BASE_URL` | your deployment (default `https://app.cognexuslabs.ai`) |
 
 ## Surface
 

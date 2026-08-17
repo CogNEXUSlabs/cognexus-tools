@@ -5,7 +5,7 @@
  * environment variables, then the production default host.
  */
 
-const DEFAULT_BASE_URL = "https://cognexuslabs.ai";
+const DEFAULT_BASE_URL = "https://app.cognexuslabs.ai";
 
 export interface CognexusConfig {
   apiKey?: string;

@@ -37,7 +37,7 @@ from artzain import (
     should_block,
 )
 
-_DEFAULT_BASE = "https://cognexuslabs.ai"
+_DEFAULT_BASE = "https://app.cognexuslabs.ai"
 _ENV_FILENAMES = (".env", ".env.local", ".env.development")
 _QUICKSTART_DEMO_FILENAME = "artzain_quickstart_demo.py"
 _QUICKSTART_TEMPLATE = "_quickstart_live_demo.py.tpl"
@@ -1049,7 +1049,7 @@ def main(argv: list[str] | None = None) -> None:
         description=(
             "Starts a lightweight local HTTP proxy on 127.0.0.1 and opens the default\n"
             "browser at that address.  All /api/* traffic is forwarded to the CogNEXUS\n"
-            "platform API (COGNEXUS_API_BASE_URL or https://cognexuslabs.ai by default).\n\n"
+            "platform API (COGNEXUS_API_BASE_URL or https://app.cognexuslabs.ai by default).\n\n"
             "Sign in with your CogNEXUS account credentials in the browser to start chatting.\n"
             "Use @legalAgent / @propensityAgent / @complianceMonitor / @codeBastion to route\n"
             "messages to specific agents, or pick one from the dropdown in the composer."

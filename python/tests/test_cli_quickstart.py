@@ -43,10 +43,10 @@ def test_find_artzain_api_key_in_env_files(tmp_path: Path, monkeypatch: pytest.M
 
 def test_request_headers_match_dashboard_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COGNEXUS_CLI_USER_AGENT", raising=False)
-    url = "https://cognexuslabs.ai/api/auth/signup"
+    url = "https://app.cognexuslabs.ai/api/auth/signup"
     h = _request_headers_for_url(url)
-    assert h["Origin"] == "https://cognexuslabs.ai"
-    assert h["Referer"] == "https://cognexuslabs.ai/"
+    assert h["Origin"] == "https://app.cognexuslabs.ai"
+    assert h["Referer"] == "https://app.cognexuslabs.ai/"
     assert h["Sec-Fetch-Site"] == "same-origin"
     assert "Mozilla" in h["User-Agent"]
     assert "Chrome" in h["User-Agent"]

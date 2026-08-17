@@ -11,7 +11,7 @@ Environment variables
 ``MYAPP_API_KEY``
     Fallback secret name (same semantics as ``COGNEXUS_API_KEY``).
 ``COGNEXUS_API_BASE_URL``
-    API origin, e.g. ``https://cognexuslabs.ai`` — **no trailing slash required**.
+    API origin, e.g. ``https://app.cognexuslabs.ai`` — **no trailing slash required**.
 """
 
 from __future__ import annotations
@@ -124,7 +124,7 @@ def _effective_base() -> str:
             return prof
     except Exception:
         pass
-    return "https://cognexuslabs.ai"
+    return "https://app.cognexuslabs.ai"
 
 
 def _sdk_user_agent() -> str:

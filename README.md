@@ -90,7 +90,7 @@ npm test        # vitest
 ## Releases
 
 - Python: push tag `python-v0.3.1` (must match `python/pyproject.toml`). Needs `PYPI_API_TOKEN` or a Trusted Publisher for this repo.
-- TypeScript: push tag `sdk-ts-v0.1.0` (must match `typescript/package.json`). Needs `NPM_TOKEN` on the `@cognexus` npm scope.
+- TypeScript: push tag `sdk-ts-v0.1.0` (must match `typescript/package.json`). Needs `NPM_TOKEN` on the `@cognexuslabs` npm scope.
 
 Do not tag until those secrets (or Trusted Publisher) are configured.
 
