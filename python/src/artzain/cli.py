@@ -983,7 +983,7 @@ def cmd_registry_export(args: argparse.Namespace) -> None:
 
 
 def cmd_gui(args: argparse.Namespace) -> None:
-    """Launch a local chat GUI connected to the CogNEXUS platform."""
+    """Launch Artzain Chat (local) — a chat client proxying to the platform."""
     from artzain.gui import launch_gui  # lazy import — keeps startup fast
 
     base_url   = _effective_base_url()
@@ -1050,11 +1050,13 @@ def main(argv: list[str] | None = None) -> None:
 
     p_gui = sub.add_parser(
         "gui",
-        help="Open a local chat GUI connected to the CogNEXUS platform.",
+        help="Open Artzain Chat (local) — a chat client connected to the platform.",
         description=(
-            "Starts a lightweight local HTTP proxy on 127.0.0.1 and opens the default\n"
-            "browser at that address.  All /api/* traffic is forwarded to the CogNEXUS\n"
-            "platform API (COGNEXUS_API_BASE_URL or https://app.cognexuslabs.ai by default).\n\n"
+            "Artzain Chat (local): a lightweight HTTP proxy on 127.0.0.1 that opens the\n"
+            "default browser at that address.  All /api/* traffic is forwarded to the\n"
+            "CogNEXUS platform API (COGNEXUS_API_BASE_URL or https://app.cognexuslabs.ai\n"
+            "by default).  This is the local chat client, not the hosted dashboard —\n"
+            "the dashboard lives at <base>/dashboard.html.\n\n"
             "Sign in with your CogNEXUS account credentials in the browser to start chatting.\n"
             "Use @legalAgent / @propensityAgent / @complianceMonitor / @codeBastion to route\n"
             "messages to specific agents, or pick one from the dropdown in the composer."

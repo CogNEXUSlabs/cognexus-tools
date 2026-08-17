@@ -1,4 +1,8 @@
-"""Local GUI server for the ``artzain gui`` command.
+"""Artzain Chat (local) — the server behind the ``artzain gui`` command.
+
+One surface, one name: this is the **local chat client**, not the hosted
+dashboard (that lives at ``<base>/dashboard.html``; requests to
+``/dashboard*`` on the local port redirect there).
 
 Starts a lightweight HTTP proxy on localhost and opens the default browser.
 All ``/api/*`` traffic is forwarded to the configured CogNEXUS platform API,
@@ -64,7 +68,7 @@ _GUI_HTML_TEMPLATE = """\
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#07080a" />
-  <title>CogNEXUS — Chat</title>
+  <title>Artzain Chat (local)</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&family=Plus+Jakarta+Sans:wght@700;800&display=swap" rel="stylesheet" />
@@ -458,8 +462,9 @@ _GUI_HTML_TEMPLATE = """\
 <!-- ── CHAT VIEW ── -->
 <div id="chatView" hidden>
   <header class="chat-header">
-    <div class="chat-brand">Cog<span>NEXUS</span></div>
+    <div class="chat-brand">Artzain <span>Chat</span><span style="font-size:0.62rem;color:#7a7f8e;border:1px solid #2a2f3a;border-radius:4px;padding:0.1rem 0.35rem;margin-left:0.5rem;vertical-align:middle;letter-spacing:0.04em;">LOCAL</span></div>
     <div class="chat-header-actions">
+      <a href="__COGNEXUS_ORIGIN__/dashboard.html" target="_blank" rel="noopener" style="font-size:0.78rem;color:#7a7f8e;text-decoration:none;">Dashboard &#8599;</a>
       <span class="chat-user-email" id="chatUserEmail"></span>
       <button class="chat-new-btn" id="chatNewBtn" title="New conversation">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" width="14" height="14">
@@ -1064,7 +1069,7 @@ def _make_handler(base_url: str, html_bytes: bytes, api_key: str) -> type[BaseHT
     _cache: dict[str, Any] = {}
 
     class _Handler(BaseHTTPRequestHandler):
-        server_version = "CognexusGUI/1.0"
+        server_version = "ArtzainChat/1.0"
 
         def log_message(self, fmt: str, *args: Any) -> None:  # noqa: ANN001
             pass
@@ -1183,6 +1188,12 @@ def _make_handler(base_url: str, html_bytes: bytes, api_key: str) -> type[BaseHT
         def do_GET(self) -> None:
             if self.path == "/gui/bootstrap":
                 self._handle_gui_bootstrap()
+            elif self.path.startswith("/dashboard"):
+                # The hosted dashboard is not served here — send the browser
+                # to the platform instead of echoing the chat page back.
+                self.send_response(302)
+                self.send_header("Location", f"{base_url}/dashboard.html")
+                self.end_headers()
             elif not self.path.startswith("/api/"):
                 self._serve_html()
             else:
@@ -1252,8 +1263,9 @@ def launch_gui(
     key_hint = f"  API key      \u2192  {api_key[:8]}\u2026 (auto-login enabled)" if api_key else "  API key      \u2192  not set (login form will show)"
 
     print()
-    print(f"  CogNEXUS GUI  \u2192  {local_url}")
-    print(f"  API backend   \u2192  {base_url}")
+    print(f"  Artzain Chat (local)  \u2192  {local_url}")
+    print(f"  Platform API          \u2192  {base_url}")
+    print(f"  Full dashboard        \u2192  {base_url}/dashboard.html (hosted \u2014 not this local server)")
     print(key_hint)
     print("  Press Ctrl-C to quit.")
     print()
@@ -1267,6 +1279,6 @@ def launch_gui(
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n  GUI server stopped.")
+        print("\n  Artzain Chat stopped.")
     finally:
         server.shutdown()
