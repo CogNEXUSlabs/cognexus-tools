@@ -282,7 +282,7 @@ def run_t2o_examples() -> None:
         )
         print(f"  • {label:<28} tokens_in={tokens_in:<4} tokens_out={tokens_out}")
     print()
-    print("Open Analytics → Leaderboard to confirm decisions, tokens, and T2O averages.")
+    print(f"Open Analytics → Leaderboard on {_DEFAULT_BASE}/dashboard.html to confirm decisions, tokens, and T2O averages.")
     print()
 
 

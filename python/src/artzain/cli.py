@@ -275,7 +275,7 @@ def cmd_login(_args: argparse.Namespace) -> None:
             if not key:
                 raise SystemExit(
                     "Login approved but no API key was returned. "
-                    "Open the dashboard → API Keys, or retry."
+                    f"Open {base.rstrip('/')}/dashboard.html → API Keys, or retry."
                 )
             path = write_profile(api_key=str(key), base_url=base)
             os.environ["COGNEXUS_API_KEY"] = str(key)
@@ -283,6 +283,7 @@ def cmd_login(_args: argparse.Namespace) -> None:
                 os.environ["COGNEXUS_API_BASE_URL"] = base
             print()
             print(f"Logged in. Credentials written to {path} (mode 0600 on Unix).")
+            print(f"Dashboard: {base.rstrip('/')}/dashboard.html")
             print("Next: artzain quickstart")
             return
         if err == "authorization_pending":
@@ -467,6 +468,7 @@ def prompt_for_credentials(base_url: str) -> str:
 
 def run_quickstart_demo(api_key: str, *, base_url: str) -> None:
     """Interactive tour mirroring the scenarios in ``test_artzain.py`` (no heavy model load)."""
+    dashboard_url = f"{base_url.rstrip('/')}/dashboard.html"
     configure(api_key=api_key, base_url=base_url)
     announce_cloud_ingest()
 
@@ -561,8 +563,9 @@ def run_quickstart_demo(api_key: str, *, base_url: str) -> None:
             f"  • {ex['label']:<28} tokens_in={ex['tokens_in']:<4} tokens_out={ex['tokens_out']}"
         )
     print(
-        "\nOpen Analytics → Leaderboard on your dashboard to see decisions tracked,\n"
-        "tokens in/out, and the per-department 'tokens per outcome' averages."
+        f"\nOpen Analytics → Leaderboard on {dashboard_url} to see\n"
+        "decisions tracked, tokens in/out, and the per-department\n"
+        "'tokens per outcome' averages."
     )
 
     # 6. Decision API (FR-2) — the unified decision endpoint.
@@ -594,7 +597,7 @@ def run_quickstart_demo(api_key: str, *, base_url: str) -> None:
         print(f"  DROP TABLE tool_call → outcome={deny['outcome']}  reasons={deny.get('reasons')}")
         print(
             "  Each call returns the contributing enforcers + an audit block id.\n"
-            "  Filter Events by channel=engine on the dashboard to see them."
+            f"  Filter Events by channel=engine on {dashboard_url} to see them."
         )
     except DecisionError as exc:
         print(f"  Decision API not reachable on this dashboard yet ({exc}).")
@@ -612,7 +615,7 @@ def run_quickstart_demo(api_key: str, *, base_url: str) -> None:
         payload={"demo": "quickstart_tour"},
     )
     print(
-        "Posted a completion event to your dashboard (requires network).\n"
+        f"Posted a completion event to your dashboard ({dashboard_url}).\n"
         "If COGNEXUS_API_BASE_URL points elsewhere, events go to that origin."
     )
 
@@ -629,6 +632,8 @@ def run_quickstart_demo(api_key: str, *, base_url: str) -> None:
 
     header("Next steps")
     print(
+        f"• Your dashboard: {dashboard_url} — decisions, events, and the\n"
+        "  Leaderboard live there. It runs in the browser; nothing to install.\n"
         "• Run the generated script above to exercise artzain with a real small LM.\n"
         "• Gate actions with one call: decide(action=..., target=..., payload=..., kind=...)\n"
         "  → allow / deny / review + contributing enforcers + an audit block id.\n"
