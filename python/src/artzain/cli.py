@@ -391,6 +391,11 @@ def signup_or_login(base_url: str, email: str, password: str, display_name: str)
             login_url,
             body={"email": email, "password": password},
         )
+        if status_l == 200 and isinstance(payload_l, dict) and payload_l.get("mfa_required"):
+            raise SystemExit(
+                "This account has two-factor authentication enabled. "
+                "Use `artzain login` (browser device-code) instead of email/password."
+            )
         if status_l == 200 and isinstance(payload_l, dict) and payload_l.get("token"):
             print("An account with that email already exists — logged in.")
             return str(payload_l["token"])
@@ -709,11 +714,15 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
     """Verify an audit evidence bundle offline (no network, no server trust)."""
     from artzain.audit_verify import verify_bundle
 
-    result = verify_bundle(args.bundle)
+    override = getattr(args, "root_fingerprint", None)
+    result = verify_bundle(args.bundle, root_fingerprint=override)
 
     if getattr(args, "json", False):
         print(json.dumps({
             "ok": result.ok,
+            "attestation": result.attestation,
+            "attestation_reasons": result.attestation_reasons,
+            "certificates_checked": result.certificates_checked,
             "leaves_checked": result.leaves_checked,
             "seals_checked": result.seals_checked,
             "signatures_checked": result.signatures_checked,
@@ -721,6 +730,11 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
             "first_bad_seq": result.first_bad_seq,
             "error": result.error,
             "warnings": result.warnings,
+            # An ATTESTED verdict under an overridden root attests to THAT
+            # root, not the published one — machine consumers gating on
+            # attestation must also read this flag.
+            "evidence_root_fingerprint": result.evidence_root_fingerprint,
+            "root_fingerprint_overridden": result.root_fingerprint_overridden,
         }, indent=2))
         raise SystemExit(0 if result.ok else 1)
 
@@ -731,12 +745,26 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
         print("  signatures:         SKIPPED (install 'artzain[verify]')")
     else:
         print(f"  signatures checked: {result.signatures_checked}")
+    if result.certificates_checked:
+        print(f"  certificates:       {result.certificates_checked} checked")
+    if result.root_fingerprint_overridden:
+        print("  ! NON-DEFAULT Evidence Root fingerprint supplied on the "
+              "command line — this attests to YOUR root, not the "
+              "published CogNEXUS Evidence Root.")
     for w in result.warnings:
         print(f"  ! {w}")
     print()
     if result.ok:
-        print("VERIFIED — all leaf hashes, chain links, Merkle roots"
-              + ("" if result.signatures_skipped else " and signatures") + " are intact.")
+        state = result.attestation or "SELF-ATTESTED"
+        print(f"VERIFIED, {state} — all leaf hashes, chain links, Merkle roots"
+              + ("" if result.signatures_skipped else " and signatures")
+              + " are intact.")
+        if state == "ATTESTED":
+            print("The signing keys chain to the CogNEXUS Evidence Root and "
+                  "were certified at signing time.")
+        else:
+            for reason in result.attestation_reasons:
+                print(f"  self-attested because: {reason}")
         raise SystemExit(0)
     where = f" (first bad seq: {result.first_bad_seq})" if result.first_bad_seq is not None else ""
     print(f"FAILED{where}: {result.error}")
@@ -1095,6 +1123,12 @@ def main(argv: list[str] | None = None) -> None:
     )
     p_verify.add_argument("bundle", help="Path to the bundle directory or .zip file.")
     p_verify.add_argument("--json", action="store_true", help="Emit a JSON result.")
+    p_verify.add_argument(
+        "--root-fingerprint", metavar="SHA256HEX",
+        help="Override the pinned CogNEXUS Evidence Root fingerprint "
+             "(test roots only — the output states when a non-default "
+             "root is in use).",
+    )
     p_verify.set_defaults(func=cmd_audit_verify)
 
     p_export = audit_sub.add_parser(
