@@ -89,10 +89,11 @@ npm test        # vitest
 
 ## Releases
 
-- Python: push tag `python-v0.3.1` (must match `python/pyproject.toml`). Needs `PYPI_API_TOKEN` or a Trusted Publisher for this repo.
-- TypeScript: push tag `sdk-ts-v0.1.0` (must match `typescript/package.json`). Needs `NPM_TOKEN` on the `@cognexuslabs` npm scope.
+- Python: push tag `python-v<version>` (must match `python/pyproject.toml`). Publishes through a PyPI **Trusted Publisher** — no token, and each artifact carries a PEP 740 attestation. Do not add a `password:` to the publish step: an unset secret still takes the OIDC path at the pinned action version, so the line sits harmless until someone sets the secret — and then the release silently becomes a token publish with no attestation.
+- TypeScript: push tag `sdk-ts-v<version>` (must match `typescript/package.json`). Needs `NPM_TOKEN` on the `@cognexuslabs` npm scope, published with `--provenance`.
 
-Do not tag until those secrets (or Trusted Publisher) are configured.
+Nothing publishes from a developer machine (WS-8): the tag is the release, and
+the workflows here hold the only credentials involved.
 
 ## Security
 

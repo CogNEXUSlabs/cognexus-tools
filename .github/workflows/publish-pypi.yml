@@ -1,14 +1,35 @@
 name: Publish Python SDK (artzain)
 
-# Publishes artzain to PyPI. Trigger by pushing a tag like python-v0.3.1
+# Publishes artzain to PyPI. Trigger by pushing a tag like python-v0.4.0
 # (must match python/pyproject.toml version), or run manually.
 #
-# Prefer a pending Trusted Publisher (PyPI project artzain, workflow
-# publish-pypi.yml, Environment blank — this file has no `environment:`).
-# Do not pass password: secrets.PYPI_API_TOKEN unless that secret is set;
-# an empty password skips OIDC. Token fallback: add
-#   password: ${{ secrets.PYPI_API_TOKEN }}
-# under the publish step. Do not reuse a bare v* tag.
+# This is the ONLY way artzain reaches PyPI (WS-8). ./build-pypi.sh in the
+# engine repo used to upload from a developer laptop with a token from a local
+# .env; it no longer can, and no PyPI credential exists anywhere outside PyPI's
+# own trust in this workflow.
+#
+# Publishing runs through a **Trusted Publisher**: PyPI trusts this repository
+# and this workflow filename via short-lived OIDC. There is no API token to
+# leak, rotate, or scope wrongly. Two consequences worth knowing before editing
+# this file:
+#
+#   * Do NOT add `password:` to the publish step. At the pinned version the
+#     action selects trusted publishing with
+#       [[ "${INPUT_USER}" == "__token__" && -z "${INPUT_PASSWORD}" ]]
+#     so an unset secret (which expands to "") still takes the OIDC path — the
+#     line is harmless right up until someone sets the secret, at which point
+#     it silently becomes a long-lived-token publish with no attestation. It is
+#     a latent switch, not a fallback. (Older versions of the action DID break
+#     on an empty password; that is where the warning in this repo's history
+#     comes from, and it no longer applies to this pin.)
+#   * Do NOT add `environment:` unless the pending-publisher form on PyPI names
+#     the same environment. PyPI's own troubleshooting says to "check if the
+#     workflow is using the same environment as configured when the publisher
+#     was configured"; the claim must match exactly or the upload is rejected.
+#
+# Third-party actions are pinned to commit SHAs, not tags. A tag is a mutable
+# pointer, and every action in this job runs next to an OIDC token that can
+# publish under our name.
 
 on:
   push:
@@ -18,7 +39,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write # Trusted Publisher / OIDC, when configured on PyPI
 
 jobs:
   test:
@@ -31,9 +51,9 @@ jobs:
       run:
         working-directory: python
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -47,14 +67,19 @@ jobs:
     name: Build and publish to PyPI
     runs-on: ubuntu-latest
     needs: test
-    # No GitHub Environment: pending publisher Environment must stay blank.
+    # No GitHub Environment: the pending publisher's Environment field is blank.
+    permissions:
+      contents: read
+      id-token: write # Trusted Publisher OIDC + PEP 740 attestation
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
+      # A tag that disagrees with pyproject.toml publishes a version nobody
+      # asked for, under a name the repo does not carry.
       - name: Verify tag matches package version
         if: github.ref_type == 'tag'
         working-directory: python
@@ -77,11 +102,17 @@ jobs:
         working-directory: python
         run: twine check dist/*
 
+      # `attestations: true` is the default on recent versions; it is written
+      # out because it is the point of this job, not an incidental setting. It
+      # produces a PEP 740 attestation binding each artifact to this workflow
+      # run, so anyone installing artzain can check which commit built the
+      # wheel they have.
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: python/dist
+          attestations: true
+          # skip-existing so a re-run of a partially-uploaded release is not a
+          # hard failure. It does NOT let a different artifact overwrite an
+          # existing version — PyPI forbids that outright.
           skip-existing: true
-          # Omit password so OIDC / Trusted Publisher is used. If using a
-          # repo secret instead, add:
-          #   password: ${{ secrets.PYPI_API_TOKEN }}
