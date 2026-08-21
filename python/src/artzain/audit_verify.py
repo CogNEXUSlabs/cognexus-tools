@@ -12,6 +12,7 @@ Bundle layout::
     keys.json           [{key_id, public_key_pem, ...}]  (keys.pem is the same, PEM-only)
     manifest.json       range / counts / key ids (optionally Ed25519-signed)
     certificates.json   optional certificate chain to the CogNEXUS Evidence Root
+    key-rotations.json  optional countersigned signing-key handovers (WS-8)
 
 Leaf-hash, chain, and Merkle integrity verify with the standard library alone.
 **Signature** verification needs the ``cryptography`` package; install the extra::
@@ -98,6 +99,24 @@ class VerifyResult:
     attestation: Optional[str] = None
     attestation_reasons: list[str] = field(default_factory=list)
     certificates_checked: int = 0
+    #: Signing-key handovers whose signatures were verified and held (WS-8).
+    #: Zero when ``cryptography`` is absent, whatever the bundle carries, so
+    #: this number never implies more checking than happened. A handover that
+    #: is cryptographically sound but names a key the bundle does not carry
+    #: still counts — its signatures *were* checked — and says so in
+    #: ``warnings``.
+    rotations_checked: int = 0
+    #: Keys that signed records in this bundle without a sound handover naming
+    #: them. Populated only when the bundle carries at least one handover whose
+    #: signatures checked out: an installation that has never rotated has
+    #: nothing to be inconsistent with, and its original key has no predecessor
+    #: by definition. Empty when signature verification was skipped, because a
+    #: reader already told "signatures NOT verified" must not also be handed an
+    #: accusation the verifier had no means to make.
+    #: Reported, not fatal — a second process legitimately signs with its own
+    #: key — but it is also the shape a substitution takes, and the reader
+    #: should be the one to decide which it is.
+    unexplained_key_ids: list[str] = field(default_factory=list)
     #: The Evidence Root fingerprint the run actually pinned against (the
     #: caller override if supplied, else the module default; ``None``
     #: pre-ceremony).  ``root_fingerprint_overridden`` is ``True`` when the
@@ -166,6 +185,59 @@ def _leaves_digest(leaves: list[dict[str, Any]]) -> str:
 # ---------------------------------------------------------------------------
 # RFC 6962 Merkle (stdlib mirror of services/merkle.py)
 # ---------------------------------------------------------------------------
+
+
+#: Every key a countersigned handover may carry. Closed: the digest is over the
+#: whole record, so an unexpected field is either a silent signature break or a
+#: channel into the evidence bundle for something that has no business there.
+_HANDOVER_FIELDS = frozenset({
+    "format", "retiring_key_id", "successor_key_id",
+    "successor_public_key_pem", "retiring_public_key_pem",
+    "install_id", "rotated_at", "reason",
+})
+#: And the wrapper around it. Ground rule 7 does not stop at one nesting level:
+#: the row travels in the export exactly as the record does, and an allowlist
+#: with a level missing is not an allowlist.
+_HANDOVER_ROW_FIELDS = frozenset({
+    "successor_key_id", "retiring_key_id", "record",
+    "retiring_sig", "successor_sig", "leaf_decision_id", "rotated_at",
+})
+_ROTATION_FORMAT = "cognexus-key-rotation-v1"
+
+
+def _rotations_digest(rotations: list[dict[str, Any]]) -> str:
+    """SHA-256 over a canonical per-row commitment list.
+
+    Commits the **record**, not just its successor id and one signature. The
+    first cut committed ``[successor_key_id, retiring_sig]``, and a review
+    showed that leaves the entire signed body — ``rotated_at``, ``reason``,
+    ``install_id``, both public keys — bound by nothing the manifest covers.
+    An attacker could backdate a handover and erase a stated compromise while
+    the server-signed digest still matched byte for byte.
+
+    Must match ``application/api/audit.py::_rotations_digest`` byte for byte.
+    """
+    rows: list[Any] = []
+    for r in rotations:
+        if not isinstance(r, dict):
+            rows.append(["", "", "", "", ""])
+            continue
+        record = r.get("record")
+        body = (hashlib.sha256(_canonical(record)).hexdigest()
+                if isinstance(record, dict) else "")
+        rows.append([
+            str(r.get("retiring_key_id") or ""),
+            str(r.get("successor_key_id") or ""),
+            body,
+            str(r.get("retiring_sig") or ""),
+            str(r.get("successor_sig") or ""),
+        ])
+    return hashlib.sha256(_canonical_list(sorted(rows))).hexdigest()
+
+
+def _canonical_list(obj: list[Any]) -> bytes:
+    return json.dumps(obj, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":")).encode("utf-8")
 
 
 def _mk_leaf(data: bytes) -> bytes:
@@ -300,6 +372,229 @@ def _cert_sig_ok(record: dict[str, Any], issuer_pem: str) -> bool:
     return _verify_sig(pub, _cert_signed_hash(record), record.get("sig") or "")
 
 
+def validated_deployment_certificates(
+    certs: dict[str, Any], root_fingerprint: Optional[str],
+) -> tuple[list[dict[str, Any]], Optional[str], int, list[str]]:
+    """Deployment certificates that chain to the pinned Evidence Root.
+
+    Returns ``(certificates, blocking_reason, checked, notes)`` —
+    ``blocking_reason`` is ``None`` when at least one certificate chains, and
+    otherwise says why none did, in the caller's own words ("no certificate
+    chain in bundle" versus "the attestation names no certificate").
+
+    Shared with ``artzain.licence`` on purpose. The *wire formats* are
+    deliberately implemented twice so the cross-package tests catch drift, but
+    trust evaluation is not a format: two copies of it would drift into two
+    different answers to "does this chain to the root", and only one of them
+    would be right.
+    """
+    checked = 0
+    notes: list[str] = []
+    root_pem = certs.get("root_public_key_pem")
+    if not root_pem:
+        return [], "no Evidence Root public key supplied", checked, notes
+    if not root_fingerprint:
+        return [], ("no Evidence Root fingerprint pinned (pre-ceremony "
+                    "verifier)"), checked, notes
+    if _pem_fingerprint(root_pem) != root_fingerprint.strip().lower():
+        return [], ("root public key fingerprint mismatch — does not chain to "
+                    "the pinned Evidence Root"), checked, notes
+    root_key_id = _pem_key_id(root_pem)
+
+    # Issuing certificates: root-signed, well-formed.
+    issuers: list[dict[str, Any]] = []
+    for cert in certs.get("issuing_certificates") or []:
+        if not isinstance(cert, dict):
+            continue
+        if cert.get("format") != _ISSUING_CERT_FORMAT:
+            continue
+        if cert.get("issuer_key_id") != root_key_id:
+            continue
+        if not _cert_sig_ok(cert, root_pem):
+            notes.append(
+                f"issuing certificate {cert.get('cert_id')} signature invalid")
+            continue
+        checked += 1
+        issuers.append(cert)
+    if not issuers:
+        return [], "no valid issuing certificate chains to the root", checked, notes
+
+    # Deployment certificates: signed by an issuer that was valid when the
+    # certificate was issued (its not_before) — the issuing window bounds
+    # issuance, not later leaf-signing (air-gapped certs never go stale
+    # because the online issuer rotated).
+    deploy: list[dict[str, Any]] = []
+    for cert in certs.get("deployment_certificates") or []:
+        if not isinstance(cert, dict):
+            continue
+        if cert.get("format") != _DEPLOYMENT_CERT_FORMAT:
+            continue
+        nb = _parse_ts(cert.get("not_before"))
+        na = _parse_ts(cert.get("not_after"))
+        if nb is None or na is None:
+            continue
+        for issuer in issuers:
+            inb = _parse_ts(issuer.get("not_before"))
+            ina = _parse_ts(issuer.get("not_after"))
+            if (cert.get("issuer_key_id") == _pem_key_id(issuer.get("public_key") or "")
+                    and inb is not None and ina is not None
+                    and inb <= nb <= ina
+                    and _cert_sig_ok(cert, issuer.get("public_key") or "")):
+                checked += 1
+                deploy.append(cert)
+                break
+    if not deploy:
+        return [], ("no valid certificate for any deployment key (invalid "
+                    "signature, or issued outside the issuing certificate's "
+                    "validity)"), checked, notes
+    return deploy, None, checked, notes
+
+
+def _check_rotations(res: VerifyResult, rotations: list[dict[str, Any]],
+                     keys: list[dict[str, Any]], pubkeys,
+                     signer_kids: set) -> Optional[str]:
+    """Verify signing-key handovers (WS-8). Returns a failure message or ``None``.
+
+    ``signing_keys`` records which keys exist; only a handover records which of
+    them this installation *authorised*, and by whose signature. Anyone who can
+    write a public key into a bundle can claim a key is legitimate; only the
+    holder of the retiring private key can produce the countersignature.
+
+    Two independent questions, and keeping them apart is the whole design:
+
+    **1. Is the record internally consistent?** Both public keys travel inside
+    the record, so this is answerable from the record alone, always. Each PEM
+    must hash to the key id it is filed under, and each signature must verify
+    against the PEM the record itself carries. **Failure here is fatal, and a
+    bundle has no way to opt out of the check.**
+
+    That last clause is the point, and it was got wrong once. An earlier cut
+    resolved the signing keys through ``keys.json`` and treated "key not in
+    keys.json" as *not checkable* -- a warning. But ``keys.json`` is
+    attacker-controlled bytes; that is the premise of an offline verifier
+    handed to an assessor over an untrusted path. Deleting one line therefore
+    moved a forged handover out of the fatal branch, turning ``FAILED`` into
+    ``VERIFIED``: the attacker chose whether their forgery was inspected.
+    Checking the record against its own contents removes that choice. It is an
+    *integrity* check, not an authorisation one, and integrity is checkable
+    without trusting anything outside the record.
+
+    **2. Does it describe keys this bundle actually uses?** Only askable for a
+    key present in ``keys.json``. Present and equal: the handover explains that
+    key. Present and different: the record describes a key other than the one
+    the bundle signs with -- fatal. Absent: the handover cannot vouch for a key
+    the bundle does not carry, which is a warning and never a failure, because
+    ``register_audit_signing_key`` is best-effort and a deployment whose
+    database was down at first boot legitimately has an unregistered key.
+    """
+    pem_by_kid = {k.get("key_id"): k.get("public_key_pem") for k in keys
+                  if isinstance(k, dict)}
+    explained: set = set()
+    saw_sound = False
+
+    for row in rotations:
+        if not isinstance(row, dict):
+            return "malformed key handover record"
+        extra_row = set(row) - _HANDOVER_ROW_FIELDS
+        if extra_row:
+            return ("key handover row carries fields outside the allowlist: "
+                    + ", ".join(sorted(str(k) for k in extra_row)))
+        record = row.get("record")
+        if not isinstance(record, dict):
+            return "key handover carries no record"
+        if record.get("format") != _ROTATION_FORMAT:
+            return f"unknown key handover format {record.get('format')!r}"
+        extra = set(record) - _HANDOVER_FIELDS
+        if extra:
+            return ("key handover carries fields outside the allowlist: "
+                    + ", ".join(sorted(str(k) for k in extra)))
+        retiring = record.get("retiring_key_id")
+        successor = record.get("successor_key_id")
+        if not isinstance(retiring, str) or not isinstance(successor, str) \
+                or not retiring or not successor:
+            return "key handover names no retiring or successor key"
+        if retiring == successor:
+            return "key handover nominates the retiring key as its own successor"
+
+        # -- 1. Internal consistency, always checkable ---------------------
+        pems = {retiring: record.get("retiring_public_key_pem"),
+                successor: record.get("successor_public_key_pem")}
+        for label, kid in (("retiring", retiring), ("successor", successor)):
+            pem = pems[kid]
+            if not isinstance(pem, str) or not pem:
+                return f"key handover carries no {label} public key"
+            if _pem_key_id(pem) != kid:
+                return (f"a key handover's {label} public key does not hash to "
+                        "the key id it is filed under")
+
+        if pubkeys is None:
+            # stdlib-only. The structural checks above ran; the signatures did
+            # not. Explain the keys anyway: a reader already told "signatures
+            # NOT verified" must not ALSO be told this bundle's own signing key
+            # is unaccounted for, when the handover naming it is sitting in the
+            # same file. Two contradictory warnings are worse than one honest
+            # limitation, and this is the DEFAULT install -- cryptography is an
+            # optional extra.
+            explained.add(retiring)
+            explained.add(successor)
+            res.warnings.append(
+                f"key handover {retiring}->{successor} not verified "
+                "(cryptography missing)")
+            continue
+
+        digest = hashlib.sha256(_canonical(record)).hexdigest()
+        for label, kid, sig in (
+                ("retiring", retiring, row.get("retiring_sig") or ""),
+                ("successor", successor, row.get("successor_sig") or "")):
+            pk = _load_one_key(pems[kid])
+            if pk is None:
+                return f"a key handover's {label} public key will not parse"
+            if not _verify_sig(pk, digest, sig):
+                return f"invalid {label} signature on a key handover"
+            res.signatures_checked += 1
+        saw_sound = True
+        res.rotations_checked += 1
+
+        # -- 2. Agreement with the keys the bundle carries ------------------
+        mismatched = [kid for kid in (retiring, successor)
+                      if kid in pem_by_kid
+                      and _canonical_pem(pems[kid]) != _canonical_pem(pem_by_kid[kid])]
+        if mismatched:
+            return ("a key handover's public key differs from the one the "
+                    f"bundle registers for {', '.join(sorted(mismatched))}")
+        unregistered = [kid for kid in (retiring, successor)
+                        if kid not in pem_by_kid]
+        if unregistered:
+            res.warnings.append(
+                f"key handover {retiring}->{successor} is internally sound but "
+                "the bundle carries no public key for "
+                f"{', '.join(sorted(unregistered))}, so it cannot be tied to a "
+                "key this bundle uses")
+        # A sound handover explains whichever of its keys the bundle carries.
+        # Explaining one is not weakened by the other being absent.
+        for kid in (retiring, successor):
+            if kid in pem_by_kid:
+                explained.add(kid)
+
+    # Keys that signed records here that no sound handover accounts for.
+    #
+    # Only reported once the bundle carries at least one handover whose
+    # signatures checked out. On an installation that has never rotated there
+    # is nothing to be inconsistent with -- its first key has no predecessor by
+    # definition -- and flagging every bundle would be noise that gets the
+    # signal deleted.
+    #
+    # Deliberately NOT gated on the number of distinct signers. It was, and
+    # that inverted the signal: a bundle whose *sole* signer no handover named
+    # -- the exact shape of a clean substitution -- reported nothing, while the
+    # presence of a legitimate co-signer was what made the illegitimate one
+    # visible.
+    if saw_sound:
+        res.unexplained_key_ids = sorted(
+            k for k in signer_kids if k and k not in explained)
+    return None
+
+
 def _evaluate_attestation(
     res: VerifyResult,
     *,
@@ -341,57 +636,12 @@ def _evaluate_attestation(
         return self_attested(
             "no Evidence Root fingerprint pinned (pre-ceremony verifier)")
 
-    root_pem = certs.get("root_public_key_pem")
-    if not root_pem:
-        return self_attested("bundle carries no Evidence Root public key")
-    if _pem_fingerprint(root_pem) != root_fingerprint.strip().lower():
-        return self_attested(
-            "root public key fingerprint mismatch — does not chain to the "
-            "pinned Evidence Root")
-    root_key_id = _pem_key_id(root_pem)
-
-    # Issuing certificates: root-signed, well-formed.
-    issuers: list[dict[str, Any]] = []
-    for cert in certs.get("issuing_certificates") or []:
-        if cert.get("format") != _ISSUING_CERT_FORMAT:
-            continue
-        if cert.get("issuer_key_id") != root_key_id:
-            continue
-        if not _cert_sig_ok(cert, root_pem):
-            res.attestation_reasons.append(
-                f"issuing certificate {cert.get('cert_id')} signature invalid")
-            continue
-        res.certificates_checked += 1
-        issuers.append(cert)
-    if not issuers:
-        return self_attested("no valid issuing certificate chains to the root")
-
-    # Deployment certificates: signed by an issuer that was valid when the
-    # certificate was issued (its not_before) — the issuing window bounds
-    # issuance, not later leaf-signing (air-gapped certs never go stale
-    # because the online issuer rotated).
-    deploy: list[dict[str, Any]] = []
-    for cert in certs.get("deployment_certificates") or []:
-        if cert.get("format") != _DEPLOYMENT_CERT_FORMAT:
-            continue
-        nb = _parse_ts(cert.get("not_before"))
-        na = _parse_ts(cert.get("not_after"))
-        if nb is None or na is None:
-            continue
-        for issuer in issuers:
-            inb = _parse_ts(issuer.get("not_before"))
-            ina = _parse_ts(issuer.get("not_after"))
-            if (cert.get("issuer_key_id") == _pem_key_id(issuer.get("public_key") or "")
-                    and inb is not None and ina is not None
-                    and inb <= nb <= ina
-                    and _cert_sig_ok(cert, issuer.get("public_key") or "")):
-                res.certificates_checked += 1
-                deploy.append(cert)
-                break
-    if not deploy:
-        return self_attested(
-            "no valid certificate for any deployment key (invalid signature, "
-            "or issued outside the issuing certificate's validity)")
+    deploy, reason, checked, notes = validated_deployment_certificates(
+        certs, root_fingerprint)
+    res.certificates_checked += checked
+    res.attestation_reasons.extend(notes)
+    if reason is not None:
+        return self_attested(reason)
 
     # Coverage: every leaf and seal must be signed by a certified key, valid
     # at the record's signing time.  Compare the actual key bytes the
@@ -500,6 +750,8 @@ def _load_bundle(path: Path) -> dict[str, Any]:
     manifest = json.loads(manifest_raw) if manifest_raw.strip() else {}
     certs_raw = _read("certificates.json")
     certificates = json.loads(certs_raw) if certs_raw.strip() else {}
+    rotations_raw = _read("key-rotations.json")
+    rotations = json.loads(rotations_raw) if rotations_raw.strip() else []
     # Optional top-level structures degrade to their empty form when malformed
     # (a non-object manifest/chain, a non-list key set) so hostile bytes can
     # never reach a .get()/iteration and raise; a missing manifest/chain is
@@ -511,8 +763,11 @@ def _load_bundle(path: Path) -> dict[str, Any]:
         manifest = {}
     if not isinstance(certificates, dict):
         certificates = {}
+    if not isinstance(rotations, list):
+        rotations = []
     return {"leaves": leaves, "seals": seals, "keys": keys,
-            "manifest": manifest, "certificates": certificates}
+            "manifest": manifest, "certificates": certificates,
+            "rotations": rotations}
 
 
 # ---------------------------------------------------------------------------
@@ -659,6 +914,53 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
     # (seq, leaf_hash) set — the flag the seal heuristics and the attestation
     # gate below both key off.
     manifest_binds_content = manifest_trusted and manifest.get("leaves_digest") is not None
+
+    # 3a) The signed manifest lists the keys the server exported. Nothing read
+    #     that list until WS-8's review found why it matters: deleting an entry
+    #     from keys.json is otherwise invisible, and it is a general tool —
+    #     whatever check would have resolved that key simply does not run.
+    #     Both come from the same query in the same request on the server, so
+    #     they agree by construction on every bundle ever exported; a
+    #     disagreement means the bundle was edited in transit.
+    if manifest_trusted:
+        committed_key_ids = manifest.get("key_ids")
+        if isinstance(committed_key_ids, list):
+            present = {k.get("key_id") for k in bundle["keys"]
+                       if isinstance(k, dict)}
+            missing = sorted(str(k) for k in committed_key_ids
+                             if k not in present)
+            if missing:
+                return res._fail(
+                    None, "keys.json is missing key(s) the signed manifest "
+                          "commits to: " + ", ".join(missing))
+
+    # 3b) Signing-key handovers (WS-8). Checked here because the digest that
+    #     binds them lives in the manifest just verified above.
+    rotations = bundle.get("rotations") or []
+    committed_rotations = manifest.get("rotations_digest")
+    if manifest_trusted and committed_rotations is not None:
+        if _rotations_digest(rotations) != committed_rotations:
+            # Covers both directions: a handover added on the way here, and one
+            # removed to hide that the signing key ever changed.
+            return res._fail(
+                None, "key handover set does not match the signed manifest "
+                      "(rotations_digest mismatch)")
+    elif rotations and not manifest_trusted:
+        res.warnings.append(
+            "key handovers present but the manifest is not trusted — they are "
+            "checked for self-consistency only")
+    signer_kids = {leaf.get("signer_key_id") for leaf in leaves}
+    signer_kids |= {seal.get("signer_key_id") for seal in seals}
+    if manifest_signer_kid:
+        signer_kids.add(manifest_signer_kid)
+    failure = _check_rotations(res, rotations, bundle["keys"], pubkeys,
+                               {k for k in signer_kids if k})
+    if failure:
+        return res._fail(None, failure)
+    for kid in res.unexplained_key_ids:
+        res.warnings.append(
+            f"key {kid} signed records here and no handover names it — either "
+            "a second signing process, or a key that was never authorised")
 
     # 4) Seals: hash + signature + Merkle root over covered leaves.
     #    A seal commits to *exactly* its [first_seq, last_seq] range.  When that

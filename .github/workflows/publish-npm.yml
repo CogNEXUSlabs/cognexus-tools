@@ -6,6 +6,15 @@ name: Publish TypeScript SDK
 #
 # Required repo secret: NPM_TOKEN — a granular automation token with publish
 # rights on @cognexuslabs/artzain.
+#
+# Actions are pinned to commit SHAs, not tags (WS-8). A tag is a mutable
+# pointer, and every action in this job runs alongside NPM_TOKEN — a
+# credential with publish rights on the package.
+#
+# NPM_TOKEN is the last long-lived publishing credential in the release path.
+# npm now supports OIDC Trusted Publishing; moving to it would remove this
+# secret the way PyPI's already is. That needs a change on npmjs.com, so it is
+# noted in docs/runbooks/supply-chain.md rather than assumed here.
 
 on:
   push:
@@ -24,9 +33,9 @@ jobs:
       run:
         working-directory: typescript
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org

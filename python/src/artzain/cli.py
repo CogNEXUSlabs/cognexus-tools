@@ -723,6 +723,12 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
             "attestation": result.attestation,
             "attestation_reasons": result.attestation_reasons,
             "certificates_checked": result.certificates_checked,
+            # WS-8 custody signal. Machine consumers gating on this bundle need
+            # both: rotations_checked is how many handovers actually verified,
+            # unexplained_key_ids names any signer no sound handover accounts
+            # for. Omitting them left the JSON path blind to the whole layer.
+            "rotations_checked": result.rotations_checked,
+            "unexplained_key_ids": result.unexplained_key_ids,
             "leaves_checked": result.leaves_checked,
             "seals_checked": result.seals_checked,
             "signatures_checked": result.signatures_checked,
@@ -769,6 +775,371 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
     where = f" (first bad seq: {result.first_bad_seq})" if result.first_bad_seq is not None else ""
     print(f"FAILED{where}: {result.error}")
     raise SystemExit(1)
+
+
+#: Licence commands talk to the deployment on this machine, not to the
+#: CogNEXUS SaaS. The whole point of WS-6 is that a Sovereign or air-gapped
+#: install never phones home; defaulting these to the cloud base URL would
+#: send an air-gapped operator's API key to the internet and hand them an
+#: attestation describing somebody else's chain.
+_LICENCE_DEFAULT_BASE = "http://127.0.0.1:8000"
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "[::1]", "localhost"})
+
+
+def _licence_read_json(path: str) -> dict:
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _licence_write_json(path: str, payload: dict) -> None:
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+
+
+def _licence_base_url(args: argparse.Namespace) -> str:
+    """The deployment to talk to: explicit flag, env, else loopback."""
+    raw = (getattr(args, "base_url", None)
+           or os.environ.get("COGNEXUS_LOCAL_URL")
+           or _LICENCE_DEFAULT_BASE).strip().rstrip("/")
+    host = (urllib.parse.urlsplit(raw).hostname or "").lower()
+    if host not in _LOOPBACK_HOSTS and not getattr(args, "allow_remote", False):
+        raise SystemExit(
+            f"{raw} is not this machine. Licence commands read your own chain "
+            "and carry your API key; pointing them elsewhere sends both to a "
+            "third party. Pass --allow-remote if that is genuinely what you "
+            "want.")
+    return raw
+
+
+def _licence_get(args: argparse.Namespace, path: str,
+                 params: str = "") -> dict:
+    base = _licence_base_url(args)
+    url = f"{base}{path}{params}"
+    headers = {**_request_headers_for_url(url), **_policy_auth_headers()}
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        detail = raw
+        try:
+            detail = json.loads(raw).get("detail") or raw
+        except Exception:
+            pass
+        print(f"{base} refused the request (HTTP {exc.code}): {detail}",
+              file=sys.stderr)
+        raise SystemExit(1) from exc
+    except Exception as exc:
+        print(f"Could not reach the deployment at {base}: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
+def _licence_post(args: argparse.Namespace, path: str, body: dict) -> dict:
+    base = _licence_base_url(args)
+    url = f"{base}{path}"
+    status, payload = _http_json("POST", url, headers=_policy_auth_headers(),
+                                 body=body, timeout_sec=120.0)
+    if status >= 400:
+        detail = payload.get("detail") if isinstance(payload, dict) else payload
+        print(f"{base} refused the request (HTTP {status}): {detail}",
+              file=sys.stderr)
+        raise SystemExit(1)
+    return payload if isinstance(payload, dict) else {}
+
+
+def cmd_licence_request(args: argparse.Namespace) -> None:
+    """Write a CSR for this install. Public key only, never the private key."""
+    from artzain.licence import make_csr
+
+    pub = Path(args.public_key).read_text(encoding="utf-8")
+    try:
+        csr = make_csr(install_id=args.install_id, public_key_pem=pub,
+                       deployment_class=args.deployment_class,
+                       customer_id=args.customer_id)
+    except ValueError as exc:
+        # make_csr refuses a private key. Nothing is written, and the operator
+        # is told which file they meant.
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    _licence_write_json(args.out, csr)
+    print(f"Wrote CSR for install {args.install_id} to {args.out}")
+    print("Carry this file to CogNEXUS. It contains your PUBLIC key only -")
+    print("no private key ever leaves this deployment.")
+
+
+def cmd_licence_install(args: argparse.Namespace) -> None:
+    """Verify a certificate to the Evidence Root, then install it.
+
+    Two steps, both required. Writing the file to disk installs nothing: the
+    deployment reads its chain from its own store. And a certificate states
+    what this install is entitled to, so it is checked before it is believed -
+    printing an unverified validity window back to the operator as fact is
+    worse than having no command at all.
+    """
+    from artzain.licence import verify_certificate_offline
+
+    loaded = _licence_read_json(args.certificate)
+    if not isinstance(loaded, dict):
+        print(f"{args.certificate} is not a certificate or a certificate "
+              "bundle.", file=sys.stderr)
+        raise SystemExit(2)
+    # `issue_deployment_cert.py --csr` hands the customer a bundle: the
+    # certificate, the issuing certificates that signed it, and the Evidence
+    # Root public key. Taking only the bare certificate here meant the file
+    # the issuing script tells them to install was the one file this command
+    # rejected.
+    from artzain.licence import as_certificate_chain
+
+    chain = as_certificate_chain(loaded)
+    cert = (loaded.get("certificate") if isinstance(loaded.get("certificate"), dict)
+            else loaded)
+    chain.pop("deployment_certificates", None)
+    if getattr(args, "chain", None):
+        supplied = as_certificate_chain(_licence_read_json(args.chain))
+        supplied.pop("deployment_certificates", None)
+        chain = {**chain, **supplied}
+    if getattr(args, "root_key", None):
+        chain["root_public_key_pem"] = Path(args.root_key).read_text(encoding="utf-8")
+    if getattr(args, "issuing", None):
+        issued = _licence_read_json(args.issuing)
+        chain["issuing_certificates"] = (issued if isinstance(issued, list)
+                                         else issued.get("issuing_certificates") or [issued])
+
+    ok, reason, pinned = verify_certificate_offline(
+        cert, chain, evidence_root_fingerprint=getattr(args, "root_fingerprint", None))
+    if not ok:
+        print(f"REFUSED: {reason}", file=sys.stderr)
+        print("Nothing was installed.", file=sys.stderr)
+        raise SystemExit(1)
+
+    if pinned:
+        print(f"Certificate {cert.get('cert_id')} chains to the Evidence Root.")
+    else:
+        # Saying "chains to the Evidence Root" here would be a claim about
+        # CogNEXUS that the check did not make.
+        print(f"Certificate {cert.get('cert_id')} chains to the root supplied "
+              "with it.")
+        print("  ! This verifier pins no Evidence Root fingerprint, so that is")
+        print("    a statement about internal consistency, not about CogNEXUS.")
+    print(f"  install_id:       {cert.get('install_id')}")
+    print(f"  licence_id:       {cert.get('licence_id')}")
+    print(f"  deployment class: {cert.get('deployment_class')}")
+    print(f"  valid:            {cert.get('not_before')} .. {cert.get('not_after')}")
+
+    if getattr(args, "offline_only", False):
+        dest = Path(args.dir or ".") / "licence-certificate.json"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _licence_write_json(str(dest), cert)
+        print()
+        print(f"Wrote the verified certificate to {dest}.")
+        print("The DEPLOYMENT HAS NOT BEEN UPDATED - it reads its chain from")
+        print("its own store. Run without --offline-only, or POST the file to")
+        print("/api/v1/licence/certificate, to install it.")
+        return
+
+    body = {"certificate": cert}
+    if chain.get("issuing_certificates"):
+        body["issuing_certificates"] = chain["issuing_certificates"]
+    if chain.get("root_public_key_pem"):
+        body["root_public_key_pem"] = chain["root_public_key_pem"]
+    result = _licence_post(args, "/api/v1/licence/certificate", body)
+    print()
+    print(f"Installed into the deployment (cert {result.get('cert_id')}).")
+
+
+def cmd_licence_attest(args: argparse.Namespace) -> None:
+    """Save a Sealed Usage Attestation produced by the local deployment.
+
+    Built server-side because only the deployment can read its own chain, then
+    written here so a human can inspect it before it leaves the boundary -
+    which is the entire point of the artifact.
+    """
+    params = (f"?period_start={urllib.parse.quote(args.period_start)}"
+              f"&period_end={urllib.parse.quote(args.period_end)}")
+    if args.licence_id:
+        params += f"&licence_id={urllib.parse.quote(args.licence_id)}"
+    payload = _licence_get(args, "/api/v1/licence/attestation", params)
+
+    att = payload["attestation"]
+    _licence_write_json(args.out, att)
+    print(f"Wrote attestation to {args.out}")
+    print(f"  licence:  {att.get('licence_id')}")
+    print(f"  period:   {att.get('period_start')} .. {att.get('period_end')}")
+    print(f"  billable: {att.get('billable_decisions')} decisions")
+    print(f"  chain:    seq {att.get('first_seq')}..{att.get('last_seq')}")
+    print()
+    print("It carries counts and hashes only - no payloads, no agent ids, no")
+    print("policy content. Inspect it before it leaves your boundary.")
+
+
+def cmd_licence_anchor_request(args: argparse.Namespace) -> None:
+    """Write the unsigned document CogNEXUS countersigns to make an anchor."""
+    payload = _licence_get(args, "/api/v1/licence/anchor-request")
+    doc = payload["anchor_request"]
+    _licence_write_json(args.out, doc)
+    print(f"Wrote anchor request to {args.out}")
+    print(f"  install:  {doc.get('install_id')}")
+    print(f"  chain:    seq {doc.get('last_seq')} ({doc.get('leaf_count')} leaves)")
+    print(f"  billable: {doc.get('billable_through')} through that seq")
+    print()
+    print("Carry this to CogNEXUS. What comes back is a countersigned anchor:")
+    print("proof of where your chain stood at a time you did not set.")
+
+
+def cmd_licence_anchor(args: argparse.Namespace) -> None:
+    """Store a CogNEXUS-signed anchor in the local deployment."""
+    anchor = _licence_read_json(args.anchor)
+    result = _licence_post(args, "/api/v1/licence/anchor", {"anchor": anchor})
+    print(f"Stored anchor for seq {result.get('last_seq')} "
+          f"(signed {result.get('anchored_at')}).")
+
+
+def cmd_licence_anchors(args: argparse.Namespace) -> None:
+    """Export the anchors this deployment holds, for offline verification."""
+    payload = _licence_get(args, "/api/v1/licence/anchors",
+                           f"?limit={int(getattr(args, 'limit', 1000))}")
+    _licence_write_json(args.out, payload)
+    print(f"Wrote {payload.get('count', 0)} anchor(s) to {args.out}")
+    if payload.get("truncated"):
+        # A truncated export drops the OLDEST anchors, which are exactly the
+        # ones an older period needs. Silence here would turn a complete
+        # cross-check into a partial one that still prints "anchors checked".
+        print(f"  ! TRUNCATED at {payload.get('count')} - older anchors were "
+              "dropped. Raise --limit before verifying an older period.")
+    print("Verify an attestation against them:")
+    print("  artzain licence verify usage-attestation.json \\")
+    print(f"      --anchors {args.out} --certificates licence-certificate.json")
+
+
+def _canonical_pem_text(pem):
+    """PEM in the byte form fingerprints are taken over."""
+    if not pem:
+        return ""
+    from artzain.audit_verify import _canonical_pem
+
+    return _canonical_pem(pem)
+
+
+def cmd_licence_verify(args: argparse.Namespace) -> None:
+    """Verify an attestation offline, against anchors and the certificate chain."""
+    from artzain.licence import verify_attestation
+
+    attestation = _licence_read_json(args.attestation)
+    if not isinstance(attestation, dict):
+        print(f"{args.attestation} is not an attestation object.", file=sys.stderr)
+        raise SystemExit(2)
+    pub = Path(args.public_key).read_text(encoding="utf-8") if args.public_key else None
+    anchors = _licence_read_json(args.anchors) if args.anchors else None
+    if isinstance(anchors, dict):
+        anchors = anchors.get("anchors") or [anchors]
+    certificates = None
+    if getattr(args, "certificates", None):
+        from artzain.licence import as_certificate_chain
+
+        certificates = as_certificate_chain(_licence_read_json(args.certificates)) or None
+
+    issuer = Path(args.issuer_key).read_text(encoding="utf-8") if args.issuer_key else None
+    issuer_pinned = False
+    if certificates:
+        # The issuing public key is inside the certificate chain the operator
+        # already has. Requiring it as a separate file meant the anchor
+        # cross-check needed a file nothing in the flow produces — and a key
+        # taken from a root-signed certificate is a stronger thing than a PEM
+        # handed over loose, so which one was used gets printed.
+        from artzain.licence import root_signed_issuer_keys
+
+        signed = root_signed_issuer_keys(
+            certificates,
+            evidence_root_fingerprint=getattr(args, "root_fingerprint", None))
+        if signed:
+            issuer_pinned = issuer is None or any(
+                _canonical_pem_text(k) == _canonical_pem_text(issuer)
+                for k in signed)
+            issuer = issuer or signed[0]
+
+    result = verify_attestation(
+        attestation, deployment_public_key_pem=pub, anchors=anchors,
+        issuer_public_key_pem=issuer, certificates=certificates,
+        evidence_root_fingerprint=getattr(args, "root_fingerprint", None))
+
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "verdict": result.verdict,
+            "ok": result.ok, "error": result.error,
+            "attestation": result.attestation,
+            "attestation_reasons": result.attestation_reasons,
+            "signature_checked": result.signature_checked,
+            "certificates_checked": result.certificates_checked,
+            "billable_decisions": result.billable_decisions,
+            "period": result.period, "anchors_checked": result.anchors_checked,
+            "anchors_unverifiable": result.anchors_unverifiable,
+            "usage_bounded": result.usage_bounded,
+            "opening_gap": result.opening_gap,
+            "tail_leaves": result.tail_leaves,
+            "seconds_since_anchor": result.seconds_since_anchor,
+            "evidence_root_fingerprint": result.evidence_root_fingerprint,
+            "root_fingerprint_overridden": result.root_fingerprint_overridden,
+            "warnings": result.warnings,
+        }, indent=2))
+        raise SystemExit(0 if result.ok else 1)
+
+    print(f"Attestation: {args.attestation}")
+    print(f"  licence:            {attestation.get('licence_id')}")
+    print(f"  install:            {attestation.get('install_id')}")
+    print(f"  period:             {result.period}")
+    print(f"  chain:              seq {attestation.get('first_seq')}.."
+          f"{attestation.get('last_seq')}")
+    print(f"  billable decisions: {result.billable_decisions}")
+    print(f"  signature:          "
+          f"{'verified' if result.signature_checked else 'NOT verified'}")
+    print(f"  certificates:       {result.certificates_checked} checked")
+    if result.anchors_checked and not issuer_pinned:
+        print(f"  anchors checked:    {result.anchors_checked} (issuer key "
+              "supplied directly - NOT tied to the Evidence Root)")
+    else:
+        print(f"  anchors checked:    {result.anchors_checked}")
+    if result.anchors_unverifiable:
+        print(f"  anchors UNCHECKED:  {result.anchors_unverifiable}")
+    if anchors is not None:
+        print(f"  usage bounded:      "
+              f"{'yes' if result.usage_bounded else 'NO - no anchor pair brackets it'}")
+    if result.opening_gap:
+        print(f"  opening gap:        {result.opening_gap} leaves before this "
+              "period's first seq")
+    if result.tail_leaves is not None:
+        days = (result.seconds_since_anchor or 0) // 86400
+        print(f"  un-anchored tail:   {result.tail_leaves} leaves "
+              f"({days}d since the last anchor)")
+    if result.root_fingerprint_overridden:
+        print("  ! Evidence Root fingerprint OVERRIDDEN - this attests to the")
+        print("    root you supplied, not the published CogNEXUS Evidence Root.")
+    for w in result.warnings:
+        print(f"  ! {w}")
+    print()
+    if not result.ok:
+        print(f"FAILED: {result.error}")
+        raise SystemExit(1)
+    print(result.verdict)
+    if result.attestation == "ATTESTED" and result.attestation_reasons:
+        # A tampered issuing certificate in the supplied chain is recorded and
+        # then never shown, because the reasons were printed on the
+        # SELF-ATTESTED branch only.
+        print("Notes on the certificate chain:")
+        for reason in result.attestation_reasons:
+            print(f"  - {reason}")
+    if result.attestation == "ATTESTED":
+        root = ("the root you supplied" if result.root_fingerprint_overridden
+                else "the CogNEXUS Evidence Root")
+        print(f"The signing key is certified under {root} for this licence")
+        print("and install, across the whole attested period.")
+    else:
+        print("Intact and internally consistent, but nothing ties the signing")
+        print("key to CogNEXUS. Reasons:")
+        for reason in result.attestation_reasons or ["(none recorded)"]:
+            print(f"  - {reason}")
+    raise SystemExit(0)
 
 
 def cmd_audit_export(args: argparse.Namespace) -> None:
@@ -1152,6 +1523,96 @@ def main(argv: list[str] | None = None) -> None:
     p_export.add_argument("--to", metavar="ISO", help="ISO-8601 upper bound on created_at.")
     p_export.add_argument("--out", help="Output ZIP path (default: ./artzain-audit-<stamp>.zip).")
     p_export.set_defaults(func=cmd_audit_export)
+
+    p_licence = sub.add_parser(
+        "licence",
+        help="Licence lifecycle: request, install, attest, anchor, verify.",
+    )
+    licence_sub = p_licence.add_subparsers(dest="licence_command", required=True)
+
+    def _local_flags(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("--base-url", default=None,
+                            help="Deployment to talk to (default: this machine).")
+        parser.add_argument("--allow-remote", action="store_true",
+                            help="Permit a non-loopback --base-url.")
+
+    p_lreq = licence_sub.add_parser(
+        "request", help="Write a certificate signing request (public key only).")
+    p_lreq.add_argument("--install-id", required=True)
+    p_lreq.add_argument("--public-key", required=True,
+                        help="Path to this deployment's audit_signing_key.pub.pem.")
+    p_lreq.add_argument("--deployment-class", default="private",
+                        choices=("hosted", "private", "sovereign", "airgapped"))
+    p_lreq.add_argument("--customer-id", default=None)
+    p_lreq.add_argument("--out", default="licence-request.json")
+    p_lreq.set_defaults(func=cmd_licence_request)
+
+    p_lins = licence_sub.add_parser(
+        "install", help="Verify a certificate to the Evidence Root and install it.")
+    p_lins.add_argument("certificate", help="Path to the certificate JSON.")
+    p_lins.add_argument("--chain", default=None,
+                        help="Certificate chain JSON (root key + issuing certs).")
+    p_lins.add_argument("--root-key", default=None,
+                        help="Evidence Root public key PEM.")
+    p_lins.add_argument("--issuing", default=None,
+                        help="Issuing certificate(s) JSON.")
+    p_lins.add_argument("--root-fingerprint", default=None,
+                        help="Override the pinned Evidence Root fingerprint.")
+    p_lins.add_argument("--offline-only", action="store_true",
+                        help="Verify and write the file, but do not install.")
+    p_lins.add_argument("--dir", default=None,
+                        help="Where to write it with --offline-only.")
+    _local_flags(p_lins)
+    p_lins.set_defaults(func=cmd_licence_install)
+
+    p_latt = licence_sub.add_parser(
+        "attest", help="Write a Sealed Usage Attestation for a period.")
+    p_latt.add_argument("--period-start", required=True, help="ISO-8601.")
+    p_latt.add_argument("--period-end", required=True, help="ISO-8601.")
+    p_latt.add_argument("--licence-id", default=None)
+    p_latt.add_argument("--out", default="usage-attestation.json")
+    _local_flags(p_latt)
+    p_latt.set_defaults(func=cmd_licence_attest)
+
+    p_lareq = licence_sub.add_parser(
+        "anchor-request",
+        help="Write the document CogNEXUS countersigns to make an anchor.")
+    p_lareq.add_argument("--out", default="anchor-request.json")
+    _local_flags(p_lareq)
+    p_lareq.set_defaults(func=cmd_licence_anchor_request)
+
+    p_lanc = licence_sub.add_parser(
+        "anchor", help="Store a CogNEXUS-signed anchor in this deployment.")
+    p_lanc.add_argument("anchor", help="Path to the signed anchor JSON.")
+    _local_flags(p_lanc)
+    p_lanc.set_defaults(func=cmd_licence_anchor)
+
+    p_lancs = licence_sub.add_parser(
+        "anchors", help="Export stored anchors for offline verification.")
+    p_lancs.add_argument("--out", default="anchors.json")
+    p_lancs.add_argument("--limit", type=int, default=1000,
+                         help="Maximum anchors to export (newest first).")
+    _local_flags(p_lancs)
+    p_lancs.set_defaults(func=cmd_licence_anchors)
+
+    p_lver = licence_sub.add_parser(
+        "verify", help="Verify an attestation offline (no network).")
+    p_lver.add_argument("attestation")
+    p_lver.add_argument("--public-key", default=None,
+                        help="Deployment public key PEM, to check the signature.")
+    p_lver.add_argument("--certificates", default=None,
+                        help="Certificate chain JSON. Without it the verdict is "
+                             "capped at SELF-ATTESTED.")
+    p_lver.add_argument("--anchors", default=None,
+                        help="JSON file of CogNEXUS-signed anchors to cross-check. "
+                             "Requires --issuer-key.")
+    p_lver.add_argument("--issuer-key", default=None,
+                        help="CogNEXUS issuing public key PEM, to verify "
+                             "anchors. Taken from --certificates when omitted.")
+    p_lver.add_argument("--root-fingerprint", default=None,
+                        help="Override the pinned Evidence Root fingerprint.")
+    p_lver.add_argument("--json", action="store_true")
+    p_lver.set_defaults(func=cmd_licence_verify)
 
     p_policy = sub.add_parser(
         "policy",
