@@ -1,20 +1,23 @@
 name: Publish TypeScript SDK
 
-# Publishes @cognexuslabs/artzain to npm with provenance attestation.
-# Trigger by pushing a tag like sdk-ts-v0.1.0 (must match package.json version),
-# or run manually from the Actions tab.
+# Publishes @cognexuslabs/artzain to npm via OIDC Trusted Publishing — no
+# long-lived npm token. Trigger by pushing a tag like sdk-ts-v0.1.0 (must match
+# package.json version), or run manually from the Actions tab.
 #
-# Required repo secret: NPM_TOKEN — a granular automation token with publish
-# rights on @cognexuslabs/artzain.
+# One-time setup on npmjs.com (Package @cognexuslabs/artzain → Settings →
+# Trusted Publisher / Publishing access), bound to:
+#   organization/user : CogNEXUSlabs
+#   repository        : cognexus-tools
+#   workflow filename : publish-npm.yml   (filename only, not the path)
+#   environment       : (leave blank — this job uses none)
+#   allowed actions   : npm publish
+# npm then mints a short-lived credential from the id-token below at publish
+# time and generates provenance automatically (no --provenance flag needed, no
+# NPM_TOKEN secret). This removes the last long-lived publishing credential in
+# the release path, matching PyPI's Trusted-Publisher setup.
 #
-# Actions are pinned to commit SHAs, not tags (WS-8). A tag is a mutable
-# pointer, and every action in this job runs alongside NPM_TOKEN — a
-# credential with publish rights on the package.
-#
-# NPM_TOKEN is the last long-lived publishing credential in the release path.
-# npm now supports OIDC Trusted Publishing; moving to it would remove this
-# secret the way PyPI's already is. That needs a change on npmjs.com, so it is
-# noted in docs/runbooks/supply-chain.md rather than assumed here.
+# Requirements: npm CLI >= 11.5.1 and Node >= 22.14.0. Node 22 ships npm 10.x,
+# so npm is upgraded below. Actions are pinned to commit SHAs (WS-8).
 
 on:
   push:
@@ -24,7 +27,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # npm --provenance attestation
+  id-token: write # OIDC token for npm Trusted Publishing (mints the publish credential + provenance)
 
 jobs:
   publish:
@@ -37,8 +40,13 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: 22 # resolves to latest 22.x (>= 22.14.0, required for OIDC)
           registry-url: https://registry.npmjs.org
+
+      # Trusted Publishing requires npm >= 11.5.1; Node 22 bundles npm 10.x.
+      # (Consider pinning an exact version for WS-8 once a floor is chosen.)
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@latest
 
       - name: Install
         run: npm ci
@@ -59,7 +67,7 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Publish to npm
-        run: npm publish --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # No NODE_AUTH_TOKEN: auth comes from the OIDC id-token via the configured
+      # trusted publisher, and provenance is generated automatically.
+      - name: Publish to npm (OIDC Trusted Publishing)
+        run: npm publish
