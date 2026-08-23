@@ -15,7 +15,6 @@ The line these tests hold is the one that is easy to get backwards:
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 from pathlib import Path
@@ -25,11 +24,11 @@ import pytest
 from artzain.audit_verify import verify_bundle
 
 from .test_audit_verify import (  # noqa: TID252 - one bundle builder, not two
-    _Signer,
     _build_bundle,
     _canonical,
     _leaves_digest,
     _read_leaves,
+    _Signer,
     requires_crypto,
 )
 

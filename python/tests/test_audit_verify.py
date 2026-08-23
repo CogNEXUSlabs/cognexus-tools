@@ -26,8 +26,8 @@ from artzain.audit_verify import (
 )
 
 try:
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     _HAVE_CRYPTO = True
 except Exception:  # pragma: no cover
@@ -44,7 +44,7 @@ def _canonical(obj) -> bytes:
 
 def _leaves_digest(leaves: list[dict]) -> str:
     """Mirror of artzain.audit_verify._leaves_digest / the server helper."""
-    pairs = sorted(([int(l["seq"]), l["leaf_hash"]] for l in leaves), key=lambda p: p[0])
+    pairs = sorted(([int(leaf["seq"]), leaf["leaf_hash"]] for leaf in leaves), key=lambda p: p[0])
     return hashlib.sha256(_canonical(pairs)).hexdigest()
 
 
@@ -99,7 +99,7 @@ def _build_bundle(tmp: Path, signer, n: int = 5) -> Path:
         leaves.append(rec)
         prev = lh
 
-    root = _merkle_root([l["leaf_hash"] for l in leaves])
+    root = _merkle_root([leaf["leaf_hash"] for leaf in leaves])
     seal_body = {
         "seal_id": "S0", "first_seq": 1, "last_seq": n, "merkle_root": root,
         "prev_seal_hash": _GENESIS,
@@ -113,7 +113,7 @@ def _build_bundle(tmp: Path, signer, n: int = 5) -> Path:
     d = tmp / "bundle"
     d.mkdir()
     (d / "leaves.jsonl").write_text(
-        "".join(json.dumps(l, sort_keys=True) + "\n" for l in leaves), encoding="utf-8"
+        "".join(json.dumps(leaf, sort_keys=True) + "\n" for leaf in leaves), encoding="utf-8"
     )
     (d / "seals.jsonl").write_text(json.dumps(seal, sort_keys=True) + "\n", encoding="utf-8")
     (d / "keys.json").write_text(
@@ -125,12 +125,12 @@ def _build_bundle(tmp: Path, signer, n: int = 5) -> Path:
 
 
 def _read_leaves(d: Path) -> list[dict]:
-    return [json.loads(l) for l in (d / "leaves.jsonl").read_text().splitlines() if l.strip()]
+    return [json.loads(leaf) for leaf in (d / "leaves.jsonl").read_text().splitlines() if leaf.strip()]
 
 
 def _write_leaves(d: Path, leaves: list[dict]) -> None:
     (d / "leaves.jsonl").write_text(
-        "".join(json.dumps(l, sort_keys=True) + "\n" for l in leaves), encoding="utf-8"
+        "".join(json.dumps(leaf, sort_keys=True) + "\n" for leaf in leaves), encoding="utf-8"
     )
 
 
@@ -347,7 +347,7 @@ def test_substituted_keypair_reports_self_attested_not_attested(
         leaf["signer_key_id"] = evil.key_id
         prev = leaf["leaf_hash"]
     _write_leaves(d, leaves)
-    root = _merkle_root([l["leaf_hash"] for l in leaves])
+    root = _merkle_root([leaf["leaf_hash"] for leaf in leaves])
     seal_body = {
         "seal_id": "S0", "first_seq": 1, "last_seq": len(leaves),
         "merkle_root": root, "prev_seal_hash": _GENESIS,
@@ -397,7 +397,7 @@ def test_key_id_label_spoof_reports_self_attested(tmp_path, signer, authority):
     _write_leaves(d, leaves)
     seal_body = {
         "seal_id": "S0", "first_seq": 1, "last_seq": len(leaves),
-        "merkle_root": _merkle_root([l["leaf_hash"] for l in leaves]),
+        "merkle_root": _merkle_root([leaf["leaf_hash"] for leaf in leaves]),
         "prev_seal_hash": _GENESIS,
         "sealed_at": "2026-06-17T19:01:00+00:00",
     }
@@ -747,7 +747,7 @@ def _windowed_certified_bundle(tmp_path, signer, authority, present, seal_range)
     seal_body = {
         "seal_id": "S0", "first_seq": first, "last_seq": last,
         # boundary seal: the verifier does not recompute a partial seal's root
-        "merkle_root": _merkle_root([l["leaf_hash"] for l in leaves]),
+        "merkle_root": _merkle_root([leaf["leaf_hash"] for leaf in leaves]),
         "prev_seal_hash": _GENESIS,
         "sealed_at": (base_ts + timedelta(minutes=1)).isoformat(),
     }
@@ -795,7 +795,7 @@ def test_interior_deletion_padded_with_duplicate_leaf_fails(
         == "ATTESTED"
 
     leaves = _read_leaves(d)
-    survivors = [l for l in leaves if l["seq"] != 3]  # drop interior seq 3
+    survivors = [leaf for leaf in leaves if leaf["seq"] != 3]  # drop interior seq 3
     survivors.append(dict(survivors[-1]))             # pad with a duplicate of seq 5
     _write_leaves(d, survivors)                       # present seqs: 1,2,4,5,5
     (d / "seals.jsonl").write_text("", encoding="utf-8")  # drop the Merkle seal too
@@ -818,7 +818,7 @@ def test_windowed_interior_deletion_with_duplicate_fails(
         == "ATTESTED"
 
     leaves = _read_leaves(d)
-    survivors = [l for l in leaves if l["seq"] != 4]  # suppress interior seq 4
+    survivors = [leaf for leaf in leaves if leaf["seq"] != 4]  # suppress interior seq 4
     survivors.append(dict(survivors[-1]))             # pad with a duplicate of seq 5
     _write_leaves(d, survivors)                       # present seqs: 3,5,5
     r = verify_bundle(d, root_fingerprint=authority.root_fingerprint)
@@ -841,7 +841,7 @@ def test_content_substitution_into_deleted_slot_fails(tmp_path, signer, authorit
         == "ATTESTED"
 
     leaves = _read_leaves(d)
-    by_seq = {l["seq"]: l for l in leaves}
+    by_seq = {leaf["seq"]: leaf for leaf in leaves}
     substitute = dict(by_seq[3])   # byte-for-byte copy of the genuine seq-3 leaf
     substitute["seq"] = 5          # relabel into the deleted seq-5 slot
     rebuilt = [by_seq[3], substitute, by_seq[7]]  # genuine 5 replaced by copy-of-3
@@ -1004,7 +1004,7 @@ def test_cross_bundle_distinct_leaf_splice_caught_by_leaves_digest(
         == "ATTESTED"
 
     leaves = _read_leaves(d)
-    by_seq = {l["seq"]: l for l in leaves}
+    by_seq = {leaf["seq"]: leaf for leaf in leaves}
     spliced = _genuine_leaf(signer, 5, target="bank:evil", action="wire_transfer",
                             tag="9")  # same certified key, DIFFERENT body
     assert spliced["leaf_hash"] != by_seq[5]["leaf_hash"]  # genuinely different record
@@ -1025,7 +1025,7 @@ def test_cross_bundle_splice_resigned_by_uncertified_key_is_not_attested(
     d = _windowed_certified_bundle(tmp_path, signer, authority,
                                    present=[3, 5, 7], seal_range=(1, 9))
     leaves = _read_leaves(d)
-    by_seq = {l["seq"]: l for l in leaves}
+    by_seq = {leaf["seq"]: leaf for leaf in leaves}
     spliced = _genuine_leaf(signer, 5, target="bank:evil", tag="9")
     new_leaves = [by_seq[3], spliced, by_seq[7]]
     _write_leaves(d, new_leaves)

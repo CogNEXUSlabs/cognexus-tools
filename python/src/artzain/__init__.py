@@ -97,14 +97,10 @@ from artzain._helpers import (
     should_block_policy,
     wrap_untrusted_content,
 )
-from artzain.destructive_action_guard import (
-    ActionMatch,
-    ActionScreenResult,
-    ActionSeverity,
-    DestructiveActionGuard,
-    DestructiveActionGuardConfig,
-    reset_guard,
-    screen_action,
+from artzain.audit_chain import (
+    AuditLogWriteError,
+    VerifyResult,
+    verify_chain,
 )
 from artzain.cloud import (
     announce_cloud_ingest,
@@ -119,14 +115,18 @@ from artzain.cloud import (
     post_policy_human_decision,
     post_sdk_event,
 )
-from artzain.audit_chain import (
-    AuditLogWriteError,
-    VerifyResult,
-    verify_chain,
-)
 from artzain.decide import (
     DecisionError,
     decide,
+)
+from artzain.destructive_action_guard import (
+    ActionMatch,
+    ActionScreenResult,
+    ActionSeverity,
+    DestructiveActionGuard,
+    DestructiveActionGuardConfig,
+    reset_guard,
+    screen_action,
 )
 from artzain.events import (
     read_recent_events,
@@ -175,7 +175,7 @@ from artzain.prompt_injection import (
     load_prompt_injection_config,
 )
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 __all__ = [
     # Version

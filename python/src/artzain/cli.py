@@ -49,6 +49,7 @@ _SCAFFOLDS: dict[str, tuple[str, str]] = {
     "langgraph": ("langgraph.py.tpl", "artzain_langgraph_guard.py"),
     "mcp":       ("mcp.py.tpl",       "artzain_mcp_guard.py"),
     "crewai":    ("crewai.py.tpl",    "artzain_crewai_guard.py"),
+    "openclaw":  ("openclaw.ts.tpl",  "artzain_openclaw_guard.ts"),
 }
 
 # Representative Token-to-Outcome (T2O) examples. Each prompt is written so the
@@ -686,11 +687,19 @@ def cmd_init(args: argparse.Namespace) -> None:
     key, _env_path = resolve_api_key_for_quickstart()
     print()
     print("Next:")
+    step = 1
     if not key:
-        print("  1. artzain login      # ~15s — otherwise decisions are not sealed")
-        print(f"  2. python {out.name}")
+        print(f"  {step}. artzain login      # ~15s — otherwise decisions are not sealed")
+        step += 1
+    if framework == "openclaw":
+        print(f"  {step}. npm install @cognexuslabs/artzain")
+        step += 1
+        print(f"  {step}. copy {out.name} into your OpenClaw plugin package")
+        print("     (worked example, not a ClawHub plugin)")
+        step += 1
+        print(f"  {step}. set COGNEXUS_API_KEY on the Gateway process")
     else:
-        print(f"  python {out.name}")
+        print(f"  {step}. python {out.name}")
 
 
 def cmd_quickstart(_args: argparse.Namespace) -> None:
@@ -1422,6 +1431,9 @@ def main(argv: list[str] | None = None) -> None:
             "  mcp        a gate inside call_tool, before the tool executes"
             "\n"
             "  crewai     a @governed decorator wrapping the tool the agent calls"
+            "\n"
+            "  openclaw   a before_tool_call hook (block deny/review/errors; "
+            "not a ClawHub plugin)"
             "\n\n"
             "These are examples to copy from, not adapters to depend on."
         ),

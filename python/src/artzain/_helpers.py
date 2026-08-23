@@ -41,7 +41,6 @@ from typing import Any, Collection, Optional
 from artzain.events import record_policy_enforcement_event, record_prompt_defense_event
 from artzain.policy_enforcement import (
     ClientPolicyRule,
-    PolicyEnforcementConfig,
     PolicyEnforcementEvaluator,
     PolicyEnforcementReport,
     builtin_conduct_rules,

@@ -1,7 +1,7 @@
 {
   "name": "@cognexuslabs/artzain",
   "version": "0.1.1",
-  "description": "CogNEXUS Decision API client for Node.js \u00e2\u20ac\u201d governed agent actions with sealed audit decisions.",
+  "description": "CogNEXUS Decision API client for Node.js \u2014 governed agent actions with sealed audit decisions.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -45,8 +45,8 @@
     "llm-safety"
   ],
   "devDependencies": {
-    "@types/node": "^22.20.1",
-    "typescript": "^5.5.0",
-    "vitest": "^2.0.0"
+    "@types/node": "^26.2.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
   }
 }

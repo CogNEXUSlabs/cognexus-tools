@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-import os
-import stat
 import sys
 from pathlib import Path
-
-import pytest
 
 # Ensure package importable from repo checkout
 _PKG = Path(__file__).resolve().parents[1] / "src"

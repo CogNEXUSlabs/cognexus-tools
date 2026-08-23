@@ -1,12 +1,12 @@
 """Conduct and secret-safety policy tests."""
 
 from artzain.policy_enforcement import (
+    ClientPolicyRule,
     PolicyEnforcementEvaluator,
     builtin_conduct_rules,
     contains_likely_secrets,
     evaluate_conduct,
 )
-from artzain.policy_enforcement import ClientPolicyRule
 
 
 def test_excludes_api_key_blob() -> None:

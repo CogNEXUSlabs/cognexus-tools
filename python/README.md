@@ -1,16 +1,45 @@
 # artzain
 
-**OWASP-aligned prompt defence, runtime guards, and audit logging for LLM applications.**
+**The Python client for the ArtzAIn decision layer, and the free local guards it is built on.**
 
-`artzain` gives you four complementary safety layers and a tamper-evident audit trail — all in pure Python with zero mandatory dependencies.
+Three things, in the order you will meet them:
+
+1. **Local guards — free, offline, pure Python.** System-prompt grading against the OWASP LLM Top 10, runtime injection screening, a destructive-action guard for model output, PII detection, tool-call contracts and a cooperative kill switch. No server, no network, no mandatory dependencies, Apache-2.0. The six guard modules — prompt defence, injection screening, destructive-action guard, policy enforcement, PII detection, tool-call contracts — are byte-identical to the engine's `application/security/` copies and CI enforces it (`scripts/check_security_sync.py`); the kill switch is the SDK's own cooperative implementation.
+2. **`artzain.decide()` — one governed decision.** Ask a CogNEXUS engine whether an action may proceed and get `allow`, `deny` or `review` back; by the time you have the answer it is already sealed into a hash-chained, Ed25519-signed audit log. With no API key set, `decide()` runs the same guards locally instead (`offline: true` in the result, no seal).
+3. **The offline verifier and the licence CLI.** `artzain audit verify <bundle>` recomputes every leaf hash, chain link, Merkle root and signature of an exported evidence bundle with zero network — and, once the Evidence Root is pinned, zero trust in the producing server; today every verdict is `SELF-ATTESTED` (below). `artzain licence request|install|attest|anchor-request|anchor|anchors|verify` is the file-based licence flow for private, sovereign and air-gapped installs — certificates, anchors and usage attestations travel as files, and nothing phones home.
 
 ```
-pip install artzain
+pip install artzain              # guards, decide(), the CLI
+pip install 'artzain[verify]'    # adds Ed25519 signature checks to audit / licence verify
 ```
+
+```python
+import artzain
+
+d = artzain.decide(
+    action="send_email",
+    target="crm:contact:123",
+    payload=draft_email_text,
+    kind="model_output",
+)
+if d["outcome"] == "allow":
+    actually_send()
+```
+
+```bash
+artzain login                               # device-code grant → ~/.artzain/credentials.toml
+artzain quickstart                          # first sealed decision
+artzain audit export --profile eu-ai-act    # evidence bundle (ZIP), optionally with a framework artifact set
+artzain audit verify eu-evidence.zip        # offline; exit 1 on any integrity failure
+```
+
+**The three verdicts, honestly.** `FAILED` — a check the bundle must pass did not. `VERIFIED, SELF-ATTESTED` — intact and internally consistent, but nothing ties its signing key to CogNEXUS. `VERIFIED, ATTESTED` — additionally, the signing key chains to the pinned CogNEXUS Evidence Root. That root fingerprint is `None` in this release because the root ceremony has not yet run, so every bundle currently verifies `SELF-ATTESTED`; the verifier says so rather than implying more. Without `cryptography` installed, hashes and structure still verify, signatures report as unchecked, and the verdict is capped at `SELF-ATTESTED`.
+
+The rest of this README is the guard library.
 
 ---
 
-## Why this exists
+## Why the guards exist
 
 In April 2026, an AI coding agent (Cursor, powered by Claude) wiped a production database in nine seconds despite a system prompt that explicitly forbade destructive git commands. The agent admitted in its own reply: *"I violated every principle I was given."*
 

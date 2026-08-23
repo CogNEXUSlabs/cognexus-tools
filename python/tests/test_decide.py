@@ -9,10 +9,9 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
+import urllib.request
 
 import pytest
-
-import urllib.request
 
 from artzain.decide import DecisionError, decide
 
