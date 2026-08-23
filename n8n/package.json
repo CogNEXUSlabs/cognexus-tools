@@ -1,0 +1,68 @@
+{
+  "name": "@cognexuslabs/n8n-nodes-artzain",
+  "version": "0.1.0",
+  "description": "n8n nodes for the CogNEXUS Decision API and envelope proxy. Fail closed on HTTP 503. review does not wait inside n8n.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CogNEXUSlabs/cognexus-tools.git",
+    "directory": "n8n"
+  },
+  "homepage": "https://cognexuslabs.ai",
+  "bugs": {
+    "url": "https://github.com/CogNEXUSlabs/cognexus-tools/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "n8n-community-node-package",
+    "cognexus",
+    "artzain",
+    "decision-api"
+  ],
+  "author": {
+    "name": "CogNEXUS Labs",
+    "email": "hello@cognexuslabs.ai"
+  },
+  "type": "commonjs",
+  "main": "index.js",
+  "files": [
+    "dist",
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [
+      "dist/credentials/ArtzainApi.credentials.js",
+      "dist/credentials/ArtzainEnvelopeApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/ArtzainDecision/ArtzainDecision.node.js",
+      "dist/nodes/ArtzainEnvelope/ArtzainEnvelope.node.js"
+    ]
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && mkdir -p dist/nodes/ArtzainDecision dist/nodes/ArtzainEnvelope && cp src/nodes/artzain.svg src/nodes/ArtzainDecision/ArtzainDecision.node.json dist/nodes/ArtzainDecision/ && cp src/nodes/artzain.svg src/nodes/ArtzainEnvelope/ArtzainEnvelope.node.json dist/nodes/ArtzainEnvelope/",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  },
+  "peerDependenciesMeta": {
+    "n8n-workflow": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  }
+}

@@ -511,8 +511,8 @@ def test_optional_model_smoke_inference(integration_env) -> None:
     pytest.importorskip("torch")
     pytest.importorskip("transformers")
 
-    from transformers import AutoModelForCausalLM, AutoTokenizer
     import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
 
     model_id = "google/gemma-4-E4B-it"
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32

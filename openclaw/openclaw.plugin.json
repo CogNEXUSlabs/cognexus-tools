@@ -1,0 +1,23 @@
+{
+  "id": "artzain-tool-gate",
+  "name": "CogNEXUS tool gate",
+  "description": "Clear OpenClaw host tools through the CogNEXUS Decision API before they run. deny, review, and engine refusals block. review is not OpenClaw /approve.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "description": "Decision API key. Falls back to COGNEXUS_API_KEY on the Gateway. Not a dashboard JWT and not an envelope cnxe_ key."
+      },
+      "baseUrl": {
+        "type": "string",
+        "description": "Decision API origin. Falls back to COGNEXUS_API_BASE_URL, then https://app.cognexuslabs.ai."
+      },
+      "agentDid": {
+        "type": "string",
+        "description": "agent_did recorded on the sealed leaf when the hook context has no agentId. Default openclaw-gateway."
+      }
+    }
+  }
+}

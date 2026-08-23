@@ -176,7 +176,7 @@ def _leaves_digest(leaves: list[dict[str, Any]]) -> str:
     ``application/api/audit.py:_leaves_digest`` byte for byte.
     """
     pairs = sorted(
-        ([int(l.get("seq", 0)), l.get("leaf_hash")] for l in leaves),
+        ([int(leaf.get("seq", 0)), leaf.get("leaf_hash")] for leaf in leaves),
         key=lambda p: p[0],
     )
     return hashlib.sha256(_canonical(pairs)).hexdigest()

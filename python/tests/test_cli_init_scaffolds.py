@@ -1,10 +1,10 @@
 """Tests for ``artzain init`` — the framework scaffolds (journey plan R3).
 
 The scaffolds are shipped source that a developer runs unmodified, so the bar
-is higher than "the file was written": each must be valid Python, must carry no
-unsubstituted placeholders, and must actually demonstrate the seam it claims to
-— including the fail-closed rule, which is the one thing a copied example must
-not get wrong.
+is higher than "the file was written": each must be valid in its language,
+must carry no unsubstituted placeholders, and must actually demonstrate the
+seam it claims to — including the fail-closed rule, which is the one thing a
+copied example must not get wrong.
 
 Run::
 
@@ -34,12 +34,14 @@ def scaffold(request) -> tuple[str, str]:
 
 # ── every scaffold ───────────────────────────────────────────────────────────
 
-def test_all_three_frameworks_are_registered():
-    assert FRAMEWORKS == ["crewai", "langgraph", "mcp"]
+def test_all_frameworks_are_registered():
+    assert FRAMEWORKS == ["crewai", "langgraph", "mcp", "openclaw"]
 
 
 def test_scaffold_is_valid_python(scaffold):
     framework, src = scaffold
+    if framework == "openclaw":
+        pytest.skip("OpenClaw scaffold is TypeScript")
     ast.parse(src)  # raises SyntaxError if the template drifted
 
 
@@ -55,7 +57,11 @@ def test_base_url_is_stamped(scaffold):
 
 
 def test_scaffold_calls_decide(scaffold):
-    _framework, src = scaffold
+    framework, src = scaffold
+    if framework == "openclaw":
+        assert "decide(" in src
+        assert 'kind: "tool_call"' in src
+        return
     assert "artzain.decide(" in src
 
 
@@ -74,8 +80,13 @@ def test_scaffold_handles_all_three_outcomes(scaffold):
 
 def test_scaffold_fails_closed_on_decision_error(scaffold):
     """The one rule a copied example must not get wrong."""
-    _framework, src = scaffold
+    framework, src = scaffold
     assert "DecisionError" in src, "does not catch the SDK's error type"
+    if framework == "openclaw":
+        assert "block: true" in src
+        assert "failing closed" in src
+        assert "requireApproval" not in src
+        return
     tree = ast.parse(src)
     handlers = [
         node for node in ast.walk(tree)
@@ -93,6 +104,10 @@ def test_scaffold_fails_closed_on_decision_error(scaffold):
 
 def test_scaffold_declares_its_install_line(scaffold):
     framework, src = scaffold
+    if framework == "openclaw":
+        assert "npm install @cognexuslabs/artzain" in src
+        assert framework in src
+        return
     assert "pip install artzain" in src
     assert framework in src
 
@@ -131,6 +146,31 @@ def test_crewai_returns_refusal_rather_than_raising():
     assert 'return f"REFUSED:' in src
 
 
+def test_openclaw_gates_on_before_tool_call():
+    src = cli.scaffold_contents("openclaw", BASE_URL)
+    assert '"before_tool_call"' in src
+    assert "block: true" in src
+    assert "requireApproval" not in src
+    assert 'kind: "tool_call"' in src
+    assert 'surface: "openclaw"' in src
+    assert "not a ClawHub plugin" in src
+    assert "HOOK_TIMEOUT_MS = 14_000" in src
+    assert "definePluginEntry" in src
+    assert 'decision.outcome === "review"' in src
+    assert 'decision.outcome === "allow"' in src
+
+
+def test_openclaw_blocks_review_and_errors():
+    src = cli.scaffold_contents("openclaw", BASE_URL)
+    review_idx = src.index('decision.outcome === "review"')
+    allow_idx = src.index('decision.outcome === "allow"')
+    block_idx = src.index("return block(")
+    assert allow_idx < review_idx
+    assert review_idx < src.index("QUEUED FOR REVIEW")
+    assert "failing closed" in src[src.index("DecisionError"):]
+    assert block_idx > 0
+
+
 # ── the command itself ───────────────────────────────────────────────────────
 
 def _run(monkeypatch, tmp_path, argv):
@@ -145,6 +185,20 @@ def test_init_writes_the_expected_filename(monkeypatch, tmp_path, capsys):
     assert out.is_file()
     ast.parse(out.read_text(encoding="utf-8"))
     assert "Wrote" in capsys.readouterr().out
+
+
+def test_init_writes_openclaw_typescript(monkeypatch, tmp_path, capsys):
+    _run(monkeypatch, tmp_path, ["init", "--framework", "openclaw"])
+    out = tmp_path / "artzain_openclaw_guard.ts"
+    assert out.is_file()
+    text = out.read_text(encoding="utf-8")
+    assert '"before_tool_call"' in text
+    assert "__COGNEXUS_BASE_URL__" not in text
+    captured = capsys.readouterr().out
+    assert "Wrote" in captured
+    assert "python artzain_openclaw_guard.ts" not in captured
+    assert "npm install @cognexuslabs/artzain" in captured
+    assert "not a ClawHub plugin" in captured
 
 
 def test_init_refuses_to_clobber(monkeypatch, tmp_path):

@@ -507,9 +507,9 @@ def _cloud_log_agent_guard(
     result: ActionScreenResult,
 ) -> None:
     try:
-        from artzain.cloud import post_sdk_event
-
         import uuid as _uuid
+
+        from artzain.cloud import post_sdk_event
 
         rid = str(run_id) if run_id is not None else _uuid.uuid4().hex
         preview = (reason or "")[:96]

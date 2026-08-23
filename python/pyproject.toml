@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "artzain"
-version = "0.5.0"
+version = "0.5.1"
 description = "OWASP-aligned LLM prompt defence, runtime destructive-action guard, agent kill switch, and audit logging"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -100,5 +100,26 @@ line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP"]
+# E/F/W/I gate this package in CI (`ruff check pypi-package`, tests.yml). `UP`
+# (pyupgrade) is deliberately not selected: on 22 Aug 2026 it accounted for
+# 213 of 242 findings, almost all `Optional[X]` -> `X | None` rewrites across
+# the published modules. That is a mechanical modernisation pass worth doing
+# on its own, not a gate - auto-fixing it under a gate would have produced an
+# unreviewable diff in files that are mirrored byte-for-byte to the public
+# repository (see scripts/check_security_sync.py). Same reasoning as the
+# repository-root ruff.toml.
+select = ["E", "F", "W", "I"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# The six security-core modules are byte-identical copies of
+# application/security/ (scripts/check_security_sync.py; CI diffs them against
+# the public mirror too). They are linted under application/'s ruff.toml, and
+# a fix applied here alone would break the sync; so their residue is ignored
+# here rather than fixed here.
+"src/artzain/prompt_injection.py" = ["E741", "F401", "I001"]
+"src/artzain/destructive_action_guard.py" = ["E741", "F401", "I001"]
+"src/artzain/policy_enforcement.py" = ["E741", "F401", "I001"]
+"src/artzain/prompt_defense.py" = ["E741", "F401", "I001"]
+"src/artzain/pii_detector.py" = ["E741", "F401", "I001"]
+"src/artzain/tool_call_contract.py" = ["E741", "F401", "I001"]

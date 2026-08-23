@@ -25,7 +25,6 @@ Usage::
 from __future__ import annotations
 
 import json
-import os
 import socket
 import threading
 import time

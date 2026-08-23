@@ -1,20 +1,32 @@
-name: Publish TypeScript SDK
+name: Publish npm packages
 
-# Publishes @cognexuslabs/artzain to npm via OIDC Trusted Publishing — no
-# long-lived npm token. Trigger by pushing a tag like sdk-ts-v0.1.0 (must match
-# package.json version), or run manually from the Actions tab.
+# Publishes this repo's npm packages via OIDC Trusted Publishing — no
+# long-lived npm token. One workflow file on purpose: every package's
+# trusted-publisher binding on npmjs.com names this same filename.
 #
-# One-time setup on npmjs.com (Package @cognexuslabs/artzain → Settings →
-# Trusted Publisher / Publishing access), bound to:
+# Tag prefixes are disjoint (never bare v*), and each tag must match the
+# package.json version it publishes:
+#   sdk-ts-v*    -> typescript/  @cognexuslabs/artzain
+#   openclaw-v*  -> openclaw/    @cognexuslabs/openclaw-artzain
+#   n8n-v*       -> n8n/         @cognexuslabs/n8n-nodes-artzain
+#
+# One-time setup on npmjs.com PER PACKAGE (Settings → Trusted Publisher /
+# Publishing access), bound to:
 #   organization/user : CogNEXUSlabs
 #   repository        : cognexus-tools
 #   workflow filename : publish-npm.yml   (filename only, not the path)
-#   environment       : (leave blank — this job uses none)
+#   environment       : (leave blank — these jobs use none)
 #   allowed actions   : npm publish
 # npm then mints a short-lived credential from the id-token below at publish
 # time and generates provenance automatically (no --provenance flag needed, no
-# NPM_TOKEN secret). This removes the last long-lived publishing credential in
-# the release path, matching PyPI's Trusted-Publisher setup.
+# NPM_TOKEN secret).
+#
+# FIRST publish of a NEW package cannot use Trusted Publishing: npm only binds
+# a trusted publisher to a package that already exists (re-verified against
+# docs.npmjs.com on 23 Aug 2026). Bootstrap is an owner step — see the engine
+# repo's scripts/cognexus-tools-seed/APPLY.md. A tag pushed before the
+# bootstrap fails the publish step with an auth error and ships nothing; after
+# binding, re-run it from the Actions tab.
 #
 # Requirements: npm CLI >= 11.5.1 and Node >= 22.14.0. Node 22 ships npm 10.x,
 # so npm is upgraded below. Actions are pinned to commit SHAs (WS-8).
@@ -23,14 +35,29 @@ on:
   push:
     tags:
       - "sdk-ts-v*"
+      - "openclaw-v*"
+      - "n8n-v*"
   workflow_dispatch:
+    inputs:
+      package:
+        description: "Package to publish (tag pushes select automatically)"
+        type: choice
+        options:
+          - typescript
+          - openclaw
+          - n8n
+        default: typescript
 
 permissions:
   contents: read
   id-token: write # OIDC token for npm Trusted Publishing (mints the publish credential + provenance)
 
 jobs:
-  publish:
+  typescript:
+    name: "@cognexuslabs/artzain"
+    if: >-
+      (github.ref_type == 'tag' && startsWith(github.ref_name, 'sdk-ts-v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.package == 'typescript')
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -44,7 +71,6 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       # Trusted Publishing requires npm >= 11.5.1; Node 22 bundles npm 10.x.
-      # (Consider pinning an exact version for WS-8 once a floor is chosen.)
       - name: Upgrade npm for OIDC trusted publishing
         run: npm install -g npm@latest
 
@@ -69,5 +95,89 @@ jobs:
 
       # No NODE_AUTH_TOKEN: auth comes from the OIDC id-token via the configured
       # trusted publisher, and provenance is generated automatically.
+      - name: Publish to npm (OIDC Trusted Publishing)
+        run: npm publish
+
+  openclaw:
+    name: "@cognexuslabs/openclaw-artzain"
+    if: >-
+      (github.ref_type == 'tag' && startsWith(github.ref_name, 'openclaw-v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.package == 'openclaw')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: openclaw
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22 # resolves to latest 22.x (>= 22.14.0, required for OIDC)
+          registry-url: https://registry.npmjs.org
+
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Install
+        run: npm ci
+
+      - name: Verify tag matches package version
+        if: github.ref_type == 'tag'
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#openclaw-v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) != package.json version ($PKG_VERSION)" >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Publish to npm (OIDC Trusted Publishing)
+        run: npm publish
+
+  n8n:
+    name: "@cognexuslabs/n8n-nodes-artzain"
+    if: >-
+      (github.ref_type == 'tag' && startsWith(github.ref_name, 'n8n-v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.package == 'n8n')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: n8n
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22 # resolves to latest 22.x (>= 22.14.0, required for OIDC)
+          registry-url: https://registry.npmjs.org
+
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Install
+        run: npm ci
+
+      - name: Verify tag matches package version
+        if: github.ref_type == 'tag'
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#n8n-v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) != package.json version ($PKG_VERSION)" >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
       - name: Publish to npm (OIDC Trusted Publishing)
         run: npm publish

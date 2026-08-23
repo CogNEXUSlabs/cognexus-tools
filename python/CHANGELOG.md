@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.1
+
+A maintenance release: no behaviour changes. It exists because PyPI is
+immutable and `scripts/check_sdk_version.py` refuses a tree that differs from
+the published 0.5.0 under the same number.
+
+### Changed
+
+- The package is now linted in CI (`ruff`, E/F/W/I). Five modules changed to
+  satisfy it — unused imports removed, import blocks sorted, ambiguous `l`
+  loop variables renamed — with no change to any public name or behaviour.
+- The README opens with what the package does: the local guards are free and
+  offline; `decide()` asks an engine for a governed decision; `audit verify`
+  and `licence verify` check evidence offline with three verdicts, and today
+  every bundle verifies `SELF-ATTESTED` because the Evidence Root is not yet
+  pinned. The guard library documentation follows unchanged.
+
 ## 0.5.0
 
 The licence CLI and the rotation-aware verifier. Both were written before
