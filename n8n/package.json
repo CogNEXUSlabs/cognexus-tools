@@ -45,7 +45,7 @@
     ]
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && mkdir -p dist/nodes/ArtzainDecision dist/nodes/ArtzainEnvelope && cp src/nodes/artzain.svg src/nodes/ArtzainDecision/ArtzainDecision.node.json dist/nodes/ArtzainDecision/ && cp src/nodes/artzain.svg src/nodes/ArtzainEnvelope/ArtzainEnvelope.node.json dist/nodes/ArtzainEnvelope/",
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
     "test": "vitest run",
     "prepublishOnly": "npm run build && npm test"
   },

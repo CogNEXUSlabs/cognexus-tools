@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.2
+
+### Added
+
+- The GUI renders Roger's clarify cards ("Did you mean one of these?"):
+  when a message nearly matches a platform action, the engine now answers
+  with an `action_card` of type `clarify`, and each option is a button that
+  sends its canonical phrase as an ordinary message. Before this, such a
+  card displayed as a dead "pending" stub with no options. The GUI's card
+  builder is pinned to the dashboard's by `scripts/check_roger_dock.mjs`
+  in the engine repo, so the surfaces cannot drift silently again.
+
 ## 0.5.1
 
 A maintenance release: no behaviour changes. It exists because PyPI is
