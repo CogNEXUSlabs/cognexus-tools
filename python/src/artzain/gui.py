@@ -377,6 +377,16 @@ _GUI_HTML_TEMPLATE = """\
     }
     .conv-action-card-title { font-weight: 600; color: var(--text); margin-bottom: 0.2rem; }
     .conv-action-card-summary { color: var(--muted); }
+    /* Clarify card: near-miss options — a click sends the phrase as a message */
+    .conv-clarify-options { display: flex; flex-direction: column; gap: 0.35rem; margin-top: 0.45rem; }
+    .conv-clarify-option {
+      display: flex; flex-direction: column; align-items: flex-start; gap: 0.1rem;
+      text-align: left; font-size: 0.78rem; font-weight: 600; color: var(--text);
+      background: transparent; border: 1px solid var(--teal); border-radius: 8px;
+      padding: 0.45rem 0.7rem; cursor: pointer;
+    }
+    .conv-clarify-option:hover { background: var(--surface-2); }
+    .conv-clarify-send { font-size: 0.66rem; font-weight: 400; color: var(--muted); }
 
     /* Composer */
     .chat-composer-outer {
@@ -742,7 +752,44 @@ _GUI_HTML_TEMPLATE = """\
     ta.style.height = Math.min(ta.scrollHeight, lh * 4 + 28) + 'px';
   }
 
+  /* Clarify card: near-miss options ("did you mean…"). Mirrors the dashboard's
+   * _buildClarifyCard; scripts/check_roger_dock.mjs pins all three surfaces.
+   * A click sends the option's canonical phrase as an ordinary message —
+   * nothing executes from the card itself, so there is no status to show. */
+  function buildClarifyCard(card) {
+    const div = document.createElement('div');
+    div.className = 'conv-action-card conv-clarify-card';
+    const title = document.createElement('div');
+    title.className = 'conv-action-card-title';
+    title.textContent = card.summary || 'Did you mean one of these?';
+    div.appendChild(title);
+    const host = document.createElement('div');
+    host.className = 'conv-clarify-options';
+    div.appendChild(host);
+    (Array.isArray(card.options) ? card.options : []).forEach(opt => {
+      const send = (opt && typeof opt.send_text === 'string') ? opt.send_text.trim() : '';
+      if (!send) return;
+      const label = (opt && typeof opt.label === 'string' && opt.label.trim()) ? opt.label.trim() : send;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'conv-clarify-option';
+      btn.appendChild(document.createTextNode(label));
+      const sub = document.createElement('span');
+      sub.className = 'conv-clarify-send';
+      sub.textContent = 'sends "' + send + '"';
+      btn.appendChild(sub);
+      btn.addEventListener('click', () => {
+        if (sending || !activeConvId) return;
+        ta.value = send;
+        sendMessage();
+      });
+      host.appendChild(btn);
+    });
+    return div;
+  }
+
   function buildActionCard(card) {
+    if (card && card.type === 'clarify') return buildClarifyCard(card);
     const div = document.createElement('div');
     div.className = 'conv-action-card';
     const st = card.status || 'pending';
