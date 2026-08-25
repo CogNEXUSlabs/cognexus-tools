@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.0
+
+### Added
+
+- `artzain local` — the self-serve in-boundary installer (installer plan
+  WS-B). `up` renders a `~/.cognexus` workspace from the stable-channel
+  manifest (every image pinned **by digest**, including the postgres base),
+  generates real secrets once — and repairs a partial `.env` in place rather
+  than ever overwriting values — starts the stack, waits for `/health`, and
+  hands off to the `/welcome` first-run page. `doctor` prints one remedial
+  sentence per failed check (`--port` handles a busy 8080 without editing
+  any file); `status` shows health, trial days remaining, and update
+  availability; `upgrade` streams a binary `pg_dump` to `backups/` and
+  refuses to proceed without it; `down --purge` (and its alias `reset`)
+  demands the install id typed back — persisted at up-time so the guard
+  holds even with the stack stopped; `create-admin` is the headless first
+  run; `activate` verifies and installs a licence certificate, signing in
+  with your dashboard email when no API key is configured — the path that
+  keeps an expired trial convertible.
+- Mutating `local` commands take a workspace lock, so two concurrent `up`s
+  cannot split the generated secrets between `.env` and the database volume.
+
 ## 0.5.2
 
 ### Added
