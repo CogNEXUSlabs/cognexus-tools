@@ -821,11 +821,25 @@ def _licence_base_url(args: argparse.Namespace) -> str:
     return raw
 
 
+def _licence_auth_headers(args: argparse.Namespace) -> dict[str, str]:
+    """API key by default; a session JWT when the caller resolved one.
+
+    ``artzain local activate`` sets ``session_token`` after an email/password
+    sign-in against the local engine — the fallback for operators who never
+    minted an API key, which an expired trial no longer lets them do. The
+    server accepts both (``_require_admin`` resolves session or key).
+    """
+    token = getattr(args, "session_token", None)
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return _policy_auth_headers()
+
+
 def _licence_get(args: argparse.Namespace, path: str,
                  params: str = "") -> dict:
     base = _licence_base_url(args)
     url = f"{base}{path}{params}"
-    headers = {**_request_headers_for_url(url), **_policy_auth_headers()}
+    headers = {**_request_headers_for_url(url), **_licence_auth_headers(args)}
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
@@ -848,7 +862,7 @@ def _licence_get(args: argparse.Namespace, path: str,
 def _licence_post(args: argparse.Namespace, path: str, body: dict) -> dict:
     base = _licence_base_url(args)
     url = f"{base}{path}"
-    status, payload = _http_json("POST", url, headers=_policy_auth_headers(),
+    status, payload = _http_json("POST", url, headers=_licence_auth_headers(args),
                                  body=body, timeout_sec=120.0)
     if status >= 400:
         detail = payload.get("detail") if isinstance(payload, dict) else payload
@@ -1390,6 +1404,103 @@ def cmd_registry_export(args: argparse.Namespace) -> None:
     print(f"Wrote agent catalog to {out} ({len(data)} bytes).")
 
 
+def _local_run(fn, *fn_args, **fn_kwargs) -> None:
+    """Run an `artzain.local` operation; a LocalError is a message, not a
+    traceback."""
+    from artzain.local import LocalError
+
+    try:
+        fn(*fn_args, **fn_kwargs)
+    except LocalError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
+def cmd_local_up(args: argparse.Namespace) -> None:
+    from artzain import local
+
+    _local_run(local.run_up, args.manifest,
+               open_browser=not args.no_browser, port=args.port)
+
+
+def cmd_local_doctor(_args: argparse.Namespace) -> None:
+    from artzain import local
+
+    if not local.run_doctor():
+        raise SystemExit(1)
+
+
+def cmd_local_status(args: argparse.Namespace) -> None:
+    from artzain import local
+
+    _local_run(local.run_status, args.manifest)
+
+
+def cmd_local_upgrade(args: argparse.Namespace) -> None:
+    from artzain import local
+
+    _local_run(local.run_upgrade, args.manifest)
+
+
+def cmd_local_down(args: argparse.Namespace) -> None:
+    from artzain import local
+
+    _local_run(local.run_down, args.purge)
+
+
+def cmd_local_reset(_args: argparse.Namespace) -> None:
+    """The dirty-reinstall path the generated .env references by name."""
+    from artzain import local
+
+    _local_run(local.run_down, True)
+
+
+def cmd_local_create_admin(args: argparse.Namespace) -> None:
+    from artzain import local
+
+    password = getpass.getpass("Choose the admin password (min 8 chars): ")
+    if len(password) < 8:
+        print("Password must be at least 8 characters.", file=sys.stderr)
+        raise SystemExit(2)
+    _local_run(local.run_create_admin, args.email, password)
+
+
+def cmd_local_activate(args: argparse.Namespace) -> None:
+    """The same verified install as `artzain licence install`, aimed at the
+    local engine — one flow, two front doors.
+
+    Auth resolution matters here: this is the trial-expired conversion path,
+    and an expired trial pauses API-key minting. With no key configured the
+    command signs in with the operator's dashboard email instead of dead-
+    ending — the server-side endpoint accepts session auth for exactly this.
+    """
+    from artzain import local
+
+    session_token = None
+    key, _src = resolve_api_key_for_quickstart()
+    if not key:
+        print("No API key configured — signing in to the local engine with "
+              "your dashboard account instead.")
+        email = input("Email: ").strip()
+        password = getpass.getpass("Password: ")
+        from artzain.local import LocalError
+
+        try:
+            session_token = local.login_session(email, password)
+        except LocalError as exc:
+            print(str(exc), file=sys.stderr)
+            raise SystemExit(1) from exc
+    ns = argparse.Namespace(
+        certificate=args.certificate, chain=args.chain,
+        root_key=args.root_key, issuing=args.issuing,
+        root_fingerprint=args.root_fingerprint,
+        # The workspace knows which port the stack listens on.
+        base_url=local.base_url(), allow_remote=False,
+        session_token=session_token,
+    )
+    cmd_licence_install(ns)
+
+
 def cmd_gui(args: argparse.Namespace) -> None:
     """Launch Artzain Chat (local) — a chat client proxying to the platform."""
     from artzain.gui import launch_gui  # lazy import — keeps startup fast
@@ -1559,17 +1670,22 @@ def main(argv: list[str] | None = None) -> None:
     p_lreq.add_argument("--out", default="licence-request.json")
     p_lreq.set_defaults(func=cmd_licence_request)
 
+    def _licence_cert_flags(parser_: argparse.ArgumentParser) -> None:
+        """Shared by `licence install` and its alias `local activate` — one
+        flag set, so an addition to either cannot silently miss the other."""
+        parser_.add_argument("certificate", help="Path to the certificate JSON.")
+        parser_.add_argument("--chain", default=None,
+                             help="Certificate chain JSON (root key + issuing certs).")
+        parser_.add_argument("--root-key", default=None,
+                             help="Evidence Root public key PEM.")
+        parser_.add_argument("--issuing", default=None,
+                             help="Issuing certificate(s) JSON.")
+        parser_.add_argument("--root-fingerprint", default=None,
+                             help="Override the pinned Evidence Root fingerprint.")
+
     p_lins = licence_sub.add_parser(
         "install", help="Verify a certificate to the Evidence Root and install it.")
-    p_lins.add_argument("certificate", help="Path to the certificate JSON.")
-    p_lins.add_argument("--chain", default=None,
-                        help="Certificate chain JSON (root key + issuing certs).")
-    p_lins.add_argument("--root-key", default=None,
-                        help="Evidence Root public key PEM.")
-    p_lins.add_argument("--issuing", default=None,
-                        help="Issuing certificate(s) JSON.")
-    p_lins.add_argument("--root-fingerprint", default=None,
-                        help="Override the pinned Evidence Root fingerprint.")
+    _licence_cert_flags(p_lins)
     p_lins.add_argument("--offline-only", action="store_true",
                         help="Verify and write the file, but do not install.")
     p_lins.add_argument("--dir", default=None,
@@ -1709,6 +1825,80 @@ def main(argv: list[str] | None = None) -> None:
     rf.add_argument("--kind", help="Filter by finding kind.")
     rf.add_argument("--json", action="store_true", help="Emit the raw JSON response.")
     rf.set_defaults(func=cmd_registry_findings)
+
+    p_local = sub.add_parser(
+        "local",
+        help="Run CogNexus in your own boundary: up, doctor, status, "
+             "upgrade, down.",
+        description=(
+            "The self-serve installer. `artzain local up` renders a compose\n"
+            "workspace in ~/.cognexus (images pinned by digest from the\n"
+            "stable-channel manifest, secrets generated once), starts the\n"
+            "engine + local dashboard, and opens the first-run page. No repo\n"
+            "access, no file editing, no email round-trip."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    local_sub = p_local.add_subparsers(dest="local_command", required=True)
+
+    from artzain.local import DEFAULT_MANIFEST_URL as _manifest_default
+
+    def _manifest_flag(parser_: argparse.ArgumentParser) -> None:
+        parser_.add_argument(
+            "--manifest", default=None, metavar="URL_OR_FILE",
+            help="Stable-channel manifest (default: "
+                 f"COGNEXUS_CHANNEL_MANIFEST, else {_manifest_default}).")
+
+    lu = local_sub.add_parser(
+        "up", help="Install/start the stack and open the first-run page.")
+    _manifest_flag(lu)
+    lu.add_argument("--no-browser", action="store_true",
+                    help="Print the URL instead of opening a browser.")
+    lu.add_argument("--port", type=int, default=None, metavar="PORT",
+                    help="Dashboard port (default 8080; remembered in the "
+                         "workspace .env).")
+    lu.set_defaults(func=cmd_local_up)
+
+    ld = local_sub.add_parser(
+        "doctor", help="Preflight checks; each failure names its fix.")
+    ld.set_defaults(func=cmd_local_doctor)
+
+    ls = local_sub.add_parser(
+        "status", help="Engine health, trial days, update availability.")
+    _manifest_flag(ls)
+    ls.set_defaults(func=cmd_local_status)
+
+    lg = local_sub.add_parser(
+        "upgrade", help="Dump the database, then re-pin to the channel's "
+                        "current release.")
+    _manifest_flag(lg)
+    lg.set_defaults(func=cmd_local_upgrade)
+
+    lo = local_sub.add_parser(
+        "down", help="Stop the stack (data stays). --purge destroys it.")
+    lo.add_argument("--purge", action="store_true",
+                    help="Destroy volumes incl. the UNRECOVERABLE audit "
+                         "signing keys (asks for confirmation).")
+    lo.set_defaults(func=cmd_local_down)
+
+    lr = local_sub.add_parser(
+        "reset", help="Dirty reinstall: the --purge confirmation, then "
+                      "destroy volumes and workspace (backups kept).")
+    lr.set_defaults(func=cmd_local_reset)
+
+    lc = local_sub.add_parser(
+        "create-admin", help="Headless first-run: create the platform admin "
+                             "without a browser.")
+    lc.add_argument("--email", required=True)
+    lc.set_defaults(func=cmd_local_create_admin)
+
+    la = local_sub.add_parser(
+        "activate", help="Verify and install a licence certificate into the "
+                         "local engine (alias for `licence install`; signs "
+                         "in with your dashboard email if no API key is "
+                         "configured).")
+    _licence_cert_flags(la)
+    la.set_defaults(func=cmd_local_activate)
 
     args = parser.parse_args(argv)
     args.func(args)
