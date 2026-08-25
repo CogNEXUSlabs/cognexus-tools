@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.1
+
+### Fixed
+
+- A malformed `COGNEXUS_API_KEY` is no longer echoed in full. `artzain
+  quickstart` reported an unusable key as `invalid or unreachable
+  (<key>…)`, truncating to 14 characters — but the fallback for a value
+  shorter than that printed the whole thing, so a mistyped key reached
+  terminal scrollback and CI logs verbatim. Anything too short to spare a
+  prefix now reads `redacted`; `artzain gui` masks its 8-character
+  auto-login hint the same way. Well-formed keys display exactly as
+  before. Found by CodeQL on the public SDK mirror.
+
 ## 0.6.0
 
 ### Added

@@ -1306,13 +1306,19 @@ def launch_gui(
     server      = ThreadingHTTPServer(("127.0.0.1", port), handler_cls)
     local_url   = f"http://127.0.0.1:{port}"
 
-    key_hint = f"  API key      \u2192  {api_key[:8]}\u2026 (auto-login enabled)" if api_key else "  API key      \u2192  not set (login form will show)"
+    from artzain.cloud import _key_hint  # lazy \u2014 keeps GUI import on stdlib only
+
+    key_line = (
+        f"  API key      \u2192  {_key_hint(api_key, keep=8)} (auto-login enabled)"
+        if api_key
+        else "  API key      \u2192  not set (login form will show)"
+    )
 
     print()
     print(f"  Artzain Chat (local)  \u2192  {local_url}")
     print(f"  Platform API          \u2192  {base_url}")
     print(f"  Full dashboard        \u2192  {base_url}/dashboard.html (hosted \u2014 not this local server)")
-    print(key_hint)
+    print(key_line)
     print("  Press Ctrl-C to quit.")
     print()
 

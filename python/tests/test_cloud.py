@@ -179,3 +179,42 @@ def test_announce_cloud_ingest_missing_key(monkeypatch):
     buf = io.StringIO()
     assert announce_cloud_ingest(file=buf) is False
     assert "not set" in buf.getvalue()
+
+
+def test_key_hint_masks_keys_too_short_to_truncate():
+    assert cloud._key_hint("cnx_testkey1234567890") == "cnx_testkey123…"
+    assert cloud._key_hint("short") == "redacted"
+    assert cloud._key_hint("") == "redacted"
+    # Exactly `keep` characters still has nothing to spare.
+    assert cloud._key_hint("0123456789abcd") == "redacted"
+    assert cloud._key_hint("cnx_test", keep=4) == "cnx_…"
+
+
+def test_announce_cloud_ingest_never_echoes_a_short_key(monkeypatch):
+    """A malformed key must not reach stdout in full when validation fails."""
+    configure(api_key="cnx_bad", base_url="https://example.com")
+    monkeypatch.setattr(
+        cloud,
+        "fetch_api_key_identity",
+        lambda **k: {"valid": False, "error": "invalid_or_revoked"},
+    )
+    buf = io.StringIO()
+    assert announce_cloud_ingest(file=buf) is False
+    text = buf.getvalue()
+    assert "cnx_bad" not in text
+    assert "redacted" in text
+
+
+def test_announce_cloud_ingest_falls_back_to_local_prefix(monkeypatch):
+    """With no server-supplied prefix, the local hint is still truncated."""
+    configure(api_key="cnx_testkey1234567890", base_url="https://example.com")
+    monkeypatch.setattr(
+        cloud,
+        "fetch_api_key_identity",
+        lambda **k: {"valid": True, "email": "", "display_name": "", "key_prefix": ""},
+    )
+    buf = io.StringIO()
+    assert announce_cloud_ingest(file=buf) is True
+    text = buf.getvalue()
+    assert "cnx_testkey123…" in text
+    assert "cnx_testkey1234567890" not in text
