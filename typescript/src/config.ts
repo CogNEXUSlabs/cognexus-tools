@@ -32,7 +32,11 @@ export function effectiveApiKey(): string | undefined {
 
 export function effectiveBaseUrl(): string {
   const raw = state.baseUrl ?? env("COGNEXUS_API_BASE_URL") ?? DEFAULT_BASE_URL;
-  return raw.replace(/\/+$/, "");
+  // Scanned rather than trimmed with /\/+$/, which backtracks quadratically
+  // on a value made up mostly of slashes.
+  let end = raw.length;
+  while (end > 0 && raw.charCodeAt(end - 1) === 47) end--;
+  return raw.slice(0, end);
 }
 
 export function hasApiKey(): boolean {

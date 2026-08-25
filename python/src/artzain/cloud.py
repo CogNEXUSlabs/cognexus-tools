@@ -75,6 +75,18 @@ def _redact_prompt_preview(text: str, max_len: int = 96) -> str:
     return one_line + ("\u2026" if len((text or "")) > max_len else "")
 
 
+def _key_hint(key: str, keep: int = 14) -> str:
+    """Display form of an API key: a truncated prefix, or ``"redacted"``.
+
+    A value too short to spare a prefix is masked entirely, so a mistyped or
+    malformed key is never echoed in full to a terminal or CI log.
+    """
+    key = (key or "").strip()
+    if len(key) <= keep:
+        return "redacted"
+    return key[:keep] + "\u2026"
+
+
 def configure(*, api_key: Any = _MISSING, base_url: Any = _MISSING) -> None:
     """Set package-wide defaults (overrides env until cleared).
 
@@ -288,12 +300,13 @@ def announce_cloud_ingest(*, file: Any = None) -> bool:
 
     info = fetch_api_key_identity()
     if info.get("valid"):
-        prefix = str(info.get("key_prefix") or key[:14])
+        server_prefix = str(info.get("key_prefix") or "").strip()
+        hint = f"{server_prefix}…" if server_prefix else _key_hint(key)
         label = str(info.get("key_label") or "").strip()
         email = str(info.get("email") or "").strip()
         name = str(info.get("display_name") or "").strip()
         verified_via = str(info.get("verified_via") or "").strip()
-        print(f"  API key:        valid ({prefix}…)", file=out)
+        print(f"  API key:        valid ({hint})", file=out)
         if label:
             print(f"  Key label:      {label}", file=out)
         if email:
@@ -315,8 +328,7 @@ def announce_cloud_ingest(*, file: Any = None) -> bool:
         return True
 
     err = str(info.get("error") or "unknown")
-    local_prefix = key[:14] if len(key) >= 14 else key
-    print(f"  API key:        invalid or unreachable ({local_prefix}…)", file=out)
+    print(f"  API key:        invalid or unreachable ({_key_hint(key)})", file=out)
     if err == "invalid_or_revoked":
         print(
             "  Event Logs:     disabled — key is invalid or revoked. Create a new key\n"

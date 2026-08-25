@@ -57,6 +57,20 @@ describe("config", () => {
     expect(effectiveBaseUrl()).toBe("https://engine.example.com");
   });
 
+  it("strips every trailing slash without backtracking", () => {
+    configure({ baseUrl: "https://engine.example.com///" });
+    expect(effectiveBaseUrl()).toBe("https://engine.example.com");
+
+    configure({ baseUrl: "/".repeat(50_000) });
+    expect(effectiveBaseUrl()).toBe("");
+
+    // Quadratic on the old /\/+$/ trim; linear now.
+    const started = performance.now();
+    configure({ baseUrl: `${"/".repeat(50_000)}x` });
+    expect(effectiveBaseUrl()).toBe(`${"/".repeat(50_000)}x`);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
   it("defaults to the production host", () => {
     expect(effectiveBaseUrl()).toBe("https://app.cognexuslabs.ai");
   });
