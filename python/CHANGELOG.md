@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.2
+
+### Fixed
+
+- `artzain local create-admin` could hang forever instead of creating the
+  admin. On Windows `getpass` reads the console device rather than
+  `sys.stdin`, so with stdin piped or absent — CI, ssh without a tty,
+  scripted installs: the exact headless contexts the command exists for —
+  it waited on a keyboard that was not there. A new `--password-stdin`
+  flag reads the password from the first line of stdin (`docker login`
+  style), and without the flag every password prompt in the CLI
+  (`quickstart` sign-up and `local activate` sign-in included) now falls
+  back to reading stdin whenever no real console is attached — including
+  the `< NUL` redirect that fools `isatty` on Windows. Validation is
+  unchanged: under 8 characters still exits 2 with the same message.
+
 ## 0.6.1
 
 ### Fixed

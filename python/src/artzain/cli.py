@@ -425,6 +425,64 @@ def create_dashboard_api_key(base_url: str, jwt: str, label: str = "pypi artzain
     )
 
 
+def _read_password_line() -> str:
+    """One line of ``sys.stdin``, trailing newline stripped.
+
+    ``--password-stdin`` and the non-tty prompt fallback both read this
+    way, so a Windows pipe's CRLF never ends up inside the password.
+    """
+    if sys.stdin is None:
+        return ""
+    return sys.stdin.readline().rstrip("\r\n")
+
+
+def _stdin_is_interactive() -> bool:
+    """True only when ``getpass`` could actually be answered.
+
+    ``isatty()`` alone is not enough on Windows: it is true for ANY
+    character device — the ``< NUL`` redirection of a headless run
+    included — while ``getpass`` reads the one thing NUL is not, the
+    console. ``GetConsoleMode`` succeeds only on a real console handle,
+    so it separates the two.
+    """
+    stdin = sys.stdin
+    if stdin is None:
+        return False
+    try:
+        if not stdin.isatty():
+            return False
+    except ValueError:  # stdin exists but is closed
+        return False
+    if os.name != "nt":
+        return True
+    try:
+        fd = stdin.fileno()
+    except (OSError, ValueError):  # no OS handle behind it (test doubles)
+        return True
+    import ctypes
+    import msvcrt
+
+    mode = ctypes.c_uint32()
+    # c_void_p: a HANDLE is pointer-sized; a bare int would marshal as a
+    # 32-bit C int and truncate on Win64.
+    handle = ctypes.c_void_p(msvcrt.get_osfhandle(fd))
+    return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
+
+
+def _prompt_password(prompt: str) -> str:
+    """``getpass`` behind a real console; a plain stdin read otherwise.
+
+    On Windows ``getpass`` reads the console device, not ``sys.stdin``, so
+    with stdin piped or absent (CI, ssh without a tty, scripted installs)
+    it blocks forever on a keyboard that is not there. Every password
+    prompt goes through here so no command can hang a headless run.
+    """
+    if _stdin_is_interactive():
+        return getpass.getpass(prompt)
+    print(prompt, end="", file=sys.stderr, flush=True)
+    return _read_password_line()
+
+
 def prompt_for_credentials(base_url: str) -> str:
     print()
     print("No COGNEXUS_API_KEY found in the environment or nearby .env files.")
@@ -434,7 +492,7 @@ def prompt_for_credentials(base_url: str) -> str:
     email = input("Email: ").strip()
     if not email or "@" not in email:
         raise SystemExit("A valid email address is required.")
-    password = getpass.getpass("Password (min 8 characters): ")
+    password = _prompt_password("Password (min 8 characters): ")
     if len(password) < 8:
         raise SystemExit("Password must be at least 8 characters.")
     display_default = email.split("@", 1)[0]
@@ -1458,7 +1516,10 @@ def cmd_local_reset(_args: argparse.Namespace) -> None:
 def cmd_local_create_admin(args: argparse.Namespace) -> None:
     from artzain import local
 
-    password = getpass.getpass("Choose the admin password (min 8 chars): ")
+    if args.password_stdin:
+        password = _read_password_line()
+    else:
+        password = _prompt_password("Choose the admin password (min 8 chars): ")
     if len(password) < 8:
         print("Password must be at least 8 characters.", file=sys.stderr)
         raise SystemExit(2)
@@ -1482,7 +1543,7 @@ def cmd_local_activate(args: argparse.Namespace) -> None:
         print("No API key configured — signing in to the local engine with "
               "your dashboard account instead.")
         email = input("Email: ").strip()
-        password = getpass.getpass("Password: ")
+        password = _prompt_password("Password: ")
         from artzain.local import LocalError
 
         try:
@@ -1888,8 +1949,13 @@ def main(argv: list[str] | None = None) -> None:
 
     lc = local_sub.add_parser(
         "create-admin", help="Headless first-run: create the platform admin "
-                             "without a browser.")
+                             "without a browser (reads the password from "
+                             "stdin when it is not a tty).")
     lc.add_argument("--email", required=True)
+    lc.add_argument("--password-stdin", action="store_true",
+                    help="Read the password from the first line of stdin "
+                         "(like `docker login --password-stdin`). Piped "
+                         "stdin implies this; the flag makes it explicit.")
     lc.set_defaults(func=cmd_local_create_admin)
 
     la = local_sub.add_parser(
