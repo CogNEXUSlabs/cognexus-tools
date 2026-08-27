@@ -31,7 +31,7 @@ def _manifest(**over):
     base = {
         "channel": "stable",
         "version": "2026.08.25-e7faeee",
-        "registry": "public.ecr.aws/n7c0i6o5",
+        "registry": "public.ecr.aws/cognexuslabs",
         "source_commit": "e" * 40,
         "images": {
             "cognexus-core": {"tag": "2026.08.25-e7faeee",
@@ -103,7 +103,7 @@ def test_missing_manifest_file_names_the_fix(tmp_path):
 def test_image_refs_pin_digests_never_tags():
     refs = local.image_refs(_manifest())
     assert refs["cognexus-core"] == (
-        "public.ecr.aws/n7c0i6o5/cognexus-core@sha256:" + "d" * 64)
+        "public.ecr.aws/cognexuslabs/cognexus-core@sha256:" + "d" * 64)
     for ref in refs.values():
         assert "@sha256:" in ref and ":2026" not in ref
 
