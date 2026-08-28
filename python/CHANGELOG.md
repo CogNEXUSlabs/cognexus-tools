@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.6
+
+### Changed
+
+- `artzain registry list --source` and `artzain registry export --source`
+  accept the new `agentforce` origin (FR-12 v3 Wave C: Salesforce
+  Agentforce / Einstein Bot discovery over the existing Salesforce
+  connection).
+
 ## 0.6.5
 
 ### Changed
