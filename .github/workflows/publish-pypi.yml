@@ -116,3 +116,46 @@ jobs:
           # hard failure. It does NOT let a different artifact overwrite an
           # existing version — PyPI forbids that outright.
           skip-existing: true
+
+  # The tag is the release on PyPI; this mirrors it as a GitHub Release so
+  # the repository's Releases page cannot go stale again (it sat at 0.6.0
+  # while PyPI served 0.6.4, and was backfilled by hand on 2026-08-28).
+  #
+  # A SEPARATE job on purpose: contents:write and id-token:write never meet.
+  # The publish job keeps its narrow permissions beside the OIDC token, and
+  # this job can create a release but cannot mint a publish credential. The
+  # token is the run's ephemeral github.token — no secret involved — and gh
+  # is preinstalled on the runner, so no new action pin enters the file.
+  github-release:
+    name: Create GitHub release
+    runs-on: ubuntu-latest
+    needs: build-and-publish
+    if: github.ref_type == 'tag'
+    permissions:
+      contents: write # create the Release object for the pushed tag; NO id-token
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Idempotent like the signing steps: an existing release is success, so
+      # a workflow re-run never fails here. Notes come from the version's own
+      # CHANGELOG section (exact heading match — no regex escaping games).
+      # --latest: artzain is this repository's flagship; the npm-family jobs
+      # in publish-npm.yml pass --latest=false so they never steal the badge.
+      - name: Create release from the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release for $GITHUB_REF_NAME already exists"
+            exit 0
+          fi
+          VERSION="${GITHUB_REF_NAME#python-v}"
+          awk -v ver="$VERSION" '$0 == "## " ver {f=1; next} /^## /{f=0} f' \
+            python/CHANGELOG.md > /tmp/notes.md
+          if ! [ -s /tmp/notes.md ]; then
+            echo "See python/CHANGELOG.md for this version." > /tmp/notes.md
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "artzain ${VERSION}" \
+            --notes-file /tmp/notes.md \
+            --verify-tag --latest
