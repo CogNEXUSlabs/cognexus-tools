@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.4
+
+### Changed
+
+- `artzain registry list --source` and `artzain registry export --source`
+  accept the new `anthropic` origin (FR-12 v3 Wave A: Anthropic / Claude
+  estate discovery — workspaces, API-key inventory, the Claude Code fleet
+  row, and Managed Agents).
+
 ## 0.6.3
 
 ### Changed
