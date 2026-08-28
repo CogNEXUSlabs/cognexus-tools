@@ -1867,7 +1867,7 @@ def main(argv: list[str] | None = None) -> None:
     rl = registry_sub.add_parser("list", help="List catalog entries.")
     rl.add_argument("--q", help="Search name / external id / framework.")
     rl.add_argument("--source", choices=["engine", "mcp", "kubernetes", "cicd", "microsoft",
-                                         "openai", "code_scan", "langgraph", "anthropic"],
+                                         "openai", "code_scan", "langgraph", "anthropic", "foundry"],
                     help="Filter by origin.")
     rl.add_argument("--lifecycle", choices=["discovered", "sanctioned", "deprecated", "retired"],
                     help="Filter by lifecycle state.")
@@ -1878,7 +1878,7 @@ def main(argv: list[str] | None = None) -> None:
     re_ = registry_sub.add_parser("export", help="Download the catalog as CSV.")
     re_.add_argument("--q", help="Search filter applied to the export.")
     re_.add_argument("--source", choices=["engine", "mcp", "kubernetes", "cicd", "microsoft",
-                                          "openai", "code_scan", "langgraph", "anthropic"])
+                                          "openai", "code_scan", "langgraph", "anthropic", "foundry"])
     re_.add_argument("--lifecycle", choices=["discovered", "sanctioned", "deprecated", "retired"])
     re_.add_argument("--out", help="Output CSV path (default: ./agent-catalog-<date>.csv).")
     re_.set_defaults(func=cmd_registry_export)
