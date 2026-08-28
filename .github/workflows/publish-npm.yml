@@ -98,6 +98,44 @@ jobs:
       - name: Publish to npm (OIDC Trusted Publishing)
         run: npm publish
 
+  # GitHub-release mirror jobs (one per package, tag-gated like their publish
+  # jobs; the repository's Releases page went stale at artzain 0.6.0 while
+  # PyPI served 0.6.4 and was backfilled by hand on 2026-08-28). SEPARATE
+  # jobs on purpose — a job-level permissions block REPLACES the top-level
+  # one, so these get contents:write and deliberately NO id-token: a release
+  # job cannot mint a publish credential, and the publish jobs never gain
+  # contents:write. Notes come from the package's CHANGELOG section where one
+  # exists, else a provenance pointer. Always --latest=false: artzain
+  # (publish-pypi.yml) holds the repository's Latest badge, and batch-created
+  # releases were observed stealing it.
+  typescript-release:
+    name: "GitHub release: @cognexuslabs/artzain"
+    needs: typescript
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'sdk-ts-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the Release object; NO id-token
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Create release from the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then exit 0; fi
+          VERSION="${GITHUB_REF_NAME#sdk-ts-v}"
+          if [ -f typescript/CHANGELOG.md ]; then
+            awk -v ver="$VERSION" '$0 == "## " ver {f=1; next} /^## /{f=0} f' \
+              typescript/CHANGELOG.md > /tmp/notes.md
+          fi
+          if ! [ -s /tmp/notes.md ]; then
+            echo "npm package [@cognexuslabs/artzain](https://www.npmjs.com/package/@cognexuslabs/artzain) — published via Trusted Publishing with Sigstore provenance (\`npm audit signatures\` verifies)." > /tmp/notes.md
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "@cognexuslabs/artzain ${VERSION}" \
+            --notes-file /tmp/notes.md \
+            --verify-tag --latest=false
+
   openclaw:
     name: "@cognexuslabs/openclaw-artzain"
     if: >-
@@ -140,6 +178,34 @@ jobs:
       - name: Publish to npm (OIDC Trusted Publishing)
         run: npm publish
 
+  openclaw-release:
+    name: "GitHub release: @cognexuslabs/openclaw-artzain"
+    needs: openclaw
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'openclaw-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the Release object; NO id-token
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Create release from the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then exit 0; fi
+          VERSION="${GITHUB_REF_NAME#openclaw-v}"
+          if [ -f openclaw/CHANGELOG.md ]; then
+            awk -v ver="$VERSION" '$0 == "## " ver {f=1; next} /^## /{f=0} f' \
+              openclaw/CHANGELOG.md > /tmp/notes.md
+          fi
+          if ! [ -s /tmp/notes.md ]; then
+            echo "npm package [@cognexuslabs/openclaw-artzain](https://www.npmjs.com/package/@cognexuslabs/openclaw-artzain) — published via Trusted Publishing with Sigstore provenance (\`npm audit signatures\` verifies)." > /tmp/notes.md
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "@cognexuslabs/openclaw-artzain ${VERSION}" \
+            --notes-file /tmp/notes.md \
+            --verify-tag --latest=false
+
   n8n:
     name: "@cognexuslabs/n8n-nodes-artzain"
     if: >-
@@ -181,3 +247,27 @@ jobs:
 
       - name: Publish to npm (OIDC Trusted Publishing)
         run: npm publish
+
+  n8n-release:
+    name: "GitHub release: @cognexuslabs/n8n-nodes-artzain"
+    needs: n8n
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'n8n-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the Release object; NO id-token
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Create release from the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then exit 0; fi
+          VERSION="${GITHUB_REF_NAME#n8n-v}"
+          if [ -f n8n/CHANGELOG.md ]; then
+            awk -v ver="$VERSION" '$0 == "## " ver {f=1; next} /^## /{f=0} f'               n8n/CHANGELOG.md > /tmp/notes.md
+          fi
+          if ! [ -s /tmp/notes.md ]; then
+            echo "npm package [@cognexuslabs/n8n-nodes-artzain](https://www.npmjs.com/package/@cognexuslabs/n8n-nodes-artzain) — published via Trusted Publishing with Sigstore provenance (\`npm audit signatures\` verifies)." > /tmp/notes.md
+          fi
+          gh release create "$GITHUB_REF_NAME"             --title "@cognexuslabs/n8n-nodes-artzain ${VERSION}"             --notes-file /tmp/notes.md             --verify-tag --latest=false
