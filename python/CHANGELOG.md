@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.3
+
+### Changed
+
+- `artzain registry list --source` and `artzain registry export --source`
+  now accept the v2 discovery origins `openai`, `code_scan`, and
+  `langgraph`, matching the engine's catalog API (FR-12 v3 Wave 0). The
+  CLI had been stuck at the v1.5 origin list, so entries from the three
+  v2 sources could not be filtered from the terminal.
+
 ## 0.6.2
 
 ### Fixed

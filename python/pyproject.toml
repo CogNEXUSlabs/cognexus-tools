@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "artzain"
-version = "0.6.2"
+version = "0.6.3"
 description = "OWASP-aligned LLM prompt defence, runtime destructive-action guard, agent kill switch, and audit logging"
 readme = "README.md"
 license = { file = "LICENSE" }
