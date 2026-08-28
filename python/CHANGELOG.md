@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.5
+
+### Changed
+
+- `artzain registry list --source` and `artzain registry export --source`
+  accept the new `foundry` origin (FR-12 v3 Wave B part 2: Microsoft
+  Foundry / Azure AI Foundry per-project agent discovery).
+
 ## 0.6.4
 
 ### Changed
