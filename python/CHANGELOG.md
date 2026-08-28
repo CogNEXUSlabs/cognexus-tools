@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.7
+
+### Changed
+
+- `artzain registry list --source` and `artzain registry export --source`
+  accept the new `n8n` origin (FR-12 v3 Wave D part 1: n8n agentic
+  workflow discovery — AI-cluster and ArtzAIn-gated workflows).
+
 ## 0.6.6
 
 ### Changed
