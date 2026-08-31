@@ -17,6 +17,27 @@
       "agentDid": {
         "type": "string",
         "description": "agent_did recorded on the sealed leaf when the hook context has no agentId. Default openclaw-gateway."
+      },
+      "announce": {
+        "type": "boolean",
+        "description": "Opt-in (v0.2): announce this instance's identity (agent ids and skill slugs — names only, never content) to the CogNEXUS Agent Wrangler once per process, so unreachable laptop/home-lab instances enter the estate as reviewable discovered rows. Fire-and-forget; never blocks tool gating."
+      },
+      "instance": {
+        "type": "string",
+        "maxLength": 120,
+        "description": "Stable instance name used as the announced rows' identity namespace. Changing it re-namespaces the rows — pick one and keep it."
+      },
+      "announceAgents": {
+        "type": "array",
+        "items": { "type": "string", "maxLength": 200 },
+        "maxItems": 50,
+        "description": "Agent ids to announce (names only). Defaults to [agentDid]."
+      },
+      "announceSkills": {
+        "type": "array",
+        "items": { "type": "string", "maxLength": 200 },
+        "maxItems": 100,
+        "description": "Skill slugs to announce (names only)."
       }
     }
   }
