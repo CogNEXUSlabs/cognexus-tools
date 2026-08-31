@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.8
+
+### Changed
+
+- `artzain registry list --source` and `artzain registry export --source`
+  accept the new `openclaw` origin (FR-12 v3 Wave D part 2: OpenClaw
+  gateway probe — instance agents listed via the gateway's
+  OpenAI-compatible `/v1/models` surface).
+
 ## 0.6.7
 
 ### Changed
