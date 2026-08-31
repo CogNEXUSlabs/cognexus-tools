@@ -7,13 +7,56 @@ import {
   type DecisionResponse,
   type FetchLike,
 } from "./client.js";
+import { announceInstance, type AnnounceConfig } from "./announce.js";
 
 export const HOOK_TIMEOUT_MS = 14_000;
 
-export interface PluginConfig {
+export interface PluginConfig extends AnnounceConfig {
   apiKey?: string;
   baseUrl?: string;
   agentDid?: string;
+}
+
+/** Announce fires from the first gated call — the register hook never
+ * sees plugin config, the tool path does. It is fire-and-forget: gating
+ * NEVER waits on it, and its failure never blocks. Delivery is
+ * attempt-once per process for successes and config refusals (4xx);
+ * TRANSIENT failures (network, 5xx, 429) re-arm so a later gated call
+ * retries — a laptop whose first tool call happens offline still
+ * announces once the network is back. */
+let announceStarted = false;
+
+export function resetAnnounceForTests(): void {
+  announceStarted = false;
+}
+
+function maybeAnnounceOnce(
+  cfg: PluginConfig,
+  fetchImpl?: FetchLike,
+  ctxAgentId?: string,
+): void {
+  if (announceStarted || cfg.announce !== true) return;
+  announceStarted = true;
+  void announceInstance(
+    cfg,
+    fetchImpl,
+    (msg) => {
+      try {
+        console.error(msg);
+      } catch {
+        /* logging must never break gating */
+      }
+    },
+    ctxAgentId,
+  )
+    .then((result) => {
+      if (!result.ok && result.retryable) {
+        announceStarted = false; // transient — try again on a later call
+      }
+    })
+    .catch(() => {
+      /* announceInstance resolves rather than rejecting; belt-and-braces */
+    });
 }
 
 export interface ToolCallEvent {
@@ -56,6 +99,10 @@ export async function handleBeforeToolCall(
   fetchImpl?: FetchLike,
 ): Promise<BlockResult | undefined> {
   const cfg = pluginConfigOf(event, ctx);
+  // ctx.agentId first: the announced default identity must match the did
+  // the gate stamps on decision leaves, or reconciliation flags this very
+  // instance's traffic as an unregistered agent.
+  maybeAnnounceOnce(cfg, fetchImpl, ctx.agentId);
   const apiKey = resolveApiKey(cfg.apiKey);
   if (!apiKey) {
     return block(
