@@ -141,15 +141,23 @@ export async function announceInstance(
     }
     // Surface the server's verdict: `deferred > 0` means capacity held rows
     // back, and they are NOT retried until a re-announce (process restart) —
-    // a bare "ok" here would let that pass silently.
+    // a bare "ok" here would let that pass silently. `failed > 0` is the
+    // same hazard with a different cause: the catalog could not store the
+    // row, so an announce that looks accepted registered nothing. Both are
+    // counts the server reports and this line must not drop.
     let counts = "";
     try {
       const data = (await resp.json()) as Record<string, unknown>;
       const n = (k: string) => (typeof data[k] === "number" ? (data[k] as number) : 0);
       counts = `registered ${n("registered")}, seen ${n("seen")}, ` +
-        `blocked ${n("blocked")}, deferred ${n("deferred")}`;
+        `blocked ${n("blocked")}, deferred ${n("deferred")}, ` +
+        `failed ${n("failed")}`;
       if (n("deferred") > 0) {
         counts += " — deferred rows are not retried until a re-announce (restart)";
+      }
+      if (n("failed") > 0) {
+        counts += " — failed rows hit a server-side write error and were NOT " +
+          "stored; a re-announce (restart) retries them";
       }
     } catch {
       counts = "response unreadable";

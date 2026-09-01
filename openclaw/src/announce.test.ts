@@ -166,6 +166,33 @@ describe("announceInstance", () => {
     expect(logs.join("\n")).toContain("deferred 1");
     expect(logs.join("\n")).toContain("not retried until a re-announce");
   });
+
+  it("surfaces the server's failed count in the success log", async () => {
+    // An announce the server accepted but could not persist: HTTP 200 with
+    // registered 0. Dropping `failed` here would report "registered 0, seen
+    // 0, blocked 0, deferred 0" — a clean-looking line for an announce that
+    // catalogued nothing.
+    const { impl } = fakeFetch(200, {
+      instance: "jeans-laptop", agents_announced: 2, skills_recorded: 0,
+      registered: 0, seen: 0, blocked: 0, deferred: 0, failed: 2,
+    });
+    const logs: string[] = [];
+    const out = await announceInstance(CFG, impl, (m) => logs.push(m));
+    expect(out.ok).toBe(true);
+    expect(logs.join("\n")).toContain("failed 2");
+    expect(logs.join("\n")).toContain("were NOT stored");
+  });
+
+  it("reports failed 0 on a server that does not send the count", async () => {
+    const { impl } = fakeFetch(200, {
+      instance: "jeans-laptop", agents_announced: 1, skills_recorded: 0,
+      registered: 1, seen: 0, blocked: 0, deferred: 0,
+    });
+    const logs: string[] = [];
+    await announceInstance(CFG, impl, (m) => logs.push(m));
+    expect(logs.join("\n")).toContain("failed 0");
+    expect(logs.join("\n")).not.toContain("were NOT stored");
+  });
 });
 
 describe("gate integration", () => {

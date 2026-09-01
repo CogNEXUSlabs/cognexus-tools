@@ -75,5 +75,8 @@ changing it re-namespaces the rows. Announce is telemetry, not a gate: it
 never blocks or delays tool gating, and its failure never fails closed.
 Transient failures (network, 5xx, 429) retry on a later gated call; a 4xx
 refusal means config — fix and restart. The success log line reports the
-server's `registered/seen/blocked/deferred` counts; `deferred` rows are
-held by capacity and only submitted again on a re-announce.
+server's `registered/seen/blocked/deferred/failed` counts; `deferred` rows
+are held by capacity and only submitted again on a re-announce, and
+`failed` rows hit a server-side write error and were not stored at all —
+an announce can be accepted (HTTP 200) and still catalogue nothing, so
+read the counts, not the status.

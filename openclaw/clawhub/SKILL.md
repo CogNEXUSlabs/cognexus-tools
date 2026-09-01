@@ -1,7 +1,6 @@
 ---
 name: ArtzAIn Tool Gate
 description: Put this OpenClaw instance under ArtzAIn governance — every host tool call is checked against your own CogNEXUS Decision API before it runs, failing closed on deny, review, or any engine error.
-license: Apache-2.0
 ---
 
 # ArtzAIn Tool Gate
@@ -13,6 +12,11 @@ code bundle: the integration itself is the npm package
 [CogNEXUSlabs/cognexus-tools](https://github.com/CogNEXUSlabs/cognexus-tools)).
 If a listing under any other account offers "artzain", treat it as
 unaffiliated.
+
+Licensing: this listing text is MIT-0, as ClawHub requires for everything
+published there. The plugin itself — the npm package and its source — is
+**Apache-2.0**; installing via the command below gets you the Apache-2.0
+package, not a ClawHub bundle.
 
 ## What it does
 
