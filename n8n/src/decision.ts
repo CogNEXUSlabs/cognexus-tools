@@ -6,7 +6,12 @@
  * becomes deny. review is a stop branch — not a Wait node.
  */
 
+import { randomUUID } from "node:crypto";
+
 export type DecisionBranch = "allow" | "review" | "deny";
+
+/** Server-side cap on `request_id` (`application/api/decisions.py`). */
+export const REQUEST_ID_MAX_LENGTH = 64;
 
 export interface RoutedDecision {
   branch: DecisionBranch;
@@ -44,9 +49,26 @@ export function buildDecisionBody(input: {
     payload: input.payload,
     payload_kind: input.payloadKind,
     surface: "n8n",
-    request_id: input.requestId.slice(0, 64) || null,
+    request_id: input.requestId.slice(0, REQUEST_ID_MAX_LENGTH) || null,
     context: input.extra ?? {},
   };
+}
+
+/**
+ * Fallback `request_id` for an item whose Request ID parameter is empty.
+ *
+ * The server keys its idempotency ledger on `(user_id, request_id)` for
+ * 48 h and replays the earlier decision without comparing the payload, so
+ * the fallback must never repeat across executions. It is derived from the
+ * n8n execution id plus the item index; when no execution id is available
+ * (older n8n, unit tests) a random UUID stands in. Always ≤ 64 chars.
+ */
+export function fallbackRequestId(
+  executionId: string | undefined,
+  index: number,
+): string {
+  const scope = executionId && executionId.trim() ? executionId.trim() : randomUUID();
+  return `n8n-${scope}-${index}`.slice(0, REQUEST_ID_MAX_LENGTH);
 }
 
 export function routeHttpDecision(status: number, body: unknown): RoutedDecision {

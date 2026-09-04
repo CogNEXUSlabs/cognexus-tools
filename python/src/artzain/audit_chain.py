@@ -275,6 +275,7 @@ def verify_chain(path: Path) -> VerifyResult:
     signer = _get_signer()
     prev_hash = _GENESIS_HASH
     seq = 0
+    chained_seen = False
 
     try:
         with path.open("r", encoding="utf-8") as fh:
@@ -295,9 +296,21 @@ def verify_chain(path: Path) -> VerifyResult:
 
                 entry_seq = entry.get("seq")
                 if entry_seq is None:
+                    if chained_seen:
+                        # Pre-chain (unsequenced) entries are only legitimate
+                        # before the first chained one; after that an
+                        # unsequenced line is a way to hide an entry from the
+                        # hash and signature checks.
+                        return VerifyResult(
+                            ok=False,
+                            entries_checked=seq,
+                            first_bad_seq=seq + 1,
+                            error=f"unchained entry after seq={seq}",
+                        )
                     prev_hash = hashlib.sha256(line.encode("utf-8")).hexdigest()
                     seq += 1
                     continue
+                chained_seen = True
 
                 entry_seq = int(entry_seq)
                 expected_seq = seq + 1
@@ -333,7 +346,16 @@ def verify_chain(path: Path) -> VerifyResult:
                         error=f"entry_hash mismatch at seq={entry_seq}",
                     )
 
-                if stored_sig and not signer.verify(stored_hash.encode("ascii"), stored_sig):
+                # A missing signature fails verification rather than skipping
+                # it — the hash chain alone can be recomputed by any writer.
+                if not stored_sig:
+                    return VerifyResult(
+                        ok=False,
+                        entries_checked=seq,
+                        first_bad_seq=entry_seq,
+                        error=f"missing signature at seq={entry_seq}",
+                    )
+                if not signer.verify(stored_hash.encode("ascii"), stored_sig):
                     return VerifyResult(
                         ok=False,
                         entries_checked=seq,

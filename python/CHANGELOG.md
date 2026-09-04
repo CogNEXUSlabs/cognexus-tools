@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.9
+
+### Fixed
+
+- `verify_chain` now fails a JSONL audit log whose chained entry has no
+  `sig`, and one that contains an unsequenced line after the chain has
+  started. Both were previously accepted, so a writer with access to the
+  file could rewrite an entry, drop its signature (or its `seq`), recompute
+  the hashes forward, and still get `chain OK`.
+- Destructive-action guard: the `sql.delete_no_where` / `sql.update_no_where`
+  rules bound their WHERE lookahead to the statement being screened. A
+  `WHERE` in a trailing comment or in a later statement no longer switches
+  the rule off; a `WHERE` on a continuation line of the same statement
+  still counts.
+- Prompt-injection detector: text is NFKC-normalised and stripped of
+  invisible characters (zero-width space/joiners, word joiner, BOM, soft
+  hyphen) before the pattern pass, so `ign​ore previous instructions`
+  and fullwidth `ｉｇｎｏｒｅ` are caught like the plain form. Normalisation is
+  recorded as a low-confidence signal, never a finding on its own.
+- Prompt-injection detector: the in-object audit trail is a bounded deque
+  (`audit_log_size`, default 1,000 records) instead of an unbounded list on
+  a long-lived detector.
+
 ## 0.6.8
 
 ### Changed

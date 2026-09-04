@@ -21,6 +21,8 @@ declare module "n8n-workflow" {
     getCredentials(name: string): Promise<Record<string, string>>;
     continueOnFail(): boolean;
     getNode(): unknown;
+    /** Present on every current n8n; optional here so callers guard it. */
+    getExecutionId?(): string;
   }
 
   export interface INodeType {

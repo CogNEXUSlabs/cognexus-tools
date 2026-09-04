@@ -135,5 +135,56 @@ class ModuleLevelScreenTests(unittest.TestCase):
         self.assertEqual(second.severity, ActionSeverity.CRITICAL)
 
 
+class NoWhereLookaheadTests(unittest.TestCase):
+    """The no-WHERE rules must key off the statement, not the whole payload.
+
+    Before open-items §9.2 the WHERE lookahead ran to the end of the text, so
+    any later WHERE — a trailing comment, a second statement — switched the
+    CRITICAL rule off. The screened text is model output, so that was an off
+    switch in the adversary's hands.
+    """
+
+    def setUp(self) -> None:
+        reset_guard()
+        self.guard = DestructiveActionGuard()
+
+    def _sql_rules(self, text: str) -> list[str]:
+        return [m.rule_id for m in self.guard.screen(text).matches if m.rule_id.startswith("sql.")]
+
+    def test_where_in_a_trailing_comment_does_not_disarm_delete(self) -> None:
+        self.assertIn("sql.delete_no_where", self._sql_rules("DELETE FROM users; -- where"))
+        self.assertIn("sql.delete_no_where", self._sql_rules("DELETE FROM users -- where"))
+        self.assertIn("sql.delete_no_where", self._sql_rules("DELETE FROM users /* where */;"))
+
+    def test_where_in_a_later_statement_does_not_disarm_delete(self) -> None:
+        self.assertIn("sql.delete_no_where", self._sql_rules("DELETE FROM users;\nSELECT 1 WHERE x = 1"))
+        self.assertIn("sql.delete_no_where", self._sql_rules("DELETE FROM users\nSELECT 1 WHERE x = 1"))
+
+    def test_unterminated_delete_on_its_own_line_is_caught(self) -> None:
+        self.assertIn("sql.delete_no_where", self._sql_rules("DELETE FROM users\nSELECT 1"))
+
+    def test_where_in_a_later_statement_does_not_disarm_update(self) -> None:
+        self.assertIn("sql.update_no_where", self._sql_rules("UPDATE t SET a = 1; SELECT 1 WHERE 1"))
+        self.assertIn("sql.update_no_where", self._sql_rules("UPDATE t SET a = 1\nSELECT 1 WHERE 1"))
+
+    def test_where_on_a_continuation_line_still_counts(self) -> None:
+        # The honest multi-line statement must not become a false positive.
+        self.assertEqual([], self._sql_rules("DELETE FROM orders\n  WHERE id = 9;"))
+        self.assertEqual([], self._sql_rules("UPDATE t SET a = 1,\n  b = 2\n WHERE id = 2;"))
+        self.assertEqual([], self._sql_rules("DELETE FROM orders WHERE id = 9 -- all of them"))
+
+    def test_prose_around_a_guarded_statement_is_clean(self) -> None:
+        text = "Please run DELETE FROM sessions WHERE expired = true; then report back."
+        self.assertEqual([], self._sql_rules(text))
+
+    def test_long_statement_body_is_screened_in_linear_time(self) -> None:
+        import time
+
+        body = "UPDATE t SET " + "a = 1, " * 50_000
+        started = time.perf_counter()
+        self.assertIn("sql.update_no_where", self._sql_rules(body))
+        self.assertLess(time.perf_counter() - started, 2.0)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
