@@ -65,6 +65,7 @@ import os
 import re
 import unicodedata
 import warnings
+from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -154,6 +155,11 @@ class DetectionConfig:
         allowlist: Substrings that suppress detection.  Uses substring
             matching (``allowed.lower() in text_lower``).  Entries must be
             at least 3 characters after stripping whitespace.
+        audit_log_size: How many :class:`AuditRecord` entries the detector
+            keeps in memory (most recent first to go). ``0`` disables the
+            in-object trail. The detectors are process-lifetime singletons
+            and every scan appended a record forever (open-items §9.11);
+            the JSONL chain, not this list, is the durable record.
 
     .. note::
 
@@ -166,9 +172,13 @@ class DetectionConfig:
     custom_patterns: list[re.Pattern[str]] = field(default_factory=list)
     blocklist: list[str] = field(default_factory=list)
     allowlist: list[str] = field(default_factory=list)
+    audit_log_size: int = 1000
 
     def __post_init__(self) -> None:
         """Validate allowlist and blocklist entries to prevent overly broad suppression."""
+        if isinstance(self.audit_log_size, bool) or not isinstance(self.audit_log_size, int) \
+                or self.audit_log_size < 0:
+            raise ValueError("audit_log_size must be a non-negative integer")
         for entry in self.allowlist:
             stripped = entry.strip()
             if not stripped:
@@ -480,7 +490,8 @@ class PromptInjectionDetector:
                 stacklevel=2,
             )
         self._config = config or DetectionConfig()
-        self._audit_log: list[AuditRecord] = []
+        # Bounded: a long-lived detector must not grow without limit.
+        self._audit_log: deque[AuditRecord] = deque(maxlen=self._config.audit_log_size)
 
     # -- public API ---------------------------------------------------------
 
@@ -540,7 +551,7 @@ class PromptInjectionDetector:
 
     @property
     def audit_log(self) -> list[AuditRecord]:
-        """Return a copy of the audit trail."""
+        """Return a copy of the (bounded) audit trail, oldest first."""
         return list(self._audit_log)
 
     # -- internal implementation --------------------------------------------
