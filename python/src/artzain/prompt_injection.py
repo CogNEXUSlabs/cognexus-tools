@@ -19,6 +19,10 @@
 #   that we do NOT carry — adopting it would put a model on the decision hot
 #   path, which the sub-200 ms budget and the zero-egress VPC claim both
 #   constrain. Evaluate deliberately.
+#   CogNEXUS also normalises the text before the regex pass (NFKC, and
+#   zero-width / soft-hyphen characters stripped) — see _normalise_for_scan.
+#   Upstream matches the raw string, so one zero-width space inside a keyword
+#   defeats every pattern there (open-items §9.3).
 #   Provenance and drift detail: docs/third-party/agent-governance-toolkit.md
 #
 """Prompt Injection Detection — OWASP LLM01 / ASI01.
@@ -59,6 +63,7 @@ import hashlib
 import logging
 import os
 import re
+import unicodedata
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -315,6 +320,29 @@ _TOKEN_SMUGGLE_PATTERN: re.Pattern[str] = re.compile(
     r"[\u200b\u200c\u200d\u2060\ufeff]{3,}",
 )
 
+# Characters that render as nothing and split a keyword without changing how
+# a reader (or a tokenizer trained on the visible text) understands it:
+# zero-width space / non-joiner / joiner, word joiner, BOM, soft hyphen.
+_INVISIBLE_CHARS_RE: re.Pattern[str] = re.compile(
+    r"[\u200b\u200c\u200d\u2060\ufeff\u00ad]",
+)
+
+
+def _normalise_for_scan(text: str) -> tuple[str, int, bool]:
+    """Return ``(scan_text, invisible_removed, nfkc_changed)`` for *text*.
+
+    The pattern set matches literal ASCII keywords, so it is defeated by a
+    single invisible character inside a word (``ign\u200bore``) or by a
+    compatibility form of the same letters (fullwidth ``ｉｇｎｏｒｅ``,
+    mathematical alphanumerics, ligatures). Both read identically to a model.
+    Scanning runs over the stripped, NFKC-normalised text; the original is
+    still what gets hashed for the audit record and what the zero-width-run
+    check inspects.
+    """
+    stripped, removed = _INVISIBLE_CHARS_RE.subn("", text)
+    normalised = unicodedata.normalize("NFKC", stripped)
+    return normalised, removed, normalised != stripped
+
 # Base64 detection: 20+ chars of valid base64 alphabet
 _BASE64_PATTERN: re.Pattern[str] = re.compile(
     r"[A-Za-z0-9+/]{20,}={0,2}"
@@ -524,8 +552,13 @@ class PromptInjectionDetector:
         canary_tokens: list[str] | None,
     ) -> DetectionResult:
         """Core detection logic — runs all check methods and aggregates."""
+        # Every literal check below runs over the normalised text; the raw
+        # text is kept for the audit hash, the canary check (run on both) and
+        # the zero-width-run check, which needs the characters we strip.
+        scan_text, invisible_removed, nfkc_changed = _normalise_for_scan(text)
+
         # Fast-path: allowlisted inputs
-        text_lower = text.lower()
+        text_lower = scan_text.lower()
         for allowed in self._config.allowlist:
             if allowed.lower() in text_lower:
                 result = DetectionResult(
@@ -555,27 +588,52 @@ class PromptInjectionDetector:
         # Run all check methods
         findings: list[tuple[InjectionType, ThreatLevel, float, str]] = []
 
-        findings.extend(self._check_direct_override(text))
-        findings.extend(self._check_delimiter_attacks(text))
-        findings.extend(self._check_encoding_attacks(text))
-        findings.extend(self._check_role_play(text))
-        findings.extend(self._check_context_manipulation(text))
-        findings.extend(self._check_canary_leak(text, canary_tokens))
-        findings.extend(self._check_multi_turn(text))
-        findings.extend(self._check_cross_plugin(text))
-        findings.extend(self._check_markup_injection(text))
+        findings.extend(self._check_direct_override(scan_text))
+        findings.extend(self._check_delimiter_attacks(scan_text))
+        findings.extend(self._check_encoding_attacks(scan_text))
+        findings.extend(self._check_role_play(scan_text))
+        findings.extend(self._check_context_manipulation(scan_text))
+        canary_findings = self._check_canary_leak(text, canary_tokens)
+        if scan_text != text:
+            canary_findings.extend(
+                f for f in self._check_canary_leak(scan_text, canary_tokens)
+                if f not in canary_findings
+            )
+        findings.extend(canary_findings)
+        findings.extend(self._check_multi_turn(scan_text))
+        findings.extend(self._check_cross_plugin(scan_text))
+        findings.extend(self._check_markup_injection(scan_text))
         findings.extend(self._check_token_smuggling(text))
-        findings.extend(self._check_credential_exfil(text))
+        findings.extend(self._check_credential_exfil(scan_text))
 
         # Check custom patterns
         for pattern in self._config.custom_patterns:
-            if pattern.search(text):
+            if pattern.search(scan_text):
                 findings.append((
                     InjectionType.DIRECT_OVERRIDE,
                     ThreatLevel.HIGH,
                     0.8,
                     f"custom:{pattern.pattern}",
                 ))
+
+        # Record that normalisation happened, as its own low-confidence
+        # signal: invisible characters are a smuggling tell on their own
+        # (below the run length the MEDIUM rule needs), and an NFKC change is
+        # worth naming only when something matched the normalised form.
+        if invisible_removed:
+            findings.append((
+                InjectionType.TOKEN_SMUGGLING,
+                ThreatLevel.LOW,
+                0.45,
+                f"normalisation:invisible_chars_stripped:{invisible_removed}",
+            ))
+        if nfkc_changed and findings:
+            findings.append((
+                InjectionType.ENCODING_ATTACK,
+                ThreatLevel.LOW,
+                0.45,
+                "normalisation:nfkc_changed",
+            ))
 
         # Apply sensitivity filter
         threshold = _SENSITIVITY_THRESHOLDS.get(
