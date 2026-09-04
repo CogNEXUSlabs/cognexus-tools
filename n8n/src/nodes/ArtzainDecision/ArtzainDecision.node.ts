@@ -9,6 +9,7 @@ import { NodeConnectionTypes, NodeOperationError } from "n8n-workflow";
 import {
   buildDecisionBody,
   decisionsUrl,
+  fallbackRequestId,
   routeHttpDecision,
 } from "../../decision.js";
 
@@ -71,7 +72,8 @@ export class ArtzainDecision implements INodeType {
         name: "requestId",
         type: "string",
         default: "",
-        description: "Idempotency key (max 64). Empty uses a per-item fallback.",
+        description:
+          "Idempotency key (max 64). The server replays a prior decision for the same key for 48 h. Empty derives n8n-<executionId>-<item>, unique per execution.",
       },
     ],
   };
@@ -84,6 +86,10 @@ export class ArtzainDecision implements INodeType {
     const creds = await this.getCredentials("artzainApi");
     const apiKey = creds.apiKey || "";
     const baseUrl = creds.baseUrl || "https://app.cognexuslabs.ai";
+    // Unique per execution so an empty Request ID never replays another
+    // run's decision from the server's 48 h idempotency ledger.
+    const executionId =
+      typeof this.getExecutionId === "function" ? this.getExecutionId() : undefined;
 
     for (let i = 0; i < items.length; i++) {
       try {
@@ -95,7 +101,7 @@ export class ArtzainDecision implements INodeType {
         );
         const agentDid = String(this.getNodeParameter("agentDid", i, "n8n-order-bot"));
         const requestIdRaw = String(this.getNodeParameter("requestId", i, ""));
-        const requestId = requestIdRaw || `n8n-${i}-${action}`.slice(0, 64);
+        const requestId = requestIdRaw || fallbackRequestId(executionId, i);
         const body = buildDecisionBody({
           agentDid,
           action,

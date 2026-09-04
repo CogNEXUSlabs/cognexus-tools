@@ -10,6 +10,18 @@ n8n community nodes that wrap CogNEXUS **Decision** (pattern A) and
 | **CogNEXUS Decision** | `POST /api/v1/decisions`. Three outputs: Allow / Review / Deny. HTTP 503 / 401 / 422 land on **Deny**. Review does **not** wait inside n8n — a human owns it in the dashboard Review Queue. Wire side effects only to Allow. |
 | **CogNEXUS Envelope** | `POST /api/v1/envelope/v1/chat/completions` with a `cnxe_…` key. Screens model traffic. It does **not** gate a later Stripe/Gmail node. |
 
+## Request ID (Decision node)
+
+The Decision node's **Request ID** field is the server's idempotency key.
+Leave it empty and the node derives `n8n-<executionId>-<item>` — unique per
+n8n execution, so two runs of the same workflow never share a key (0.1.1 and
+earlier sent `n8n-<item>-<action>`, which was identical for item 0 of every
+execution and could replay another run's sealed verdict). Set it explicitly
+to your own business key — an order id, an invoice number — when you *want*
+server-side replay across retries: the server returns the prior decision for
+the same request id for **48 hours** without re-evaluating the payload, so
+never reuse a key for a different customer or amount. Max 64 characters.
+
 ## What this is not
 
 - Not a Connectors-panel card named n8n.
