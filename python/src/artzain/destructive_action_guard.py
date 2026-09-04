@@ -84,6 +84,18 @@ class _ActionRule:
     owasp: str = "LLM06"
 
 
+# One character of the *current* SQL statement, for the no-WHERE rules below.
+# Consumes anything except a statement terminator (";"), a comment start
+# ("--" / "/*"), or a newline that begins another statement. Each character
+# matches exactly one alternative, so the lazy repeats built on it cannot
+# backtrack combinatorially.
+_SQL_STMT_ATOM = (
+    r"(?:[^;\-/\n]"
+    r"|-(?!-)"
+    r"|/(?!\*)"
+    r"|\n(?!\s*(?:SELECT|INSERT|UPDATE|DELETE|WITH|CREATE|DROP|ALTER|TRUNCATE|GRANT|REVOKE)\b))"
+)
+
 _RULES: tuple[_ActionRule, ...] = (
     # ── SQL: irreversible schema / data destruction ──────────────────────
     _ActionRule(
@@ -115,17 +127,23 @@ _RULES: tuple[_ActionRule, ...] = (
     ),
     _ActionRule(
         # DELETE / UPDATE without a WHERE clause = mass mutation.
-        # We require the whole statement on one logical block (DOTALL so
-        # newlines do not break the lookahead) and forbid an interleaving
-        # WHERE before the terminator.
+        #
+        # The WHERE lookahead is bounded to the *statement* being screened:
+        # it stops at ";", at a comment start ("--" or "/*"), and at a line
+        # that begins a new statement. An earlier version scanned to the end
+        # of the whole payload (`(?![\s\S]*?\bWHERE\b)`), so any later
+        # WHERE — a trailing `-- where` comment, or a second harmless
+        # `SELECT … WHERE …` — switched the rule off, and the text being
+        # screened is model output (open-items §9.2). A WHERE on a
+        # continuation line of the same statement still counts.
         rule_id="sql.delete_no_where",
         name="DELETE FROM without WHERE",
         severity=ActionSeverity.CRITICAL,
         pattern=re.compile(
             r"\bDELETE\s+FROM\s+\w[\w\.\"]*"
-            r"(?![\s\S]*?\bWHERE\b)"
-            r"\s*(?:;|$|RETURNING\b)",
-            re.IGNORECASE,
+            r"(?!" + _SQL_STMT_ATOM + r"*?\bWHERE\b)"
+            + _SQL_STMT_ATOM + r"*?(?:;|--|/\*|$)",
+            re.IGNORECASE | re.MULTILINE,
         ),
     ),
     _ActionRule(
@@ -134,9 +152,9 @@ _RULES: tuple[_ActionRule, ...] = (
         severity=ActionSeverity.HIGH,
         pattern=re.compile(
             r"\bUPDATE\s+\w[\w\.\"]*\s+SET\b"
-            r"(?![\s\S]*?\bWHERE\b)"
-            r"[\s\S]*?(?:;|$)",
-            re.IGNORECASE,
+            r"(?!" + _SQL_STMT_ATOM + r"*?\bWHERE\b)"
+            + _SQL_STMT_ATOM + r"*?(?:;|--|/\*|$)",
+            re.IGNORECASE | re.MULTILINE,
         ),
     ),
     _ActionRule(
