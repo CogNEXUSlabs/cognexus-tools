@@ -80,7 +80,8 @@ export async function decide(options: DecideOptions): Promise<DecisionResponse> 
   if (!apiKey) {
     throw new DecisionError(
       "No API key configured — decisions will not be sealed. " +
-        "Set COGNEXUS_API_KEY, call configure({ apiKey }), or run `artzain login` (~15s). " +
+        "Set COGNEXUS_API_KEY, call configure({ apiKey }), or run `artzain login` (~15s; " +
+        "its ~/.artzain/credentials.toml profile is read on Node 20.16+ / 22.3+). " +
         "(The TypeScript SDK is remote-only; there is no offline guard fallback.)",
     );
   }

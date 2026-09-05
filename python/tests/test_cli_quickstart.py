@@ -43,6 +43,7 @@ def test_find_artzain_api_key_in_env_files(tmp_path: Path, monkeypatch: pytest.M
 
 def test_request_headers_match_dashboard_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COGNEXUS_CLI_USER_AGENT", raising=False)
+    monkeypatch.setenv("COGNEXUS_SDK_BROWSER_HEADERS", "1")
     url = "https://app.cognexuslabs.ai/api/auth/signup"
     h = _request_headers_for_url(url)
     assert h["Origin"] == "https://app.cognexuslabs.ai"

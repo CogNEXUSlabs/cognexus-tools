@@ -13,6 +13,7 @@ from artzain.cloud import (
     flush_cloud_events,
     post_sdk_event,
 )
+from tests.conftest import install_fake_http_connections
 
 
 def test_post_sdk_event_no_key_no_crash():
@@ -32,32 +33,200 @@ def test_configure_override(monkeypatch):
     assert cloud._effective_base() == "https://app.cognexuslabs.ai"
 
 
-def test_flush_cloud_events_waits_for_background_post(monkeypatch):
+def _quiet_session(monkeypatch):
+    """Skip the once-per-process ``sdk_session`` row so event counts are exact."""
+    monkeypatch.setattr(cloud, "_session_logged", True)
+
+
+def test_flush_cloud_events_waits_for_background_post(
+    monkeypatch, artzain_fresh_cloud_worker
+):
     configure(api_key="unit-key", base_url="https://example.com")
+    _quiet_session(monkeypatch)
     done = threading.Event()
+    captured: list = []
 
-    class _Resp:
-        status = 200
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return None
-
-        def read(self):
-            return b"{}"
-
-    def _slow_urlopen(req, timeout=None):
+    def _slow(method, path, body):
         time.sleep(0.05)
         done.set()
-        return _Resp()
 
-    monkeypatch.setattr(cloud.urllib.request, "urlopen", _slow_urlopen)
+    install_fake_http_connections(monkeypatch, captured, on_request=_slow)
     post_sdk_event("flush_test", payload={"n": 1})
     assert not done.is_set()
     flush_cloud_events(timeout_sec=2.0)
     assert done.is_set()
+    assert [b["event_type"] for b in captured] == ["flush_test"]
+
+
+def test_post_sdk_event_uses_one_worker_thread(monkeypatch, artzain_fresh_cloud_worker):
+    """500 events start at most one background thread (not one per event)."""
+    configure(api_key="unit-key", base_url="https://example.com")
+    _quiet_session(monkeypatch)
+    captured: list = []
+    install_fake_http_connections(monkeypatch, captured)
+
+    real_thread = threading.Thread
+    started: list = []
+
+    class _CountingThread(real_thread):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            started.append(self)
+
+    monkeypatch.setattr(cloud.threading, "Thread", _CountingThread)
+    for i in range(500):
+        post_sdk_event("burst", payload={"i": i})
+    assert flush_cloud_events(timeout_sec=10.0) is None
+    assert len(started) <= 1, f"expected one worker thread, got {len(started)}"
+    assert len(captured) == 500
+    assert cloud.dropped_cloud_events() == 0
+
+
+def test_connection_is_reused_across_events(monkeypatch, artzain_fresh_cloud_worker):
+    """One HTTPSConnection serves every queued event instead of one per POST."""
+    configure(api_key="unit-key", base_url="https://example.com")
+    _quiet_session(monkeypatch)
+    for var in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    captured: list = []
+    instances = install_fake_http_connections(monkeypatch, captured)
+    for i in range(50):
+        post_sdk_event("reuse", payload={"i": i})
+    flush_cloud_events(timeout_sec=10.0)
+    assert len(captured) == 50
+    assert len(instances) == 1
+    assert instances[0].host == "example.com"
+    assert instances[0].closed == 0
+
+
+def test_transport_tunnels_through_https_proxy(monkeypatch, artzain_fresh_cloud_worker):
+    """``HTTPS_PROXY`` is honoured (urlopen did this implicitly)."""
+    configure(api_key="unit-key", base_url="https://example.com")
+    _quiet_session(monkeypatch)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.local:3128")
+    monkeypatch.setenv("https_proxy", "http://proxy.local:3128")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    captured: list = []
+    instances = install_fake_http_connections(monkeypatch, captured)
+    post_sdk_event("via_proxy", payload={"n": 1})
+    flush_cloud_events(timeout_sec=5.0)
+    assert len(captured) == 1
+    assert (instances[0].host, instances[0].port) == ("proxy.local", 3128)
+    assert instances[0].tunnel == ("example.com", None)
+    assert instances[0].tunnel_headers == {}
+
+
+def test_transport_forwards_proxy_credentials(monkeypatch, artzain_fresh_cloud_worker):
+    configure(api_key="unit-key", base_url="https://example.com")
+    _quiet_session(monkeypatch)
+    monkeypatch.setenv("HTTPS_PROXY", "http://user:p%40ss@proxy.local:3128")
+    monkeypatch.setenv("https_proxy", "http://user:p%40ss@proxy.local:3128")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    captured: list = []
+    instances = install_fake_http_connections(monkeypatch, captured)
+    post_sdk_event("via_auth_proxy", payload={"n": 1})
+    flush_cloud_events(timeout_sec=5.0)
+    assert len(captured) == 1
+    assert instances[0].host == "proxy.local"
+    # base64("user:p@ss")
+    assert instances[0].tunnel_headers == {"Proxy-Authorization": "Basic dXNlcjpwQHNz"}
+
+
+def test_full_queue_drops_and_counts_without_blocking(monkeypatch):
+    """A saturated queue drops new events (counted) rather than blocking the caller."""
+    configure(api_key="unit-key", base_url="https://example.com")
+    _quiet_session(monkeypatch)
+    worker = cloud._CloudWorker(maxsize=3)
+    monkeypatch.setattr(cloud, "_worker", worker)
+    release = threading.Event()
+    captured: list = []
+
+    def _block(method, path, body):
+        release.wait(5.0)
+
+    install_fake_http_connections(monkeypatch, captured, on_request=_block)
+    try:
+        t0 = time.monotonic()
+        for i in range(20):
+            post_sdk_event("flood", payload={"i": i})
+        elapsed = time.monotonic() - t0
+        assert elapsed < 1.0, f"post_sdk_event blocked for {elapsed:.2f}s"
+        # Three slots plus at most one in flight; everything else is dropped.
+        assert worker.dropped >= 16
+        assert cloud.dropped_cloud_events() == worker.dropped
+    finally:
+        release.set()
+        worker.close(timeout_sec=5.0)
+    assert len(captured) + worker.dropped == 20
+
+
+def test_failing_send_does_not_raise(monkeypatch, artzain_fresh_cloud_worker, caplog):
+    configure(api_key="unit-key", base_url="https://example.com")
+    _quiet_session(monkeypatch)
+    captured: list = []
+
+    def _boom(method, path, body):
+        raise OSError("connection reset")
+
+    install_fake_http_connections(monkeypatch, captured, on_request=_boom)
+    with caplog.at_level("WARNING", logger="artzain.cloud"):
+        post_sdk_event("will_fail", payload={"n": 1})
+        flush_cloud_events(timeout_sec=5.0)
+    assert captured == []
+    assert any("will_fail" in r.getMessage() for r in caplog.records)
+
+
+def test_transport_reconnects_after_error(monkeypatch, artzain_fresh_cloud_worker):
+    """After a failed send the connection is closed; the next event still goes out."""
+    configure(api_key="unit-key", base_url="https://example.com")
+    _quiet_session(monkeypatch)
+    captured: list = []
+    calls = {"n": 0}
+
+    def _first_fails(method, path, body):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ConnectionResetError("stale keep-alive")
+
+    instances = install_fake_http_connections(monkeypatch, captured, on_request=_first_fails)
+    post_sdk_event("first", payload={"n": 1})
+    post_sdk_event("second", payload={"n": 2})
+    flush_cloud_events(timeout_sec=5.0)
+    assert [b["event_type"] for b in captured] == ["second"]
+    assert instances[0].closed >= 1
+
+
+def test_flush_drains_queue(monkeypatch, artzain_fresh_cloud_worker):
+    configure(api_key="unit-key", base_url="https://example.com")
+    _quiet_session(monkeypatch)
+    captured: list = []
+    install_fake_http_connections(
+        monkeypatch, captured, on_request=lambda *a: time.sleep(0.002)
+    )
+    for i in range(25):
+        post_sdk_event("drain", payload={"i": i})
+    assert artzain_fresh_cloud_worker.flush(timeout_sec=5.0) is True
+    assert len(captured) == 25
+
+
+def test_flush_times_out_when_send_stalls(monkeypatch):
+    configure(api_key="unit-key", base_url="https://example.com")
+    _quiet_session(monkeypatch)
+    worker = cloud._CloudWorker()
+    monkeypatch.setattr(cloud, "_worker", worker)
+    release = threading.Event()
+    captured: list = []
+    install_fake_http_connections(
+        monkeypatch, captured, on_request=lambda *a: release.wait(5.0)
+    )
+    try:
+        post_sdk_event("stall", payload={"n": 1})
+        assert worker.flush(timeout_sec=0.1) is False
+    finally:
+        release.set()
+        worker.close(timeout_sec=5.0)
 
 
 def test_fetch_api_key_identity_valid(monkeypatch):

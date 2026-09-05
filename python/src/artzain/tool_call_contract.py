@@ -87,26 +87,49 @@ def _tool_args(call: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], bool]:
             if isinstance(v, str):
                 try:
                     v = json.loads(v)
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, RecursionError):
                     return None, True
             return (v, True) if isinstance(v, dict) else (None, True)
     return None, False
 
 
-def _depth(obj: Any, level: int = 1) -> int:
+def _children(obj: Any) -> List[Any]:
     if isinstance(obj, dict):
-        return max([level] + [_depth(v, level + 1) for v in obj.values()]) if obj else level
+        return list(obj.values())
     if isinstance(obj, list):
-        return max([level] + [_depth(v, level + 1) for v in obj]) if obj else level
-    return level
+        return obj
+    return []
+
+
+def _depth(obj: Any, limit: int = MAX_ARG_DEPTH) -> int:
+    """Nesting depth of ``obj`` (a scalar is 1), capped at ``limit + 1``.
+
+    Iterative — a hostile payload nested tens of thousands deep must produce a
+    finding, not a ``RecursionError``. Anything past ``limit`` is reported as
+    ``limit + 1``; callers only compare against the ceiling.
+    """
+    deepest = 1
+    stack: List[Tuple[Any, int]] = [(obj, 1)]
+    while stack:
+        node, level = stack.pop()
+        if level > deepest:
+            deepest = level
+        if level > limit:
+            return level
+        stack.extend((child, level + 1) for child in _children(node))
+    return deepest
 
 
 def _count_keys(obj: Any) -> int:
-    if isinstance(obj, dict):
-        return len(obj) + sum(_count_keys(v) for v in obj.values())
-    if isinstance(obj, list):
-        return sum(_count_keys(v) for v in obj)
-    return 0
+    """Total dict keys at every nesting level of ``obj`` (iterative)."""
+    total = 0
+    stack: List[Any] = [obj]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            total += len(node)
+        stack.extend(_children(node))
+    return total
 
 
 def inspect_tool_call(
@@ -122,13 +145,27 @@ def inspect_tool_call(
     * ``medium`` — unexpected argument keys outside a tool's ``allowed_args``,
       or an unknown tool when the bundle demands known tools only.
     * ``none``   — well-formed (with or without contracts).
+
+    Never raises on payload shape: a payload nested deep enough to exhaust
+    the interpreter stack (``RecursionError`` from the JSON decoder or any
+    later step) is a structural-ceiling breach and fails closed as ``high``.
     """
+    try:
+        return _inspect(payload, contracts)
+    except RecursionError:
+        return ContractReport(
+            ok=False, severity="high",
+            findings=["tool_call payload nesting exhausts the parser — structural ceiling exceeded"],
+        )
+
+
+def _inspect(payload: str, contracts: Optional[Dict[str, Any]]) -> ContractReport:
     contracts = contracts if isinstance(contracts, dict) else {}
     findings: List[str] = []
 
     try:
         parsed = json.loads(payload or "")
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return ContractReport(
             ok=False, severity="high",
             findings=["tool_call payload is not valid JSON — structured contract required"],

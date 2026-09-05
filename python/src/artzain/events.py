@@ -392,6 +392,7 @@ def record_policy_enforcement_event(
         "violation_count": report.violation_count,
         "rule_ids": rule_ids,
         "severities": severities,
+        "suppressed_rule_ids": [f.rule_id for f in report.suppressed[:12]],
         "rules_checked": rules_checked or report.rules_checked,
         "input_sha256": payload_hash,
         "preview": _redact_preview(text),

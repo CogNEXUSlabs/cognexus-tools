@@ -2,6 +2,17 @@
 
 All notable changes to `@cognexuslabs/n8n-nodes-artzain`.
 
+## 0.1.3
+
+### Fixed
+
+- **Both nodes now time out.** The Decision and Envelope nodes called
+  `fetch` with no `AbortSignal`, so a stalled server hung the workflow item
+  indefinitely. Each node gains a **Timeout (ms)** parameter (default
+  10 000); a request that exceeds it is aborted and the item fails closed
+  (Deny on the Decision node, an error / `outcome: "deny"` on the Envelope
+  node) instead of never returning.
+
 ## 0.1.2 — 2026-09-04
 
 ### Fixed

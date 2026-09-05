@@ -36,6 +36,7 @@ from artzain import (
     screen_user_input,
     should_block,
 )
+from artzain.cloud import _sdk_headers
 
 _DEFAULT_BASE = "https://app.cognexuslabs.ai"
 _ENV_FILENAMES = (".env", ".env.local", ".env.development")
@@ -84,35 +85,15 @@ _T2O_QUICKSTART_EXAMPLES = (
     },
 )
 
-# Cloudflare (and similar) may block ``Python-urllib/…`` or a non-browser TLS fingerprint
-# *before* requests reach FastAPI. This default mimics a desktop Chrome fetch; override
-# with COGNEXUS_CLI_USER_AGENT if your edge still challenges the client.
-_DEFAULT_BROWSER_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-)
-
-
 def _request_headers_for_url(url: str) -> dict[str, str]:
-    """Headers that match same-origin browser ``fetch`` to the dashboard API (WAF-friendly)."""
-    ua = (os.environ.get("COGNEXUS_CLI_USER_AGENT") or "").strip() or _DEFAULT_BROWSER_UA
-    parts = urllib.parse.urlsplit(url)
-    origin = (
-        f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else ""
-    )
-    referer = (origin.rstrip("/") + "/") if origin else ""
-    h: dict[str, str] = {
-        "User-Agent": ua,
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "X-Cognexus-Client": f"artzain-cli/{__version__}",
-    }
-    if origin:
-        h["Origin"] = origin
-        h["Referer"] = referer
-        h["Sec-Fetch-Dest"] = "empty"
-        h["Sec-Fetch-Mode"] = "cors"
-        h["Sec-Fetch-Site"] = "same-origin"
+    """Headers for a CLI request to the dashboard API.
+
+    The User-Agent / fetch-metadata policy (browser-like while the CDN/WAF
+    requires it, honest SDK identity otherwise) lives in
+    :func:`artzain.cloud._sdk_headers`; this only tags the client.
+    """
+    h = _sdk_headers(url=url)
+    h["X-Cognexus-Client"] = f"artzain-cli/{__version__}"
     return h
 
 

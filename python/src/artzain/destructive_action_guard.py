@@ -217,9 +217,14 @@ _RULES: tuple[_ActionRule, ...] = (
         rule_id="fs.rm_rf_root",
         name="rm -rf /",
         severity=ActionSeverity.CRITICAL,
+        # The target must be exactly `/`, `~` or `$HOME` (optionally
+        # followed by a shell separator), or a bare/root glob `*` / `/*`.
+        # A plain prefix match would rate `rm -rf /tmp/build-cache` as a
+        # root wipe; that is the generic rule's job (HIGH).
         pattern=re.compile(
             r"\brm\s+(?:-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)"
-            r"[a-zA-Z]*\s+(?:--no-preserve-root\s+)?(?:/|~|\$HOME|\*\s*$)",
+            r"[a-zA-Z]*\s+(?:--no-preserve-root\s+)?"
+            r"(?:(?:/|~/?|\$HOME/?)(?=\s|$|[;&|])|/?\*\s*$)",
             re.IGNORECASE,
         ),
     ),
@@ -569,8 +574,10 @@ class DestructiveActionGuard:
 # ---------------------------------------------------------------------------
 
 
+# Group 1 keeps the key name, separator and surrounding whitespace so the
+# rewrite works for both ``key=value`` and ``key: value`` forms.
 _SECRET_REDACT_RE = re.compile(
-    r"(?:(?:api[_-]?key|secret|token|password|bearer)\s*[=:]\s*)\S{8,}",
+    r"((?:api[_-]?key|secret|token|password|bearer)\s*[=:]\s*)\S{8,}",
     re.IGNORECASE,
 )
 
@@ -580,7 +587,7 @@ def _excerpt(text: str, start: int, end: int, *, window: int = 32) -> str:
     s = max(0, start - window)
     e = min(len(text), end + window)
     snippet = text[s:e].replace("\n", " ⏎ ").strip()
-    snippet = _SECRET_REDACT_RE.sub(lambda m: m.group(0).split("=")[0] + "=[REDACTED]", snippet)
+    snippet = _SECRET_REDACT_RE.sub(r"\1[REDACTED]", snippet)
     if len(snippet) > 120:
         snippet = snippet[:117] + "…"
     return snippet

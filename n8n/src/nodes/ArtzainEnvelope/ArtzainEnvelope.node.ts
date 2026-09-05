@@ -11,6 +11,7 @@ import {
   envelopeCompletionsUrl,
   envelopeFailedClosed,
 } from "../../envelope.js";
+import { DEFAULT_TIMEOUT_MS, fetchWithTimeout, resolveTimeoutMs } from "../../timeout.js";
 
 export class ArtzainEnvelope implements INodeType {
   description: INodeTypeDescription = {
@@ -40,6 +41,14 @@ export class ArtzainEnvelope implements INodeType {
         default: "={{$json.message}}",
         typeOptions: { rows: 4 },
       },
+      {
+        displayName: "Timeout (ms)",
+        name: "timeoutMs",
+        type: "number",
+        default: DEFAULT_TIMEOUT_MS,
+        description:
+          "Abort the envelope request after this many milliseconds. A timed-out item fails closed.",
+      },
     ],
   };
 
@@ -54,14 +63,21 @@ export class ArtzainEnvelope implements INodeType {
       try {
         const model = String(this.getNodeParameter("model", i, "gpt-4.1"));
         const userMessage = String(this.getNodeParameter("userMessage", i, ""));
-        const resp = await fetch(envelopeCompletionsUrl(baseUrl), {
-          method: "POST",
-          headers: envelopeAuthHeader(apiKey),
-          body: JSON.stringify({
-            model,
-            messages: [{ role: "user", content: userMessage }],
-          }),
-        });
+        const timeoutMs = resolveTimeoutMs(
+          this.getNodeParameter("timeoutMs", i, DEFAULT_TIMEOUT_MS),
+        );
+        const resp = await fetchWithTimeout(
+          envelopeCompletionsUrl(baseUrl),
+          {
+            method: "POST",
+            headers: envelopeAuthHeader(apiKey),
+            body: JSON.stringify({
+              model,
+              messages: [{ role: "user", content: userMessage }],
+            }),
+          },
+          timeoutMs,
+        );
         if (envelopeFailedClosed(resp.status)) {
           const detail = await resp.text();
           throw new Error(`envelope HTTP ${resp.status}: ${detail} — failing closed`);

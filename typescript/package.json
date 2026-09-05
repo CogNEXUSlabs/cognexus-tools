@@ -1,6 +1,6 @@
 {
   "name": "@cognexuslabs/artzain",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "CogNEXUS Decision API client for Node.js \u2014 governed agent actions with sealed audit decisions.",
   "license": "Apache-2.0",
   "repository": {
