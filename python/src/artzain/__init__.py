@@ -175,7 +175,7 @@ from artzain.prompt_injection import (
     load_prompt_injection_config,
 )
 
-__version__ = "0.6.9"
+__version__ = "0.6.10"
 
 __all__ = [
     # Version

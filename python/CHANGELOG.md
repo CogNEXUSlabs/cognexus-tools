@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.6.10
+
+### Changed
+
+- One header policy for every outbound request: `artzain.cloud._sdk_headers`
+  now owns the User-Agent / fetch-metadata set the CLI and GUI send, instead
+  of three hand-rolled copies of a Chrome User-Agent and a forged
+  `Sec-Fetch-Site: same-origin`. `COGNEXUS_SDK_BROWSER_HEADERS` selects the
+  set: `1` (the default for now, so nothing changes on the wire) keeps the
+  browser-like headers the CDN/WAF still requires; `0` sends the honest
+  `artzain-python-sdk/<ver>` identity. The default flips to `0` once the CDN
+  allowlists the SDK User-Agent (see `docs/runbooks/supply-chain.md`).
+  Telemetry (`post_sdk_event`, `decide`) was already honest and is unchanged.
+
+- Cloud telemetry (`post_sdk_event`, `post_policy_human_decision`) no longer
+  starts a daemon thread and opens a fresh TLS connection per event. Rows are
+  queued (bounded, 1,000 entries) for a single lazily-started background
+  thread that sends them over one reused keep-alive `http.client`
+  connection, reconnecting on error and honouring `HTTPS_PROXY`. Callers
+  never block: when the queue is full the row is dropped and counted
+  (`artzain.cloud.dropped_cloud_events()`). `flush_cloud_events(timeout_sec)`
+  now waits for the queue to drain; the `atexit` flush is unchanged.
+
+### Fixed
+
+- `artzain gui`: the API-key bootstrap now surfaces the platform's MFA
+  challenge. `POST /api/auth/token` returns `mfa_required` instead of a
+  session for accounts with two-factor authentication enabled; the local
+  client previously treated that as a failed exchange and showed a false
+  "No API key found" message. It now explains that the key alone cannot open
+  a session on a 2FA account and points at the hosted dashboard.
+
+- Destructive-action guard: the `fs.rm_rf_root` rule matched its `/`, `~`
+  and `$HOME` targets as prefixes, so any absolute path (`rm -rf
+  /tmp/build-cache`, `rm -rf ~/.cache/pip`) was rated CRITICAL as a root
+  wipe. The target is now anchored to a shell separator or end of input;
+  such paths fall through to `fs.rm_rf_generic` (HIGH). `rm -rf /`,
+  `rm -rf ~`, `rm -rf $HOME`, `rm -rf / ;`, `rm -rf /*` and `rm -rf *`
+  are still CRITICAL.
+
+- Tool-call contract: `inspect_tool_call` no longer raises `RecursionError`
+  on a deeply nested payload (e.g. a 50,000-deep array). The depth and
+  key-count walks are iterative, the JSON decoder's recursion failure is
+  caught at both parse sites, and any remaining recursion failure in the
+  inspection path is reported as a `high` (fail-closed) finding.
+
+- Destructive-action guard: the secret redactor in match excerpts only
+  rebuilt `key=value` secrets, so a `key: value` secret (`password: ...`,
+  `token: ...`) came back unredacted in kill records and the audit log. The
+  key name and separator are now kept and the value is redacted for both
+  forms.
+
+- Policy enforcement: the approval escape is now bounded. An approval
+  marker (`approved by`, `per policy`, ...) only suppresses a match when
+  it occurs within `PolicyEnforcementConfig.approval_window_chars`
+  (default 160) of the matched span, so a trailing `per policy` no longer
+  switches every approval-gated rule off for the whole text. Suppressed
+  matches are recorded in `PolicyEnforcementReport.suppressed` (findings
+  flagged `suppressed_by_approval_marker` with the `approval_marker`) and
+  as `suppressed_rule_ids` on the policy-enforcement audit row.
+
 ## 0.6.9
 
 ### Fixed

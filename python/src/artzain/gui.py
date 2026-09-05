@@ -11,6 +11,11 @@ including SSE-streamed conversation responses.
 If a ``COGNEXUS_API_KEY`` is present the user goes directly into the chat —
 no login form required.  The proxy exchanges the key for a short-lived JWT via
 ``POST /api/auth/token`` and serves it to the browser via ``GET /gui/bootstrap``.
+Accounts with two-factor authentication enabled get an MFA challenge from that
+exchange instead of a token; the GUI then shows the login form with a notice
+saying why the key did not sign the user in, rather than pretending no key was
+configured. The local client has no authenticator step, so those users sign in
+on the hosted dashboard.
 
 Prompt-defence screening is run locally (via the SDK) before every outbound
 message.  Results appear as inline warnings in the chat thread.
@@ -35,6 +40,8 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from artzain.cloud import _sdk_headers
+
 _HOP_BY_HOP = frozenset(
     {
         "connection",
@@ -47,11 +54,6 @@ _HOP_BY_HOP = frozenset(
         "upgrade",
         "host",
     }
-)
-
-_DEFAULT_BROWSER_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1000,6 +1002,7 @@ _GUI_HTML_TEMPLATE = """\
 
   async function boot() {
     // 1. Try API-key bootstrap (no login needed)
+    let mfaNotice = '';
     try {
       const res = await fetch('/gui/bootstrap');
       if (res.ok) {
@@ -1009,6 +1012,9 @@ _GUI_HTML_TEMPLATE = """\
           showChat(d.display_name || d.email || '');
           await ensureConversation(); return;
         }
+        // The key was accepted but the account has TOTP enabled: the
+        // platform issued an MFA challenge instead of a session.
+        if (d.mfa_required) mfaNotice = d.error || 'Two-factor authentication required \u2014 please sign in.';
       }
     } catch {}
 
@@ -1028,8 +1034,9 @@ _GUI_HTML_TEMPLATE = """\
     }
 
     // 3. Fall back to login form
-    bootSub.textContent = 'No API key found \u2014 please sign in.';
-    setTimeout(showLogin, 600);
+    bootSub.textContent = mfaNotice ? 'Two-factor authentication required \u2014 please sign in.'
+                                    : 'No API key found \u2014 please sign in.';
+    setTimeout(() => { showLogin(); if (mfaNotice) loginError.textContent = mfaNotice; }, 600);
   }
 
   boot();
@@ -1050,35 +1057,37 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
-def _try_bootstrap(upstream: str, api_key: str) -> dict[str, str] | None:
+#: Shown when ``/api/auth/token`` answers with an MFA challenge instead of a
+#: session. The API key is a single factor and the local GUI has no
+#: authenticator-code step, so the user is pointed at the hosted dashboard.
+_MFA_BOOTSTRAP_ERROR = (
+    "This account has two-factor authentication enabled, so the API key alone "
+    "cannot open a session. Artzain Chat (local) cannot complete the "
+    "authenticator step; use the hosted dashboard to sign in."
+)
+
+
+def _try_bootstrap(upstream: str, api_key: str) -> dict[str, Any] | None:
     """Exchange *api_key* for a JWT via ``POST /api/auth/token``.
 
-    Returns ``{token, email, display_name}`` or *None* on failure.
+    Returns ``{token, email, display_name}``, or ``{token: None,
+    mfa_required: True, error}`` when the account has TOTP enabled and the
+    platform answered with an MFA challenge (the pending ``mfa_token`` is
+    dropped: nothing local can complete it), or *None* on failure.
     """
-    parts  = urllib.parse.urlsplit(upstream)
-    origin = f"{parts.scheme}://{parts.netloc}"
-    url    = upstream.rstrip("/") + "/api/auth/token"
-    req    = urllib.request.Request(
-        url,
-        data=b"{}",
-        headers={
-            "X-Api-Key":       api_key,
-            "Content-Type":    "application/json",
-            "Accept":          "application/json",
-            "User-Agent":      _DEFAULT_BROWSER_UA,
-            "Origin":          origin,
-            "Referer":         origin + "/",
-            "Sec-Fetch-Dest":  "empty",
-            "Sec-Fetch-Mode":  "cors",
-            "Sec-Fetch-Site":  "same-origin",
-        },
-        method="POST",
-    )
+    upstream = upstream.rstrip("/")
+    url      = upstream + "/api/auth/token"
+    headers  = _sdk_headers(url=upstream)
+    headers["X-Api-Key"]    = api_key
+    headers["Content-Type"] = "application/json"
+    req      = urllib.request.Request(url, data=b"{}", headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode())
             if data.get("token"):
                 return data
+            if data.get("mfa_required"):
+                return {"token": None, "mfa_required": True, "error": _MFA_BOOTSTRAP_ERROR}
     except Exception:  # noqa: BLE001
         pass
     return None
@@ -1108,8 +1117,6 @@ def _screen_message(content: str) -> dict[str, Any]:
 def _make_handler(base_url: str, html_bytes: bytes, api_key: str) -> type[BaseHTTPRequestHandler]:
     """Return a request-handler class closed over the server configuration."""
     upstream = base_url.rstrip("/")
-    parts    = urllib.parse.urlsplit(upstream)
-    origin   = f"{parts.scheme}://{parts.netloc}"
 
     # Cached bootstrap result shared across all handler instances.
     _cache: dict[str, Any] = {}
@@ -1146,20 +1153,10 @@ def _make_handler(base_url: str, html_bytes: bytes, api_key: str) -> type[BaseHT
         def _proxy(self, method: str, body: bytes | None = None) -> None:
             url = upstream + self.path
 
-            fwd: dict[str, str] = {
-                # Forward the browser UA so the upstream WAF accepts the request.
-                "User-Agent": (
-                    self.headers.get("user-agent") or _DEFAULT_BROWSER_UA
-                ),
-                # Rewrite Origin/Referer from localhost → upstream domain.
-                "Origin":          origin,
-                "Referer":         origin + "/",
-                "Sec-Fetch-Dest":  "empty",
-                "Sec-Fetch-Mode":  "cors",
-                "Sec-Fetch-Site":  "same-origin",
-                "Accept-Language": (self.headers.get("accept-language") or "en-US,en;q=0.9"),
-            }
-            for hdr in ("authorization", "content-type", "accept", "x-request-id"):
+            # Origin/Referer are rewritten from localhost to the upstream domain;
+            # the browser's own UA is forwarded while the WAF still needs it.
+            fwd = _sdk_headers(url=upstream, browser_user_agent=self.headers.get("user-agent"))
+            for hdr in ("authorization", "content-type", "accept", "x-request-id", "accept-language"):
                 v = self.headers.get(hdr)
                 if v:
                     fwd[hdr] = v
@@ -1212,9 +1209,13 @@ def _make_handler(base_url: str, html_bytes: bytes, api_key: str) -> type[BaseHT
                 return
 
             result = _try_bootstrap(upstream, api_key)
-            if result:
+            if result and result.get("token"):
                 _cache["bootstrap"]    = result
                 _cache["bootstrap_ts"] = time.time()
+                self._serve_json(200, result)
+            elif result:
+                # MFA challenge: not cached, so enabling/disabling TOTP on the
+                # dashboard takes effect on the next reload.
                 self._serve_json(200, result)
             else:
                 self._serve_json(200, {"token": None, "error": "Could not exchange API key for session token."})

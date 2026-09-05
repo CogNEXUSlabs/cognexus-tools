@@ -1,4 +1,4 @@
-export { configure, hasApiKey } from "./config.js";
+export { configure, credentialsPath, hasApiKey, readProfile } from "./config.js";
 export { DecisionError } from "./errors.js";
 export { decide } from "./decide.js";
 export type {

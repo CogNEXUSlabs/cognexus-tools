@@ -124,6 +124,12 @@ class PolicyEnforcementFinding:
     severity: str
     matched_pattern: str
     summary: str
+    #: True when an approval marker near the match suppressed this finding.
+    #: Suppressed findings live in ``PolicyEnforcementReport.suppressed`` and
+    #: never count toward ``violation_count``.
+    suppressed_by_approval_marker: bool = False
+    #: The configured marker that triggered the suppression (lower-case).
+    approval_marker: str = ""
 
 
 @dataclass
@@ -132,6 +138,8 @@ class PolicyEnforcementReport:
     findings: list[PolicyEnforcementFinding]
     rules_checked: int
     text_hash: str = ""
+    #: Matches skipped by the approval escape, kept for the audit trail.
+    suppressed: list[PolicyEnforcementFinding] = field(default_factory=list)
 
     @property
     def has_violations(self) -> bool:
@@ -153,6 +161,10 @@ class PolicyEnforcementConfig:
         "compliance approval",
         "per policy",
     )
+    #: An approval marker only suppresses a match when it occurs within this
+    #: many characters before or after the matched span. A marker elsewhere in
+    #: the text (e.g. a trailing "per policy") no longer switches the rule off.
+    approval_window_chars: int = 160
 
 
 # ---------------------------------------------------------------------------
@@ -444,30 +456,35 @@ class PolicyEnforcementEvaluator:
                 rules_checked=len(rules) if rules else 0,
                 text_hash=hashlib.sha256((text or "").encode()).hexdigest()[:16],
             )
-        lower = text.lower()
-        has_approval = any(
-            m in lower for m in self.config.approval_markers
-        )
         findings: list[PolicyEnforcementFinding] = []
+        suppressed: list[PolicyEnforcementFinding] = []
         for rule in rules:
+            escapable = (
+                self.config.require_approval_escape
+                and "approval" in rule.summary.lower()
+            )
             for pat in rule.compiled_patterns():
-                if pat.search(text):
-                    if (
-                        self.config.require_approval_escape
-                        and has_approval
-                        and "approval" in rule.summary.lower()
-                    ):
-                        continue
-                    findings.append(
-                        PolicyEnforcementFinding(
-                            rule_id=rule.rule_id,
-                            rule_title=rule.title,
-                            category=rule.category,
-                            severity=rule.severity,
-                            matched_pattern=pat.pattern[:120],
-                            summary=rule.summary,
-                        )
+                m = pat.search(text)
+                if m:
+                    marker = (
+                        self._approval_marker_near(text, m.start(), m.end())
+                        if escapable
+                        else None
                     )
+                    finding = PolicyEnforcementFinding(
+                        rule_id=rule.rule_id,
+                        rule_title=rule.title,
+                        category=rule.category,
+                        severity=rule.severity,
+                        matched_pattern=pat.pattern[:120],
+                        summary=rule.summary,
+                    )
+                    if marker is not None:
+                        finding.suppressed_by_approval_marker = True
+                        finding.approval_marker = marker
+                        suppressed.append(finding)
+                        continue
+                    findings.append(finding)
                     break
         conduct = evaluate_conduct(text)
         if conduct:
@@ -481,7 +498,25 @@ class PolicyEnforcementEvaluator:
             findings=findings,
             rules_checked=len(rules) + len(builtin_conduct_rules()),
             text_hash=hashlib.sha256(text.encode()).hexdigest()[:16],
+            suppressed=suppressed,
         )
+
+    def _approval_marker_near(
+        self, text: str, start: int, end: int
+    ) -> Optional[str]:
+        """Return the approval marker found within the window around a match.
+
+        The window is ``approval_window_chars`` before ``start`` and after
+        ``end``; a non-positive window means the marker must overlap the match.
+        """
+        window = max(0, int(self.config.approval_window_chars))
+        lo = max(0, start - window)
+        hi = min(len(text), end + window)
+        nearby = text[lo:hi].lower()
+        for marker in self.config.approval_markers:
+            if marker and marker.lower() in nearby:
+                return marker.lower()
+        return None
 
     def should_block(self, report: PolicyEnforcementReport) -> bool:
         if not report.has_violations:

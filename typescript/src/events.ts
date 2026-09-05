@@ -12,6 +12,8 @@ export interface SdkEventOptions {
   title?: string;
   level?: "info" | "warn" | "error";
   payload?: Record<string, unknown>;
+  /** Request timeout in milliseconds. Default 10000. */
+  timeoutMs?: number;
   fetchImpl?: FetchLike;
 }
 
@@ -21,6 +23,8 @@ export async function postSdkEvent(options: SdkEventOptions): Promise<boolean> {
   const fetchImpl: FetchLike =
     options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
   if (!fetchImpl) return false;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 10_000);
   try {
     const resp = await fetchImpl(`${effectiveBaseUrl()}/api/events`, {
       method: "POST",
@@ -31,9 +35,12 @@ export async function postSdkEvent(options: SdkEventOptions): Promise<boolean> {
         level: options.level ?? "info",
         payload: options.payload ?? {},
       }),
+      signal: controller.signal,
     });
     return resp.ok;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timer);
   }
 }

@@ -31,6 +31,7 @@ if (decision.outcome === "allow") {
 |---|---|
 | `configure({ apiKey, baseUrl })` | explicit, wins |
 | `COGNEXUS_API_KEY` (or `MYAPP_API_KEY`) | API key from Account → API Keys |
+| `~/.artzain/credentials.toml` | Profile written by `artzain login` (Python CLI); read after the env vars on Node 20.16+ / 22.3+. `COGNEXUS_CREDENTIALS_PATH` overrides the path. |
 | `COGNEXUS_API_BASE_URL` | your deployment (default `https://app.cognexuslabs.ai`) |
 
 ## Surface

@@ -12,6 +12,7 @@ import {
   fallbackRequestId,
   routeHttpDecision,
 } from "../../decision.js";
+import { DEFAULT_TIMEOUT_MS, fetchWithTimeout, resolveTimeoutMs } from "../../timeout.js";
 
 export class ArtzainDecision implements INodeType {
   description: INodeTypeDescription = {
@@ -75,6 +76,14 @@ export class ArtzainDecision implements INodeType {
         description:
           "Idempotency key (max 64). The server replays a prior decision for the same key for 48 h. Empty derives n8n-<executionId>-<item>, unique per execution.",
       },
+      {
+        displayName: "Timeout (ms)",
+        name: "timeoutMs",
+        type: "number",
+        default: DEFAULT_TIMEOUT_MS,
+        description:
+          "Abort the Decision API request after this many milliseconds. A timed-out item fails closed onto Deny.",
+      },
     ],
   };
 
@@ -102,6 +111,9 @@ export class ArtzainDecision implements INodeType {
         const agentDid = String(this.getNodeParameter("agentDid", i, "n8n-order-bot"));
         const requestIdRaw = String(this.getNodeParameter("requestId", i, ""));
         const requestId = requestIdRaw || fallbackRequestId(executionId, i);
+        const timeoutMs = resolveTimeoutMs(
+          this.getNodeParameter("timeoutMs", i, DEFAULT_TIMEOUT_MS),
+        );
         const body = buildDecisionBody({
           agentDid,
           action,
@@ -110,14 +122,18 @@ export class ArtzainDecision implements INodeType {
           payloadKind,
           requestId,
         });
-        const resp = await fetch(decisionsUrl(baseUrl), {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Api-Key": apiKey,
+        const resp = await fetchWithTimeout(
+          decisionsUrl(baseUrl),
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Api-Key": apiKey,
+            },
+            body: JSON.stringify(body),
           },
-          body: JSON.stringify(body),
-        });
+          timeoutMs,
+        );
         let parsed: unknown;
         try {
           parsed = await resp.json();

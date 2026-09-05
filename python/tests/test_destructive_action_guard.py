@@ -65,13 +65,37 @@ class GuardClassificationTests(unittest.TestCase):
         self.assertEqual(result.severity, ActionSeverity.CRITICAL)
 
     def test_rm_rf_root_is_critical(self) -> None:
-        result = self.guard.screen("rm -rf /")
-        self.assertEqual(result.severity, ActionSeverity.CRITICAL)
+        for cmd in (
+            "rm -rf /",
+            "rm -rf ~",
+            "rm -rf $HOME",
+            "rm -rf / ;",
+            "rm -rf /*",
+            "rm -rf *",
+            "rm -rf --no-preserve-root /",
+        ):
+            with self.subTest(cmd=cmd):
+                result = self.guard.screen(cmd)
+                self.assertEqual(result.severity, ActionSeverity.CRITICAL)
+                self.assertIn("fs.rm_rf_root", [m.rule_id for m in result.matches])
 
     def test_rm_rf_path_is_high(self) -> None:
-        result = self.guard.screen("rm -rf /tmp/build_artifacts/")
-        self.assertIn(result.severity, (ActionSeverity.HIGH, ActionSeverity.CRITICAL))
-        self.assertTrue(result.is_destructive)
+        # Generic rm -rf <path> is HIGH; only the / ~ $HOME -targeted variants
+        # are CRITICAL. An absolute path must not be read as a prefix match
+        # on "/" (that would rate every build-cache cleanup as a root wipe).
+        for cmd in (
+            "rm -rf /tmp/build-cache",
+            "rm -rf /tmp/build_artifacts/",
+            "rm -rf ~/.cache/pip",
+            "rm -rf $HOME/.cache",
+        ):
+            with self.subTest(cmd=cmd):
+                result = self.guard.screen(cmd)
+                self.assertEqual(result.severity, ActionSeverity.HIGH)
+                self.assertTrue(result.is_destructive)
+                rule_ids = [m.rule_id for m in result.matches]
+                self.assertNotIn("fs.rm_rf_root", rule_ids)
+                self.assertIn("fs.rm_rf_generic", rule_ids)
 
     def test_dd_to_disk_is_critical(self) -> None:
         result = self.guard.screen("dd if=/dev/zero of=/dev/sda bs=1M")
@@ -184,6 +208,44 @@ class NoWhereLookaheadTests(unittest.TestCase):
         started = time.perf_counter()
         self.assertIn("sql.update_no_where", self._sql_rules(body))
         self.assertLess(time.perf_counter() - started, 2.0)
+
+
+class ExcerptRedactionTests(unittest.TestCase):
+    """Secrets near a match must be redacted whatever separator they use.
+
+    Before open-items §9.25 the redactor rebuilt the replacement by splitting
+    on ``=``, so a ``key: value`` secret came back untouched and leaked into
+    kill records, ``user_events`` and the JSONL audit log.
+    """
+
+    def setUp(self) -> None:
+        reset_guard()
+        self.guard = DestructiveActionGuard()
+
+    def _excerpt(self, text: str) -> str:
+        matches = self.guard.screen(text).matches
+        self.assertTrue(matches, f"expected a destructive match in {text!r}")
+        return matches[0].excerpt
+
+    def test_equals_form_is_still_redacted(self) -> None:
+        excerpt = self._excerpt("DROP DATABASE prod; api_key=sk-live-0123456789")
+        self.assertNotIn("sk-live-0123456789", excerpt)
+        self.assertIn("api_key=[REDACTED]", excerpt)
+
+    def test_colon_form_is_redacted(self) -> None:
+        excerpt = self._excerpt("DROP DATABASE prod; password: hunter2hunter2")
+        self.assertNotIn("hunter2hunter2", excerpt)
+        self.assertIn("password: [REDACTED]", excerpt)
+
+    def test_key_name_and_separator_are_preserved(self) -> None:
+        excerpt = self._excerpt("DROP DATABASE prod; token : abcdefghijklmnop")
+        self.assertNotIn("abcdefghijklmnop", excerpt)
+        self.assertIn("token : [REDACTED]", excerpt)
+
+    def test_non_secret_text_is_untouched(self) -> None:
+        excerpt = self._excerpt("DROP DATABASE prod; -- owner: alice")
+        self.assertNotIn("[REDACTED]", excerpt)
+        self.assertIn("-- owner: alice", excerpt)
 
 
 if __name__ == "__main__":  # pragma: no cover

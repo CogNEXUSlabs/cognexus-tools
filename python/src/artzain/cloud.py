@@ -12,20 +12,29 @@ Environment variables
     Fallback secret name (same semantics as ``COGNEXUS_API_KEY``).
 ``COGNEXUS_API_BASE_URL``
     API origin, e.g. ``https://app.cognexuslabs.ai`` — **no trailing slash required**.
+``COGNEXUS_SDK_BROWSER_HEADERS``
+    ``"1"`` (default for now) makes the CLI and GUI send browser-like headers
+    so the CDN/WAF lets them through; ``"0"`` sends the honest
+    ``artzain-python-sdk/<ver>`` identity. See :func:`_sdk_headers`.
 """
 
 from __future__ import annotations
 
 import atexit
+import base64
+import http.client
 import json
 import logging
 import os
 import platform
+import queue
 import sys
 import threading
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
-from typing import Any, Callable, Optional
+from typing import Any, NamedTuple, Optional
 
 _log = logging.getLogger("artzain.cloud")
 
@@ -34,9 +43,11 @@ _override_base: Optional[str] = None
 _session_lock = threading.Lock()
 _session_logged = False
 _session_user_prompt: Optional[str] = None
-_pending_cloud_threads: list[threading.Thread] = []
-_pending_cloud_lock = threading.Lock()
 _atexit_registered = False
+
+#: Upper bound on telemetry rows waiting for the background sender. When the
+#: queue is full new rows are dropped (and counted) so callers never block.
+_QUEUE_MAXSIZE = 1000
 
 _MISSING = object()
 
@@ -144,11 +155,83 @@ def _sdk_user_agent() -> str:
     return f"artzain-python-sdk/{_package_version()}"
 
 
-def _api_request_headers(api_key: Optional[str] = None) -> dict[str, str]:
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": _sdk_user_agent(),
+#: Policy switch for :func:`_sdk_headers`. ``"1"`` (current default) keeps the
+#: CLI/GUI on the browser-like header set the CDN/WAF still requires; ``"0"``
+#: sends the honest SDK identity. Follow-up: once the CDN allowlists the
+#: ``artzain-python-sdk/`` User-Agent (docs/runbooks/supply-chain.md, "CDN /
+#: WAF allowlist"), flip :data:`_BROWSER_HEADERS_DEFAULT` to ``"0"`` and drop
+#: the browser-like branch in a later release.
+_BROWSER_HEADERS_ENV = "COGNEXUS_SDK_BROWSER_HEADERS"
+_BROWSER_HEADERS_DEFAULT = "1"
+
+# Cloudflare (and similar) may block ``Python-urllib/…`` or a non-browser TLS
+# fingerprint *before* requests reach FastAPI. This mimics a desktop Chrome
+# fetch; override with COGNEXUS_CLI_USER_AGENT if your edge still challenges
+# the client.
+_BROWSER_LIKE_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+
+
+def _browser_headers_enabled() -> bool:
+    """True when ``COGNEXUS_SDK_BROWSER_HEADERS`` (default ``"1"``) is on."""
+    raw = (os.environ.get(_BROWSER_HEADERS_ENV) or _BROWSER_HEADERS_DEFAULT).strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _sdk_headers(
+    *,
+    url: str = "",
+    browser_like: Optional[bool] = None,
+    browser_user_agent: Optional[str] = None,
+) -> dict[str, str]:
+    """Base headers for an outbound request to the dashboard API.
+
+    The single place that knows both header sets:
+
+    * honest (``browser_like=False``): ``Accept`` plus the identifiable
+      ``artzain-python-sdk/<ver>`` User-Agent that CDN/WAF allowlists match on;
+    * browser-like (``browser_like=True``): a desktop-Chrome User-Agent,
+      ``Accept-Language`` and, when *url* is given, ``Origin``/``Referer`` and
+      the ``Sec-Fetch-*`` metadata of a same-origin browser ``fetch``. This is
+      what the edge currently requires for ``/api/auth/*`` and the GUI proxy.
+
+    ``browser_like=None`` (the default) follows :func:`_browser_headers_enabled`,
+    i.e. env ``COGNEXUS_SDK_BROWSER_HEADERS``, whose default is ``"1"`` today so
+    CLI/GUI behaviour is unchanged. Once the CDN allowlists the SDK User-Agent,
+    flip :data:`_BROWSER_HEADERS_DEFAULT` to ``"0"``.
+
+    *browser_user_agent* (the GUI proxy's real browser UA) replaces the
+    synthetic one in browser-like mode and is ignored in honest mode.
+    ``COGNEXUS_CLI_USER_AGENT`` overrides the User-Agent in either mode.
+    """
+    if browser_like is None:
+        browser_like = _browser_headers_enabled()
+    override = (os.environ.get("COGNEXUS_CLI_USER_AGENT") or "").strip()
+    if not browser_like:
+        return {
+            "Accept": "application/json",
+            "User-Agent": override or _sdk_user_agent(),
+        }
+    h: dict[str, str] = {
+        "User-Agent": override or browser_user_agent or _BROWSER_LIKE_UA,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
     }
+    parts = urllib.parse.urlsplit(url) if url else None
+    if parts and parts.scheme and parts.netloc:
+        origin = f"{parts.scheme}://{parts.netloc}"
+        h["Origin"] = origin
+        h["Referer"] = origin + "/"
+        h["Sec-Fetch-Dest"] = "empty"
+        h["Sec-Fetch-Mode"] = "cors"
+        h["Sec-Fetch-Site"] = "same-origin"
+    return h
+
+
+def _api_request_headers(api_key: Optional[str] = None) -> dict[str, str]:
+    headers = _sdk_headers(browser_like=False)
     if api_key:
         headers["X-Api-Key"] = api_key
     return headers
@@ -360,53 +443,226 @@ def _register_cloud_atexit() -> None:
     atexit.register(flush_cloud_events)
 
 
-def _start_cloud_thread(fn: Callable[[], None]) -> None:
-    """Run *fn* on a background thread and track it for :func:`flush_cloud_events`."""
-    thread_box: list[threading.Thread | None] = [None]
+class _QueuedPost(NamedTuple):
+    """One telemetry POST waiting for the background sender."""
 
-    def _run() -> None:
+    op: str
+    label: str
+    url: str
+    body: bytes
+    headers: dict[str, str]
+    timeout_sec: float
+
+
+class _CloudTransport:
+    """One keep-alive ``http.client`` connection reused across telemetry POSTs.
+
+    The connection is opened lazily, kept for the next request, and closed on
+    any socket / protocol error so the following request reconnects. A request
+    that fails on a *reused* connection (a keep-alive the server has since
+    dropped) is retried once on a fresh one.
+    """
+
+    def __init__(self) -> None:
+        self._conn: Any = None
+        self._conn_key: Optional[tuple[str, str, Optional[int], float]] = None
+
+    def close(self) -> None:
+        conn, self._conn, self._conn_key = self._conn, None, None
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _open(scheme: str, host: str, port: Optional[int], timeout_sec: float) -> Any:
+        if scheme == "https":
+            proxy = urllib.request.getproxies().get("https")
+            if proxy and not urllib.request.proxy_bypass(host):
+                pp = urllib.parse.urlsplit(proxy)
+                conn = http.client.HTTPSConnection(
+                    pp.hostname or proxy, pp.port, timeout=timeout_sec
+                )
+                tunnel_headers: dict[str, str] = {}
+                if pp.username is not None:
+                    cred = urllib.parse.unquote(pp.username)
+                    if pp.password is not None:
+                        cred += ":" + urllib.parse.unquote(pp.password)
+                    token = base64.b64encode(cred.encode("utf-8")).decode("ascii")
+                    tunnel_headers["Proxy-Authorization"] = "Basic " + token
+                conn.set_tunnel(host, port, headers=tunnel_headers)
+                return conn
+            return http.client.HTTPSConnection(host, port, timeout=timeout_sec)
+        return http.client.HTTPConnection(host, port, timeout=timeout_sec)
+
+    def post(
+        self, url: str, body: bytes, headers: dict[str, str], timeout_sec: float
+    ) -> tuple[int, bytes]:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname or ""
+        key = (parts.scheme, host, parts.port, float(timeout_sec))
+        path = parts.path or "/"
+        if parts.query:
+            path += "?" + parts.query
+        for attempt in (1, 2):
+            reused = self._conn is not None and self._conn_key == key
+            if not reused:
+                self.close()
+                self._conn = self._open(parts.scheme, host, parts.port, timeout_sec)
+                self._conn_key = key
+            try:
+                self._conn.request("POST", path, body=body, headers=headers)
+                resp = self._conn.getresponse()
+                data = resp.read()
+                return int(resp.status), data
+            except (http.client.HTTPException, OSError):
+                self.close()
+                if attempt == 2 or not reused:
+                    raise
+        raise RuntimeError("unreachable")  # pragma: no cover
+
+
+class _CloudWorker:
+    """Single daemon thread draining a bounded queue of telemetry POSTs.
+
+    ``enqueue`` never blocks: a full queue drops the row and bumps ``dropped``.
+    The thread is started lazily on first use and sends every row over one
+    :class:`_CloudTransport`, so a burst of events costs one thread and one
+    TLS connection rather than one of each per event.
+    """
+
+    def __init__(self, maxsize: int = _QUEUE_MAXSIZE) -> None:
+        self._queue: queue.Queue[Optional[_QueuedPost]] = queue.Queue(maxsize=maxsize)
+        self._transport = _CloudTransport()
+        self._idle = threading.Condition()
+        self._pending = 0
+        self._thread: Optional[threading.Thread] = None
+        self.dropped = 0
+
+    def enqueue(self, item: _QueuedPost) -> bool:
+        with self._idle:
+            self._pending += 1
         try:
-            fn()
-        finally:
-            t = thread_box[0]
-            if t is not None:
-                with _pending_cloud_lock:
-                    try:
-                        _pending_cloud_threads.remove(t)
-                    except ValueError:
-                        pass
+            self._queue.put_nowait(item)
+        except queue.Full:
+            with self._idle:
+                self._pending -= 1
+                self.dropped += 1
+                n = self.dropped
+                if self._pending == 0:
+                    self._idle.notify_all()
+            if n == 1 or n % max(1, self._queue.maxsize) == 0:
+                _log.warning(
+                    "cloud: telemetry queue full (%d) — dropped %s %s (%d dropped so far)",
+                    self._queue.maxsize,
+                    item.op,
+                    item.label,
+                    n,
+                )
+            return False
+        self._ensure_thread()
+        return True
 
-    t = threading.Thread(target=_run, daemon=True)
-    thread_box[0] = t
-    with _pending_cloud_lock:
-        _pending_cloud_threads.append(t)
-    _register_cloud_atexit()
-    t.start()
+    def _ensure_thread(self) -> None:
+        _register_cloud_atexit()
+        with self._idle:
+            t = self._thread
+            if t is not None and t.is_alive():
+                return
+            t = threading.Thread(target=self._run, name="artzain-cloud", daemon=True)
+            self._thread = t
+            t.start()
+
+    def _run(self) -> None:
+        while True:
+            item = self._queue.get()
+            if item is None:
+                self._transport.close()
+                return
+            try:
+                _deliver_post(self._transport, item)
+            except Exception as exc:  # pragma: no cover - _deliver_post logs its own
+                _log.warning("cloud: %s %s failed: %s", item.op, item.label, exc)
+            finally:
+                with self._idle:
+                    self._pending -= 1
+                    if self._pending == 0:
+                        self._idle.notify_all()
+
+    def flush(self, timeout_sec: float = 10.0) -> bool:
+        """Wait until every queued row has been sent (or *timeout_sec* passes)."""
+        deadline = time.monotonic() + max(0.0, float(timeout_sec))
+        with self._idle:
+            while self._pending > 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._idle.wait(remaining)
+        return True
+
+    def close(self, timeout_sec: float = 10.0) -> None:
+        """Drain, then stop the worker thread (tests / interpreter shutdown)."""
+        self.flush(timeout_sec)
+        with self._idle:
+            t = self._thread
+            self._thread = None
+        if t is not None and t.is_alive():
+            self._queue.put(None)
+            t.join(timeout=max(0.1, float(timeout_sec)))
+
+
+_worker = _CloudWorker()
+
+
+def _enqueue_post(item: _QueuedPost) -> bool:
+    """Hand one POST to the background worker (patched by tests to run inline)."""
+    return _worker.enqueue(item)
+
+
+def _deliver_post(transport: _CloudTransport, item: _QueuedPost) -> None:
+    """Send one queued POST; log failures, never raise."""
+    try:
+        status, body = transport.post(item.url, item.body, item.headers, item.timeout_sec)
+    except Exception as exc:
+        _log.warning("cloud: %s %s failed: %s", item.op, item.label, exc)
+        return
+    if status >= 400:
+        _log_http_status(item.op, item.label, status, body)
+
+
+def dropped_cloud_events() -> int:
+    """Number of telemetry rows dropped because the send queue was full."""
+    return _worker.dropped
 
 
 def flush_cloud_events(timeout_sec: float = 10.0) -> None:
-    """Wait for in-flight cloud POST threads (CLI demos, quickstart scripts).
+    """Wait for queued cloud POSTs to be sent (CLI demos, quickstart scripts).
 
-    ``post_sdk_event`` is fire-and-forget on a daemon thread so application
-    servers are not blocked.  Short-lived processes must flush (or rely on the
-    registered ``atexit`` hook) or events may never reach the dashboard.
+    ``post_sdk_event`` is fire-and-forget: rows are queued for a single
+    background daemon thread so application servers are not blocked.
+    Short-lived processes must flush (or rely on the registered ``atexit``
+    hook) or events may never reach the dashboard.
     """
-    with _pending_cloud_lock:
-        threads = list(_pending_cloud_threads)
-    if not threads:
-        return
-    per_thread = max(0.1, float(timeout_sec) / len(threads))
-    for t in threads:
-        t.join(timeout=per_thread)
+    _worker.flush(timeout_sec)
 
 
 def _log_http_error(op: str, event_type: str, exc: urllib.error.HTTPError) -> None:
-    body = ""
+    body = b""
     try:
-        body = exc.read().decode("utf-8", errors="replace")[:240]
+        body = exc.read()
     except Exception:
         pass
-    if exc.code == 403 and ("1010" in body or "cloudflare" in body.lower()):
+    _log_http_status(op, event_type, exc.code, body)
+
+
+def _log_http_status(op: str, event_type: str, code: int, raw: bytes) -> None:
+    body = ""
+    try:
+        body = raw.decode("utf-8", errors="replace")[:240]
+    except Exception:
+        pass
+    if code == 403 and ("1010" in body or "cloudflare" in body.lower()):
         _log.warning(
             "cloud: %s %s failed HTTP 403 (CDN/WAF — use a current artzain package "
             "or allow User-Agent %r on /api/events)",
@@ -415,7 +671,7 @@ def _log_http_error(op: str, event_type: str, exc: urllib.error.HTTPError) -> No
             _sdk_user_agent(),
         )
         return
-    if exc.code == 401:
+    if code == 401:
         _log.warning(
             "cloud: %s %s failed HTTP 401 — invalid or revoked API key for %s",
             op,
@@ -423,7 +679,7 @@ def _log_http_error(op: str, event_type: str, exc: urllib.error.HTTPError) -> No
             _effective_base(),
         )
         return
-    _log.warning("cloud: %s %s failed HTTP %s %s", op, event_type, exc.code, body)
+    _log.warning("cloud: %s %s failed HTTP %s %s", op, event_type, code, body)
 
 
 def ensure_sdk_session_logged() -> None:
@@ -534,10 +790,11 @@ def post_sdk_event(
     timeout_sec: float = 5.0,
     _skip_session_hook: bool = False,
 ) -> None:
-    """POST one row to ``/api/events`` (fire-and-forget thread).
+    """POST one row to ``/api/events`` (fire-and-forget via the background worker).
 
     Never raises to callers. Logs at DEBUG when skipped (no key); WARNING when
-    the HTTP round-trip fails after a key was present.
+    the HTTP round-trip fails after a key was present, or when the bounded send
+    queue is full and the row is dropped (see :func:`dropped_cloud_events`).
 
     ``tokens_in`` / ``tokens_out`` attribute LLM token spend to this decision so
     it appears on the dashboard Leaderboard and Token-to-Outcome analytics. They
@@ -577,25 +834,21 @@ def post_sdk_event(
         "level": level,
         "title": title,
     }
-
-    def _run() -> None:
-        url = _effective_base() + "/api/events"
-        data = json.dumps(body_obj, ensure_ascii=False).encode("utf-8")
-        headers = _api_request_headers(key)
-        headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(url, data=data, method="POST", headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-                if resp.status >= 400:
-                    _log.warning(
-                        "cloud: event POST %s returned HTTP %s", event_type, resp.status
-                    )
-        except urllib.error.HTTPError as exc:
-            _log_http_error("event POST", event_type, exc)
-        except Exception as exc:
-            _log.warning("cloud: event POST %s failed: %s", event_type, exc)
-
-    _start_cloud_thread(_run)
+    headers = _api_request_headers(key)
+    headers["Content-Type"] = "application/json"
+    try:
+        _enqueue_post(
+            _QueuedPost(
+                op="event POST",
+                label=event_type,
+                url=_effective_base() + "/api/events",
+                body=json.dumps(body_obj, ensure_ascii=False).encode("utf-8"),
+                headers=headers,
+                timeout_sec=float(timeout_sec),
+            )
+        )
+    except Exception as exc:
+        _log.warning("cloud: event POST %s failed: %s", event_type, exc)
 
 
 def post_policy_human_decision(
@@ -626,25 +879,21 @@ def post_policy_human_decision(
         "surface": (surface or "pypi_sdk_review").strip()[:200] or "pypi_sdk_review",
         "notes": (notes or "").strip()[:2000],
     }
-
-    def _run() -> None:
-        url = _effective_base() + "/api/policy-decisions"
-        data = json.dumps(body_obj, ensure_ascii=False).encode("utf-8")
-        headers = _api_request_headers(key)
-        headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(url, data=data, method="POST", headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-                if resp.status >= 400:
-                    _log.warning(
-                        "cloud: policy decision POST returned HTTP %s", resp.status
-                    )
-        except urllib.error.HTTPError as exc:
-            _log_http_error("policy decision POST", verdict, exc)
-        except Exception as exc:
-            _log.warning("cloud: policy decision POST failed: %s", exc)
-
-    _start_cloud_thread(_run)
+    headers = _api_request_headers(key)
+    headers["Content-Type"] = "application/json"
+    try:
+        _enqueue_post(
+            _QueuedPost(
+                op="policy decision POST",
+                label=v,
+                url=_effective_base() + "/api/policy-decisions",
+                body=json.dumps(body_obj, ensure_ascii=False).encode("utf-8"),
+                headers=headers,
+                timeout_sec=float(timeout_sec),
+            )
+        )
+    except Exception as exc:
+        _log.warning("cloud: policy decision POST failed: %s", exc)
 
 
 def fetch_client_policy_rules(
@@ -683,6 +932,7 @@ def fetch_client_policy_rules(
 __all__ = [
     "announce_cloud_ingest",
     "configure",
+    "dropped_cloud_events",
     "ensure_sdk_session_logged",
     "fetch_api_key_identity",
     "fetch_client_policy_rules",

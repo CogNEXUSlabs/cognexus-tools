@@ -12,6 +12,8 @@ export interface ApiKeyIdentity {
 }
 
 export async function fetchApiKeyIdentity(options?: {
+  /** Request timeout in milliseconds. Default 10000. */
+  timeoutMs?: number;
   fetchImpl?: FetchLike;
 }): Promise<ApiKeyIdentity> {
   const apiKey = effectiveApiKey();
@@ -20,11 +22,21 @@ export async function fetchApiKeyIdentity(options?: {
   }
   const fetchImpl: FetchLike =
     options?.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
-  const resp = await fetchImpl(`${effectiveBaseUrl()}/api/api-keys/me`, {
-    method: "GET",
-    headers: { "X-Api-Key": apiKey },
-    body: undefined as unknown as string,
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options?.timeoutMs ?? 10_000);
+  let resp: Awaited<ReturnType<FetchLike>>;
+  try {
+    resp = await fetchImpl(`${effectiveBaseUrl()}/api/api-keys/me`, {
+      method: "GET",
+      headers: { "X-Api-Key": apiKey },
+      body: undefined as unknown as string,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    throw new DecisionError(`Key validation unreachable: ${(err as Error).message}`);
+  } finally {
+    clearTimeout(timer);
+  }
   if (!resp.ok) {
     throw new DecisionError(`Key validation failed (HTTP ${resp.status}).`, {
       status: resp.status,

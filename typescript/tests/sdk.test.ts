@@ -8,7 +8,11 @@ import {
   hasApiKey,
   postSdkEvent,
 } from "../src/index.js";
-import { _resetConfigForTests, effectiveBaseUrl } from "../src/config.js";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { _resetConfigForTests, effectiveBaseUrl, readProfile } from "../src/config.js";
 import type { FetchLike } from "../src/decide.js";
 
 const ALLOW = {
@@ -46,6 +50,53 @@ afterEach(() => {
   delete process.env.COGNEXUS_API_KEY;
   delete process.env.MYAPP_API_KEY;
   delete process.env.COGNEXUS_API_BASE_URL;
+  delete process.env.COGNEXUS_CREDENTIALS_PATH;
+});
+
+function writeProfile(body: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "artzain-creds-"));
+  const path = join(dir, "credentials.toml");
+  writeFileSync(path, body, "utf8");
+  return path;
+}
+
+describe("credentials profile (§9.54)", () => {
+  it("is read after the env vars, the way the Python SDK does it", () => {
+    process.env.COGNEXUS_CREDENTIALS_PATH = writeProfile(
+      [
+        "# CogNEXUS CLI credentials — do not commit",
+        "[default]",
+        'api_key = "cnx_profile_key"',
+        'base_url = "https://engine.example.com/"',
+        'email = "someone@example.com"',
+      ].join("\n") + "\n",
+    );
+    expect(readProfile()).toEqual({
+      api_key: "cnx_profile_key",
+      base_url: "https://engine.example.com/",
+      email: "someone@example.com",
+    });
+    expect(hasApiKey()).toBe(true);
+    expect(effectiveBaseUrl()).toBe("https://engine.example.com");
+
+    process.env.COGNEXUS_API_KEY = "env-cnx";
+    process.env.COGNEXUS_API_BASE_URL = "https://env.example.com";
+    expect(effectiveBaseUrl()).toBe("https://env.example.com");
+    configure({ apiKey: "explicit", baseUrl: "https://explicit.example.com" });
+    expect(effectiveBaseUrl()).toBe("https://explicit.example.com");
+  });
+
+  it("ignores a missing file, a foreign table and malformed lines", () => {
+    process.env.COGNEXUS_CREDENTIALS_PATH = join(tmpdir(), "artzain-does-not-exist", "c.toml");
+    expect(readProfile()).toEqual({});
+    expect(hasApiKey()).toBe(false);
+
+    process.env.COGNEXUS_CREDENTIALS_PATH = writeProfile(
+      ["[other]", 'api_key = "not-default"', "garbage line", "[default]", "api_key = ''"].join("\n"),
+    );
+    expect(readProfile()).toEqual({ api_key: "" });
+    expect(hasApiKey()).toBe(false);
+  });
 });
 
 describe("config", () => {
