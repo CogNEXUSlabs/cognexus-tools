@@ -159,7 +159,7 @@ def _safe_base_for_log(base: str) -> str:
         parts = urllib.parse.urlsplit(value)
         hostname = parts.hostname or ""
         if not hostname:
-            return value
+            return "redacted"
         netloc = hostname
         if parts.port is not None:
             netloc = f"{netloc}:{parts.port}"
