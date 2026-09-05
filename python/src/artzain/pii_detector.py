@@ -34,8 +34,11 @@ Usage
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Dict
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "BULK_EMAIL_THRESHOLD",
@@ -241,7 +244,7 @@ def scan_text(text: str) -> Dict[str, int]:
         if contains_likely_secrets(text):
             counts["secrets"] = 1
     except Exception:  # noqa: BLE001 - secrets check is best-effort
-        pass
+        logger.debug("secrets check skipped", exc_info=True)
 
     return counts
 

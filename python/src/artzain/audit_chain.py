@@ -131,7 +131,7 @@ class MerkleAuditChain:
                     d = json.loads(sp.read_text(encoding="utf-8"))
                     return _ChainState(seq=int(d["seq"]), tip_hash=str(d["tip_hash"]))
                 except Exception:
-                    pass
+                    _log.debug("chain state file %s unreadable; rebuilding from the log", sp, exc_info=True)
         except OSError:
             pass
 
@@ -150,7 +150,7 @@ class MerkleAuditChain:
                         tip = hashlib.sha256(last_line.encode("utf-8")).hexdigest()
                         return _ChainState(seq=seq, tip_hash=tip)
                 except Exception:
-                    pass
+                    _log.debug("audit log %s unreadable; starting a fresh chain", self._path, exc_info=True)
         except OSError:
             pass
 

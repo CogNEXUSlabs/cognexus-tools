@@ -15,6 +15,18 @@ describe("envelopeCompletionsUrl", () => {
       "/api/v1/decisions",
     );
   });
+
+  it("strips every trailing slash without backtracking (§9.85)", () => {
+    expect(envelopeCompletionsUrl("https://engine.example.com///")).toBe(
+      "https://engine.example.com/api/v1/envelope/v1/chat/completions",
+    );
+    // Quadratic on the old /\/+$/ trim; linear now.
+    const started = performance.now();
+    expect(envelopeCompletionsUrl(`${"/".repeat(50_000)}x`)).toBe(
+      `${"/".repeat(50_000)}x/api/v1/envelope/v1/chat/completions`,
+    );
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
 });
 
 describe("envelopeFailedClosed", () => {

@@ -2,6 +2,23 @@
 
 All notable changes to `@cognexuslabs/n8n-nodes-artzain`.
 
+## 0.1.4
+
+### Changed
+
+- **README: the Request ID section now describes the fallback as the code
+  builds it** — the `requestId` parameter is read first, the execution id
+  comes from n8n's `getExecutionId()`, a random UUID stands in when n8n
+  exposes none (or an empty one), and the result is cut to the server's
+  64-character cap. Documentation only; no node behaviour changed.
+
+### Fixed
+
+- The base-URL trailing-slash trim in both nodes (`decisionsUrl`,
+  `envelopeCompletionsUrl`) scans instead of using `/\/+$/`, which
+  backtracked quadratically on a value made up mostly of slashes — the same
+  fix the TypeScript SDK's `config.ts` carries. Shared in `base-url.ts`.
+
 ## 0.1.3
 
 ### Fixed
@@ -27,3 +44,18 @@ All notable changes to `@cognexuslabs/n8n-nodes-artzain`.
   `n8n-<executionId>-<item>` (a random UUID stands in when n8n exposes no
   execution id), capped at the server's 64-character limit. Set Request ID
   explicitly to a business key when replay across retries is what you want.
+
+## 0.1.1
+
+Published 2026-08-27. Version-only: the first release through npm Trusted
+Publishing (OIDC, Sigstore provenance), which also exercised the `n8n-v*`
+path of the mirror's publish workflow. No code change.
+
+## 0.1.0
+
+Published 2026-08-23 (bootstrap publish by hand; npm binds a trusted
+publisher only to a package that already exists). First release: the
+**CogNEXUS Decision** node (allow / review / deny outputs; anything but HTTP
+200 with a known outcome routes to Deny — fail closed; `review` is a stop
+branch, not a Wait node) and the **CogNEXUS Envelope** node (OpenAI-shaped
+chat completions through the CogNEXUS envelope proxy, Bearer envelope key).

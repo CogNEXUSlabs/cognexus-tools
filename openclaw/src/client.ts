@@ -4,13 +4,26 @@
  * Keep the request shape in lockstep with ``sdk/typescript/src/decide.ts``
  * (POST /api/v1/decisions, X-Api-Key, payload_kind=tool_call). Missing key
  * and HTTP 503 throw DecisionError — callers fail closed.
+ *
+ * The plugin has no runtime dependency on ``@cognexuslabs/artzain`` on
+ * purpose: it is installed from a git checkout (``openclaw plugins install
+ * ./sdk/openclaw``) and loaded from ``src/index.ts`` with no install step,
+ * ships zero runtime dependencies, and is released from its own tag on the
+ * mirror with no ordering against the SDK's. So the shared pieces are copied
+ * verbatim from ``sdk/typescript/src/{errors,decide}.ts`` between the
+ * ``lockstep:begin`` / ``lockstep:end`` markers, and ``lockstep.test.ts``
+ * fails when a copy drifts from its source.
  */
 
 export const DEFAULT_BASE_URL = "https://app.cognexuslabs.ai";
 export const DECIDE_TIMEOUT_MS = 12_000;
 
+// lockstep:begin DecisionError
+/** Raised when the Decision API cannot return a decision. */
 export class DecisionError extends Error {
+  /** HTTP status when the server answered; undefined on transport failure. */
   readonly status?: number;
+  /** Parsed `detail` from the server's error body, when present. */
   readonly detail?: unknown;
 
   constructor(message: string, options?: { status?: number; detail?: unknown }) {
@@ -20,12 +33,26 @@ export class DecisionError extends Error {
     this.detail = options?.detail;
   }
 }
+// lockstep:end DecisionError
 
+// lockstep:begin decision-types
 export type DecisionOutcome = "allow" | "deny" | "review";
+
+export interface AgentVote {
+  agent: string;
+  verdict: string;
+  score?: number | null;
+  reason?: string | null;
+}
 
 export interface DecisionResponse {
   outcome: DecisionOutcome;
   decision_id: string;
+  audit_block_id: string;
+  contributing_agents: AgentVote[];
+  policy_bundle_version: string;
+  resolution_policy: string;
+  latency_ms: number;
   reasons: string[];
 }
 
@@ -34,14 +61,16 @@ export type FetchLike = (
   init: {
     method: string;
     headers: Record<string, string>;
-    body: string;
+    body?: string;
     signal?: AbortSignal;
   },
 ) => Promise<{
   ok: boolean;
   status: number;
   json(): Promise<unknown>;
+  text(): Promise<string>;
 }>;
+// lockstep:end decision-types
 
 export interface PostDecisionOptions {
   apiKey: string;
@@ -56,7 +85,11 @@ export interface PostDecisionOptions {
 }
 
 function trimBase(url: string): string {
-  return url.replace(/\/+$/, "");
+  // Scanned rather than trimmed with /\/+$/, which backtracks quadratically
+  // on a value made up mostly of slashes (same loop as the SDK's config.ts).
+  let end = url.length;
+  while (end > 0 && url.charCodeAt(end - 1) === 47) end--;
+  return url.slice(0, end);
 }
 
 export function resolveApiKey(pluginKey?: string): string | undefined {
@@ -120,6 +153,7 @@ export async function postDecision(
     clearTimeout(timer);
   }
 
+  // lockstep:begin decision-response
   if (!resp.ok) {
     let detail: unknown;
     try {
@@ -127,6 +161,7 @@ export async function postDecision(
     } catch {
       detail = undefined;
     }
+    // Typed engine refusals (fail-closed): kill_switch_active / audit_unavailable.
     const detailText =
       typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : "";
     throw new DecisionError(
@@ -134,5 +169,17 @@ export async function postDecision(
       { status: resp.status, detail },
     );
   }
-  return (await resp.json()) as DecisionResponse;
+  let parsed: unknown;
+  try {
+    parsed = await resp.json();
+  } catch (err) {
+    // A 2xx that is not JSON (a proxy or captive portal answering HTML)
+    // surfaced as a bare SyntaxError, outside the DecisionError contract.
+    throw new DecisionError(
+      `Decision API returned HTTP ${resp.status} with a non-JSON body: ${(err as Error).message}`,
+      { status: resp.status },
+    );
+  }
+  return parsed as DecisionResponse;
+  // lockstep:end decision-response
 }

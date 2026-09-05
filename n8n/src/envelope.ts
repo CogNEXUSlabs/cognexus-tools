@@ -1,7 +1,9 @@
 /** Envelope pattern B — OpenAI-shaped chat completions via CogNEXUS. */
 
+import { trimTrailingSlashes } from "./base-url.js";
+
 export function envelopeCompletionsUrl(baseUrl: string): string {
-  return `${baseUrl.replace(/\/+$/, "")}/api/v1/envelope/v1/chat/completions`;
+  return `${trimTrailingSlashes(baseUrl)}/api/v1/envelope/v1/chat/completions`;
 }
 
 export function envelopeFailedClosed(status: number): boolean {

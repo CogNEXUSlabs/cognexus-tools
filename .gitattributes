@@ -1,0 +1,9 @@
+# cognexus-tools is derived byte-for-byte from the engine tree, which is LF.
+# Normalise on commit so a seed run from a Windows checkout cannot commit CRLF
+# (it broke the OpenClaw lockstep test and the mirror sync check once).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary

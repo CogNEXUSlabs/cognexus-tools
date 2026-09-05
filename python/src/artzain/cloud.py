@@ -146,8 +146,28 @@ def _effective_base() -> str:
         if prof:
             return prof
     except Exception:
-        pass
+        _log.debug("credentials profile unavailable; using the default base URL", exc_info=True)
     return "https://app.cognexuslabs.ai"
+
+
+def _base_url_source() -> str:
+    """Which setting decided ``_effective_base()`` — a label, never the value.
+
+    Log lines use this instead of the URL itself: the profile that can carry
+    ``base_url`` is the same file that carries the API key, and a log entry
+    must not be built from anything read out of it.
+    """
+    if _override_base:
+        return "configure(base_url=...)"
+    if (os.environ.get("COGNEXUS_API_BASE_URL") or "").strip():
+        return "COGNEXUS_API_BASE_URL"
+    try:
+        from artzain.credentials import profile_base_url
+        if profile_base_url():
+            return "credentials profile"
+    except Exception:
+        _log.debug("credentials profile unavailable while naming the base URL source", exc_info=True)
+    return "default"
 
 
 def _sdk_user_agent() -> str:
@@ -155,14 +175,14 @@ def _sdk_user_agent() -> str:
     return f"artzain-python-sdk/{_package_version()}"
 
 
-#: Policy switch for :func:`_sdk_headers`. ``"1"`` (current default) keeps the
-#: CLI/GUI on the browser-like header set the CDN/WAF still requires; ``"0"``
-#: sends the honest SDK identity. Follow-up: once the CDN allowlists the
-#: ``artzain-python-sdk/`` User-Agent (docs/runbooks/supply-chain.md, "CDN /
-#: WAF allowlist"), flip :data:`_BROWSER_HEADERS_DEFAULT` to ``"0"`` and drop
-#: the browser-like branch in a later release.
+#: Policy switch for :func:`_sdk_headers`. ``"0"`` (the default since 0.6.11,
+#: after the CDN allowlisted the ``artzain-python-sdk/`` User-Agent on
+#: ``/api/*``; docs/runbooks/supply-chain.md, "CDN / WAF allowlist") sends the
+#: honest SDK identity. ``"1"`` keeps the browser-like header set for an edge
+#: that still challenges non-browser clients; that branch and this switch are
+#: scheduled for removal in a later release.
 _BROWSER_HEADERS_ENV = "COGNEXUS_SDK_BROWSER_HEADERS"
-_BROWSER_HEADERS_DEFAULT = "1"
+_BROWSER_HEADERS_DEFAULT = "0"
 
 # Cloudflare (and similar) may block ``Python-urllib/…`` or a non-browser TLS
 # fingerprint *before* requests reach FastAPI. This mimics a desktop Chrome
@@ -175,7 +195,7 @@ _BROWSER_LIKE_UA = (
 
 
 def _browser_headers_enabled() -> bool:
-    """True when ``COGNEXUS_SDK_BROWSER_HEADERS`` (default ``"1"``) is on."""
+    """True when ``COGNEXUS_SDK_BROWSER_HEADERS`` (default ``"0"``) is on."""
     raw = (os.environ.get(_BROWSER_HEADERS_ENV) or _BROWSER_HEADERS_DEFAULT).strip().lower()
     return raw not in {"0", "false", "no", "off"}
 
@@ -198,9 +218,10 @@ def _sdk_headers(
       what the edge currently requires for ``/api/auth/*`` and the GUI proxy.
 
     ``browser_like=None`` (the default) follows :func:`_browser_headers_enabled`,
-    i.e. env ``COGNEXUS_SDK_BROWSER_HEADERS``, whose default is ``"1"`` today so
-    CLI/GUI behaviour is unchanged. Once the CDN allowlists the SDK User-Agent,
-    flip :data:`_BROWSER_HEADERS_DEFAULT` to ``"0"``.
+    i.e. env ``COGNEXUS_SDK_BROWSER_HEADERS``, whose default is ``"0"`` since
+    0.6.11: the CDN allowlists the SDK User-Agent on ``/api/*``, so the CLI and
+    GUI identify honestly. Set the variable to ``"1"`` only for an edge that
+    still challenges non-browser clients.
 
     *browser_user_agent* (the GUI proxy's real browser UA) replaces the
     synthetic one in browser-like mode and is ignored in honest mode.
@@ -285,7 +306,7 @@ def _probe_api_key_via_events(*, timeout_sec: float = 8.0) -> dict[str, Any]:
             if isinstance(parsed, dict) and parsed.get("detail"):
                 detail = str(parsed["detail"])
         except Exception:
-            pass
+            _log.debug("HTTP %s error body is not JSON", exc.code, exc_info=True)
         if exc.code == 401:
             err = detail or "invalid_or_revoked"
         elif exc.code == 403:
@@ -343,7 +364,7 @@ def fetch_api_key_identity(*, timeout_sec: float = 8.0) -> dict[str, Any]:
             if isinstance(parsed, dict) and parsed.get("detail"):
                 detail = str(parsed["detail"])
         except Exception:
-            pass
+            _log.debug("HTTP %s error body is not JSON", exc.code, exc_info=True)
         if exc.code == 401:
             err = detail or "invalid_or_revoked"
         elif exc.code == 403:
@@ -473,7 +494,7 @@ class _CloudTransport:
             try:
                 conn.close()
             except Exception:
-                pass
+                _log.debug("closing the pooled connection failed", exc_info=True)
 
     @staticmethod
     def _open(scheme: str, host: str, port: Optional[int], timeout_sec: float) -> Any:
@@ -652,7 +673,7 @@ def _log_http_error(op: str, event_type: str, exc: urllib.error.HTTPError) -> No
     try:
         body = exc.read()
     except Exception:
-        pass
+        _log.debug("cloud: %s %s HTTP %s body unreadable", op, event_type, exc.code, exc_info=True)
     _log_http_status(op, event_type, exc.code, body)
 
 
@@ -661,7 +682,7 @@ def _log_http_status(op: str, event_type: str, code: int, raw: bytes) -> None:
     try:
         body = raw.decode("utf-8", errors="replace")[:240]
     except Exception:
-        pass
+        _log.debug("cloud: %s %s HTTP %s body undecodable", op, event_type, code, exc_info=True)
     if code == 403 and ("1010" in body or "cloudflare" in body.lower()):
         _log.warning(
             "cloud: %s %s failed HTTP 403 (CDN/WAF — use a current artzain package "
@@ -673,10 +694,11 @@ def _log_http_status(op: str, event_type: str, code: int, raw: bytes) -> None:
         return
     if code == 401:
         _log.warning(
-            "cloud: %s %s failed HTTP 401 — invalid or revoked API key for %s",
+            "cloud: %s %s failed HTTP 401 — invalid or revoked API key "
+            "(base URL from %s)",
             op,
             event_type,
-            _effective_base(),
+            _base_url_source(),
         )
         return
     _log.warning("cloud: %s %s failed HTTP %s %s", op, event_type, code, body)

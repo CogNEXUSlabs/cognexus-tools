@@ -30,6 +30,7 @@ Usage::
 from __future__ import annotations
 
 import json
+import logging
 import socket
 import threading
 import time
@@ -41,6 +42,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from artzain.cloud import _sdk_headers
+
+_log = logging.getLogger("artzain.gui")
 
 _HOP_BY_HOP = frozenset(
     {
@@ -1089,7 +1092,7 @@ def _try_bootstrap(upstream: str, api_key: str) -> dict[str, Any] | None:
             if data.get("mfa_required"):
                 return {"token": None, "mfa_required": True, "error": _MFA_BOOTSTRAP_ERROR}
     except Exception:  # noqa: BLE001
-        pass
+        _log.debug("token bootstrap against %s failed", url, exc_info=True)
     return None
 
 
