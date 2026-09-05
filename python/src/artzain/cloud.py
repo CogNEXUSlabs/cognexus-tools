@@ -150,6 +150,24 @@ def _effective_base() -> str:
     return "https://app.cognexuslabs.ai"
 
 
+def _safe_base_for_log(base: str) -> str:
+    """Return a log-safe base URL with any embedded credentials removed."""
+    value = (base or "").strip()
+    if not value:
+        return value
+    try:
+        parts = urllib.parse.urlsplit(value)
+        hostname = parts.hostname or ""
+        if not hostname:
+            return value
+        netloc = hostname
+        if parts.port is not None:
+            netloc = f"{netloc}:{parts.port}"
+        return urllib.parse.urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    except Exception:
+        return "redacted"
+
+
 def _sdk_user_agent() -> str:
     """Identifiable client for CDN/WAF allowlists (Cloudflare blocks bare urllib)."""
     return f"artzain-python-sdk/{_package_version()}"
@@ -677,7 +695,7 @@ def _log_http_status(op: str, event_type: str, code: int, raw: bytes) -> None:
             "cloud: %s %s failed HTTP 401 — invalid or revoked API key for %s",
             op,
             event_type,
-            _effective_base(),
+            _safe_base_for_log(_effective_base()),
         )
         return
     _log.warning("cloud: %s %s failed HTTP %s %s", op, event_type, code, body)
