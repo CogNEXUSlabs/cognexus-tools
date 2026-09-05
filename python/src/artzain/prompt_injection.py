@@ -751,8 +751,12 @@ class PromptInjectionDetector:
                             f"base64_payload:{keyword}",
                         ))
                         break
-            except Exception:
-                pass  # Not valid base64 — skip
+            except ValueError:
+                # Not valid base64 (binascii.Error is a ValueError) — skip.
+                # The candidate is ASCII by construction (_BASE64_PATTERN)
+                # and decode() runs with errors="ignore", so nothing else
+                # can be raised here.
+                pass
 
         return findings
 

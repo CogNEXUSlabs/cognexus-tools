@@ -29,7 +29,6 @@ export async function fetchApiKeyIdentity(options?: {
     resp = await fetchImpl(`${effectiveBaseUrl()}/api/api-keys/me`, {
       method: "GET",
       headers: { "X-Api-Key": apiKey },
-      body: undefined as unknown as string,
       signal: controller.signal,
     });
   } catch (err) {
@@ -42,5 +41,14 @@ export async function fetchApiKeyIdentity(options?: {
       status: resp.status,
     });
   }
-  return (await resp.json()) as ApiKeyIdentity;
+  let parsed: unknown;
+  try {
+    parsed = await resp.json();
+  } catch (err) {
+    throw new DecisionError(
+      `Key validation returned HTTP ${resp.status} with a non-JSON body: ${(err as Error).message}`,
+      { status: resp.status },
+    );
+  }
+  return parsed as ApiKeyIdentity;
 }

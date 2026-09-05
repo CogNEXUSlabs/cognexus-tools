@@ -1,6 +1,3 @@
-# Copyright (c) Microsoft Corporation.
-# Licensed under the MIT License.
-#
 """Client-specific policy enforcement from organizational documents.
 
 Complements :mod:`artzain.prompt_defense` (OWASP-aligned *generic* system-prompt
@@ -17,6 +14,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from functools import cached_property
 from typing import Any, Optional, Sequence
 
 # ---------------------------------------------------------------------------
@@ -79,7 +77,11 @@ class ClientPolicyRule:
     violation_patterns: tuple[str, ...] = ()
     severity: str = "medium"
 
-    def compiled_patterns(self) -> tuple[re.Pattern[str], ...]:
+    @cached_property
+    def _compiled(self) -> tuple[re.Pattern[str], ...]:
+        # Compiled once per rule instance (the dataclass is frozen, but
+        # ``cached_property`` writes straight to ``__dict__``); invalid
+        # patterns are skipped exactly as before.
         out: list[re.Pattern[str]] = []
         for raw in self.violation_patterns:
             try:
@@ -87,6 +89,9 @@ class ClientPolicyRule:
             except re.error:
                 continue
         return tuple(out)
+
+    def compiled_patterns(self) -> tuple[re.Pattern[str], ...]:
+        return self._compiled
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -319,14 +324,11 @@ def rules_from_context_items(
     for it in items:
         subject = str(it.get("subject") or "(untitled)")
         snippet = str(it.get("snippet") or "")
-        md = it.get("metadata") if isinstance(it.get("metadata"), dict) else {}
-        link = md.get("web_link") or md.get("url") or ""
-        ref = subject if not link else f"{subject}"
         batch = extract_rules_from_document(
             subject=subject,
             body=snippet,
             agent=agent,
-            source_ref=ref,
+            source_ref=subject,
             max_rules=max_rules_per_doc,
         )
         all_rules.extend(batch)

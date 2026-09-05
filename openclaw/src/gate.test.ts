@@ -8,6 +8,17 @@ function fakeFetch(status: number, body: unknown): FetchLike {
     ok: status >= 200 && status < 300,
     status,
     json: async () => body,
+    text: async () => JSON.stringify(body),
+  });
+}
+
+/** A 2xx whose body is not JSON — `json()` rejects the way undici's does. */
+function htmlFetch(status: number): FetchLike {
+  return async () => ({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => JSON.parse("<!doctype html>"),
+    text: async () => "<!doctype html>",
   });
 }
 
@@ -56,5 +67,17 @@ describe("handleBeforeToolCall", () => {
     const missing = await handleBeforeToolCall(EVENT, {});
     expect(missing?.block).toBe(true);
     expect(missing?.blockReason).toContain("No API key");
+  });
+
+  it("fails closed on a non-JSON 2xx, through the DecisionError branch (§9.85)", async () => {
+    const html = await handleBeforeToolCall(
+      EVENT,
+      { pluginConfig: { apiKey: "k", baseUrl: "https://e.example" } },
+      htmlFetch(200),
+    );
+    expect(html?.block).toBe(true);
+    expect(html?.blockReason).toContain("failing closed");
+    expect(html?.blockReason).toContain("HTTP 200");
+    expect(html?.blockReason).toContain("non-JSON");
   });
 });

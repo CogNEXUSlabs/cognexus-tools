@@ -15,6 +15,18 @@ describe("decisionsUrl", () => {
     );
     expect(decisionsUrl("https://app.cognexuslabs.ai/")).not.toContain("envelope");
   });
+
+  it("strips every trailing slash without backtracking (§9.85)", () => {
+    expect(decisionsUrl("https://engine.example.com///")).toBe(
+      "https://engine.example.com/api/v1/decisions",
+    );
+    // Quadratic on the old /\/+$/ trim; linear now.
+    const started = performance.now();
+    expect(decisionsUrl(`${"/".repeat(50_000)}x`)).toBe(
+      `${"/".repeat(50_000)}x/api/v1/decisions`,
+    );
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
 });
 
 describe("buildDecisionBody", () => {

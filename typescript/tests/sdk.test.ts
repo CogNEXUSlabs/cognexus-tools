@@ -45,6 +45,19 @@ function fakeFetch(
   };
 }
 
+/** A 2xx whose body is not JSON — `json()` rejects the way undici's does. */
+function htmlFetch(status: number, capture?: { init?: unknown }): FetchLike {
+  return async (_url, init) => {
+    if (capture) capture.init = init;
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => JSON.parse("<!doctype html>"),
+      text: async () => "<!doctype html>",
+    };
+  };
+}
+
 afterEach(() => {
   _resetConfigForTests();
   delete process.env.COGNEXUS_API_KEY;
@@ -200,6 +213,19 @@ describe("decide", () => {
     expect(err).toBeInstanceOf(DecisionError);
     expect(err.message).toContain("unreachable");
   });
+
+  it("wraps a non-JSON 2xx body in DecisionError (§9.85)", async () => {
+    configure({ apiKey: "cnx_test" });
+    // A proxy or captive portal answering 200 text/html: resp.json() rejects
+    // with a SyntaxError, which callers filtering on DecisionError never saw.
+    const err = await decide({ action: "a", target: "t", payload: "p", fetchImpl: htmlFetch(200) })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(DecisionError);
+    expect(err.status).toBe(200);
+    expect(err.detail).toBeUndefined();
+    expect(err.message).toContain("HTTP 200");
+    expect(err.message).toContain("non-JSON");
+  });
 });
 
 describe("postSdkEvent", () => {
@@ -232,5 +258,17 @@ describe("fetchApiKeyIdentity", () => {
     const err = await fetchApiKeyIdentity({ fetchImpl: fakeFetch(401, {}) }).catch((e) => e);
     expect(err).toBeInstanceOf(DecisionError);
     expect(err.status).toBe(401);
+  });
+
+  it("sends a GET with no body key, and wraps a non-JSON 2xx (§9.85)", async () => {
+    configure({ apiKey: "cnx_test" });
+    const capture: { init?: unknown } = {};
+    const err = await fetchApiKeyIdentity({ fetchImpl: htmlFetch(200, capture) }).catch((e) => e);
+    expect(err).toBeInstanceOf(DecisionError);
+    expect(err.status).toBe(200);
+    expect(err.message).toContain("non-JSON");
+    // `body: undefined as unknown as string` used to leave an explicit
+    // undefined body on the init; a GET simply has none.
+    expect(Object.prototype.hasOwnProperty.call(capture.init, "body")).toBe(false);
   });
 });

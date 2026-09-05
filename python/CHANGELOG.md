@@ -1,5 +1,82 @@
 # Changelog
 
+## 0.6.11
+
+### Changed
+
+- `cloud`: the HTTP 401 warning names where the base URL came from
+  (`configure(base_url=...)`, `COGNEXUS_API_BASE_URL`, the credentials
+  profile, or the default) instead of printing the URL. The profile that can
+  hold `base_url` is the file that holds the API key, so nothing read from it
+  belongs in a log line.
+
+- The package version has one home: `artzain.__version__` in
+  `src/artzain/__init__.py`. `pyproject.toml` now declares `version`
+  dynamic and hatchling reads it from that file, so the wheel metadata
+  and `__version__` cannot disagree. Release tooling (the bump script,
+  the tag-matches-version check, the drift guard) reads the same file.
+
+- The CLI and GUI now identify honestly as `artzain-python-sdk/<version>`
+  by default: `COGNEXUS_SDK_BROWSER_HEADERS` defaults to `0` now that the
+  CDN allowlists that User-Agent on `/api/*` (verified 5 Sep 2026: an
+  honest login attempt gets the application's 401, a generic client gets
+  the edge's 403). Set the variable to `1` only for an edge that still
+  challenges non-browser clients; the browser-like branch and the switch
+  are scheduled for removal in a later release.
+
+- `policy_enforcement.ClientPolicyRule` compiles its `violation_patterns`
+  once per rule instance instead of on every
+  `PolicyEnforcementEvaluator.evaluate` call. Up to 80 rules x 6 patterns
+  previously relied on the stdlib `re` cache (512 entries) and were
+  recompiled on every screen once it was evicted. Public fields,
+  `to_dict()` output, and match results are unchanged.
+
+- Exception hygiene across the SDK: every `raise SystemExit(...)` inside an
+  `except` block in the CLI now chains the original error (`from exc`), and
+  16 `try/except: pass` sites (CLI, GUI, `cloud`, `decide`, `audit_chain`,
+  `_helpers`, `pii_detector`) now log the swallowed error at DEBUG on the
+  module's `artzain.*` logger instead of dropping it silently; the
+  seventeenth, `prompt_injection`'s base64 probe, catches `ValueError` only
+  (the only thing `b64decode` can raise there). No new
+  exception escapes and no default output changes. Ruff rules `B904` and
+  `S110` are now part of the package's lint gate.
+
+- `policy_enforcement`: `rules_from_context_items` no longer reads
+  `metadata.web_link` / `metadata.url` — the value was never used (both
+  branches produced the subject) and the source ref is the document
+  subject, as before. The module header no longer carries the third-party
+  notice of the vendored modules; it is CogNEXUS-original code.
+
+- `run_quickstart_demo` docstring points at `scripts/artzain_harness.py`, the
+  new home of the manual harness that used to sit at the repository root as
+  `test_artzain.py`.
+
+### Fixed
+
+- `artzain.kill_switch.trip` now appends to and counts the auto-panic window
+  under `_global_panic_lock`, and flips the global-panic flag in the same
+  critical section. Concurrent CRITICAL trips could previously raise
+  `RuntimeError: deque mutated during iteration` instead of
+  `AgentKilledError`, and two threads could both trip the global panic. The
+  audit ring, log line and `on_kill` callback still run after the lock is
+  released.
+
+- `prompt_defense`: the five agent-era vectors adopted on 30 Jul 2026
+  (`encoding-injection`, `cross-agent-auth`, `least-agency`,
+  `skill-provenance` at `high`; `transaction-guardrails` at `critical`) now
+  have an explicit entry in `PromptDefenseConfig.severity_map`; they used to
+  fall through to the `"medium"` default. The module text no longer claims
+  "12 attack vectors" — the count is `VECTOR_COUNT` (20).
+
+- `DestructiveActionGuard.screen()` can no longer be padded past: payloads
+  over the 256 KB scan window are now regex-scanned in both a head and a
+  tail window (a match visible from both is reported once), and the
+  truncation itself is reported as a HIGH finding, `input.truncated`
+  (`TRUNCATION_RULE_ID`), whose excerpt names the scanned and total byte
+  counts, so a caller that fails on HIGH cannot be bypassed by 256 KB of
+  filler before a `DROP TABLE`. Inputs within the window return exactly
+  the same results as before.
+
 ## 0.6.10
 
 ### Changed

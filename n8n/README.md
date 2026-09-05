@@ -22,6 +22,16 @@ server-side replay across retries: the server returns the prior decision for
 the same request id for **48 hours** without re-evaluating the payload, so
 never reuse a key for a different customer or amount. Max 64 characters.
 
+How the fallback is built (`fallbackRequestId` in `src/decision.ts`): for
+each item the node reads the **Request ID** parameter (`requestId`); when it
+is empty it calls n8n's `this.getExecutionId()` and sends
+`n8n-<executionId>-<item>` (execution id trimmed, `<item>` the zero-based
+item index). If the running n8n does not expose `getExecutionId`, or it
+returns an empty or blank string, a random UUID stands in for the execution
+id — `n8n-<uuid>-<item>` — so the key is still unique per call. Either way
+the value is cut to the server's cap of 64 characters before it is sent as
+`request_id`.
+
 ## What this is not
 
 - Not a Connectors-panel card named n8n.

@@ -245,7 +245,7 @@ def screen_user_input(
 
         note_session_user_prompt(text)
     except Exception:
-        pass
+        log.debug("cloud session note skipped", exc_info=True)
     _log_detection(log, source=source, result=result, surface="user_input")
     enforcement = (
         "allowed"
