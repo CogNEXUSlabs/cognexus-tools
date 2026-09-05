@@ -15,6 +15,7 @@ from artzain import (
     reset_guard,
     screen_action,
 )
+from artzain.destructive_action_guard import MAX_SCAN_BYTES, TRUNCATION_RULE_ID
 
 
 class GuardClassificationTests(unittest.TestCase):
@@ -246,6 +247,86 @@ class ExcerptRedactionTests(unittest.TestCase):
         excerpt = self._excerpt("DROP DATABASE prod; -- owner: alice")
         self.assertNotIn("[REDACTED]", excerpt)
         self.assertIn("-- owner: alice", excerpt)
+
+
+class ScanWindowTruncationTests(unittest.TestCase):
+    """Oversized payloads must not be able to hide a destructive action.
+
+    Before open-items §9.81 only the first ``MAX_SCAN_BYTES`` of a payload
+    were regex-scanned, so anything after 256 KB of padding reported clean.
+    The guard now scans the head *and* the tail window, and any truncation
+    is itself a HIGH finding so a caller that fails on HIGH cannot be
+    padded past.
+    """
+
+    def setUp(self) -> None:
+        reset_guard()
+        self.guard = DestructiveActionGuard()
+
+    @staticmethod
+    def _padding(nbytes: int) -> str:
+        return "a " * (nbytes // 2)
+
+    def _rule_ids(self, text: str) -> list[str]:
+        return [m.rule_id for m in self.guard.screen(text).matches]
+
+    def test_drop_table_after_300kb_of_padding_is_caught(self) -> None:
+        text = self._padding(300 * 1024) + "DROP TABLE users;"
+        result = self.guard.screen(text)
+        self.assertTrue(result.is_destructive)
+        self.assertEqual(ActionSeverity.CRITICAL, result.severity)
+        self.assertIn("sql.drop_table", [m.rule_id for m in result.matches])
+
+    def test_any_input_over_the_window_carries_a_high_truncation_finding(self) -> None:
+        self.assertEqual("input.truncated", TRUNCATION_RULE_ID)
+        for size in (MAX_SCAN_BYTES + 2, 300 * 1024, 3 * MAX_SCAN_BYTES):
+            with self.subTest(size=size):
+                text = self._padding(size)
+                result = self.guard.screen(text)
+                self.assertTrue(result.is_destructive)
+                self.assertEqual(ActionSeverity.HIGH, result.severity)
+                truncation = [m for m in result.matches if m.rule_id == TRUNCATION_RULE_ID]
+                self.assertEqual(1, len(truncation))
+                self.assertEqual(ActionSeverity.HIGH, truncation[0].severity)
+                total = len(text.encode("utf-8"))
+                scanned = min(total, 2 * MAX_SCAN_BYTES)
+                self.assertIn(str(total), truncation[0].excerpt)
+                self.assertIn(str(scanned), truncation[0].excerpt)
+
+    def test_finding_in_both_windows_is_reported_once(self) -> None:
+        # 300 KB total: the head and tail windows overlap, and the DROP sits
+        # in the overlap, so it is visible from both.
+        text = (
+            self._padding(150 * 1024)
+            + "DROP TABLE users;"
+            + self._padding(150 * 1024)
+        )
+        rule_ids = self._rule_ids(text)
+        self.assertEqual(1, rule_ids.count("sql.drop_table"))
+        self.assertEqual(1, rule_ids.count(TRUNCATION_RULE_ID))
+
+    def test_input_under_the_window_has_no_truncation_finding(self) -> None:
+        clean = self._padding(MAX_SCAN_BYTES)
+        self.assertEqual(MAX_SCAN_BYTES, len(clean.encode("utf-8")))
+        result = self.guard.screen(clean)
+        self.assertFalse(result.is_destructive)
+        self.assertEqual(ActionSeverity.NONE, result.severity)
+        self.assertEqual([], result.matches)
+        self.assertEqual("no destructive action patterns matched", result.explanation)
+
+    def test_input_under_the_window_matches_the_old_results_exactly(self) -> None:
+        stmt = "DROP TABLE users;"
+        text = self._padding(MAX_SCAN_BYTES - len(stmt)) + stmt
+        self.assertLessEqual(len(text.encode("utf-8")), MAX_SCAN_BYTES)
+        result = self.guard.screen(text)
+        self.assertTrue(result.is_destructive)
+        self.assertEqual(ActionSeverity.CRITICAL, result.severity)
+        self.assertEqual(["sql.drop_table"], [m.rule_id for m in result.matches])
+        self.assertEqual(
+            "Destructive action detected: DROP TABLE (critical, rule=sql.drop_table); "
+            "1 pattern(s) matched",
+            result.explanation,
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

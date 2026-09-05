@@ -4,7 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "artzain"
-version = "0.6.10"
+# The version lives in src/artzain/__init__.py (`__version__`) and nowhere
+# else; hatchling reads it from there ([tool.hatch.version] below), as do
+# scripts/check_sdk_version.py and the bump in build-pypi.sh.
+dynamic = ["version"]
 description = "OWASP-aligned LLM prompt defence, runtime destructive-action guard, agent kill switch, and audit logging"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -76,6 +79,9 @@ Source      = "https://github.com/CogNEXUSlabs/cognexus-tools"
 Issues      = "https://github.com/CogNEXUSlabs/cognexus-tools/issues"
 Changelog   = "https://github.com/CogNEXUSlabs/cognexus-tools/releases"
 
+[tool.hatch.version]
+path = "src/artzain/__init__.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/artzain"]
 
@@ -108,7 +114,12 @@ target-version = "py310"
 # unreviewable diff in files that are mirrored byte-for-byte to the public
 # repository (see scripts/check_security_sync.py). Same reasoning as the
 # repository-root ruff.toml.
-select = ["E", "F", "W", "I"]
+#
+# B904 (raise inside except without `from`) and S110 (try/except/pass) were
+# the last two non-`UP` residue rows (open-items 9.87: 7 + 17 findings,
+# 5 Sep 2026). Both fixed and gated; tests/test_ruff_exception_hygiene.py
+# pins them independently of this list.
+select = ["E", "F", "W", "I", "B904", "S110"]
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]

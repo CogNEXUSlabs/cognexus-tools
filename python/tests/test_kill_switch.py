@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import threading
+import time
 import unittest
+from collections import deque
 
+import artzain.kill_switch as kill_switch
 from artzain import (
     AgentKilledError,
     clear_global_panic,
@@ -105,6 +109,64 @@ class KillSwitchTests(unittest.TestCase):
         trip(20, reason="already dead", raise_after_trip=False)
         with self.assertRaises(AgentKilledError):
             screen_agent_action("anything goes", run_id=20)
+
+    def test_auto_panic_window_is_counted_under_the_lock(self) -> None:
+        # Deterministic replay of the race: this deque simulates another
+        # thread appending a CRITICAL trip while the window is being
+        # iterated.  The append only fires when nobody holds
+        # ``_global_panic_lock`` -- i.e. when the count is computed outside
+        # the lock, exactly the bug -- so under the fix the iteration is
+        # never mutated.
+        class _RacingWindow(deque):
+            def __iter__(self):
+                inner = super().__iter__()
+                first = next(inner, None)
+                if first is None:
+                    return
+                yield first
+                if kill_switch._global_panic_lock.acquire(blocking=False):
+                    try:
+                        self.append(time.monotonic())
+                    finally:
+                        kill_switch._global_panic_lock.release()
+                yield from inner
+
+        original = kill_switch._panic_window
+        kill_switch._panic_window = _RacingWindow(maxlen=original.maxlen)
+        try:
+            with self.assertRaises(AgentKilledError):
+                trip(None, reason="first critical")
+            with self.assertRaises(AgentKilledError):
+                trip(None, reason="second critical")
+        finally:
+            kill_switch._panic_window = original
+
+    def test_concurrent_critical_trips_raise_only_agent_killed_error(self) -> None:
+        threshold = kill_switch._PANIC_THRESHOLD
+        n_threads, per_thread = 8, max(2, threshold)
+        unexpected: list[BaseException] = []
+        start = threading.Barrier(n_threads)
+
+        def worker() -> None:
+            start.wait()
+            for _ in range(per_thread):
+                try:
+                    trip(None, reason="concurrent critical")
+                except AgentKilledError:
+                    pass
+                except BaseException as exc:  # noqa: BLE001
+                    unexpected.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(unexpected, [])
+        self.assertTrue(is_killed(1))
+        panics = [r for r in recent_activations(limit=10_000) if r["surface"] == "global_panic"]
+        self.assertEqual(len(panics), 1)
 
 
 class OnKillCallbackTests(unittest.TestCase):

@@ -39,9 +39,10 @@
 #
 """Pre-deployment prompt defense evaluator for AI agent system prompts.
 
-Checks system prompts for missing defenses against 12 attack vectors
-mapped to OWASP LLM Top 10. Pure regex — deterministic, zero LLM cost,
-< 5ms per prompt.
+Checks system prompts for missing defenses against the attack vectors in
+``_RULES`` (``VECTOR_COUNT`` of them), mapped to the OWASP LLM Top 10 and
+the OWASP Agentic Security Initiative (ASI) list. Pure regex —
+deterministic, zero LLM cost, < 5ms per prompt.
 
 Complements runtime prompt injection detection (agent-os) by validating
 that defensive language is present *before* deployment rather than
@@ -79,7 +80,7 @@ def _score_to_grade(score: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Defense rules — 12 attack vectors
+# Defense rules — one _DefenseRule per attack vector; VECTOR_COUNT = len(_RULES)
 # ---------------------------------------------------------------------------
 
 
@@ -550,7 +551,7 @@ class PromptDefenseReport:
     score: int  # 0-100
     defended: int
     total: int
-    coverage: str  # e.g. "4/12"
+    coverage: str  # "<defended>/<total>", total being VECTOR_COUNT
     missing: list[str]
     findings: list[PromptDefenseFinding]
     prompt_hash: str  # SHA-256 of input (audit trail, no raw content stored)
@@ -596,7 +597,7 @@ class PromptDefenseConfig:
     """Configuration for the prompt defense evaluator."""
 
     min_grade: str = "C"
-    vectors: Optional[list[str]] = None  # None = all 12
+    vectors: Optional[list[str]] = None  # None = every vector in _RULES
     severity_map: dict[str, str] = field(
         default_factory=lambda: {
             "role-escape": "high",
@@ -614,6 +615,14 @@ class PromptDefenseConfig:
             "database-destruction": "critical",
             "never-guess-destructive": "critical",
             "kill-switch-awareness": "medium",
+            # Agent-era (OWASP ASI) vectors, adopted 30 Jul 2026. Values
+            # match upstream; a vector missing here would silently fall
+            # back to "medium" in evaluate().
+            "encoding-injection": "high",
+            "cross-agent-auth": "high",
+            "least-agency": "high",
+            "skill-provenance": "high",
+            "transaction-guardrails": "critical",
         }
     )
 
@@ -624,7 +633,7 @@ class PromptDefenseConfig:
 
 
 class PromptDefenseEvaluator:
-    """Evaluates system prompts for missing defenses against 12 attack vectors.
+    """Evaluates system prompts for missing defenses against every rule in ``_RULES``.
 
     This is a **static analysis** tool — it checks whether defensive language
     is present in the prompt text.  It does not test runtime behaviour.

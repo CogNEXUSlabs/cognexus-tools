@@ -1,3 +1,6 @@
+// Copied verbatim into sdk/openclaw/src/client.ts; lockstep.test.ts there
+// fails when the two drift.
+// lockstep:begin DecisionError
 /** Raised when the Decision API cannot return a decision. */
 export class DecisionError extends Error {
   /** HTTP status when the server answered; undefined on transport failure. */
@@ -12,3 +15,4 @@ export class DecisionError extends Error {
     this.detail = options?.detail;
   }
 }
+// lockstep:end DecisionError

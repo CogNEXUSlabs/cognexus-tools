@@ -1,7 +1,7 @@
 name: Publish Python SDK (artzain)
 
 # Publishes artzain to PyPI. Trigger by pushing a tag like python-v0.4.0
-# (must match python/pyproject.toml version), or run manually.
+# (must match python/src/artzain/__init__.py __version__), or run manually.
 #
 # This is the ONLY way artzain reaches PyPI (WS-8). ./build-pypi.sh in the
 # engine repo used to upload from a developer laptop with a token from a local
@@ -78,16 +78,25 @@ jobs:
         with:
           python-version: "3.11"
 
-      # A tag that disagrees with pyproject.toml publishes a version nobody
-      # asked for, under a name the repo does not carry.
+      # A tag that disagrees with the package publishes a version nobody
+      # asked for, under a name the repo does not carry. The version is
+      # dynamic: pyproject.toml's [tool.hatch.version] path names the file
+      # (src/artzain/__init__.py) that carries __version__, so read it there.
       - name: Verify tag matches package version
         if: github.ref_type == 'tag'
         working-directory: python
         run: |
-          PKG_VERSION=$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          PKG_VERSION=$(python - <<'PY'
+          import pathlib, re, tomllib
+          cfg = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+          assert "version" not in cfg["project"], "static [project] version; it lives in __init__.py only"
+          text = pathlib.Path(cfg["tool"]["hatch"]["version"]["path"]).read_text()
+          print(re.search(r'^__version__ = "(\d+\.\d+\.\d+)"$', text, re.M).group(1))
+          PY
+          )
           TAG_VERSION="${GITHUB_REF_NAME#python-v}"
           if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
-            echo "Tag version ($TAG_VERSION) != pyproject.toml version ($PKG_VERSION)" >&2
+            echo "Tag version ($TAG_VERSION) != package version ($PKG_VERSION)" >&2
             exit 1
           fi
 

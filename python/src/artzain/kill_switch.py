@@ -238,6 +238,7 @@ def trip(
     The call is idempotent — re-tripping a run with a different reason
     updates the latest record but does not double-fire side-effects.
     """
+    global _global_panic
     record = KillRecord(
         run_id=run_id,
         user_id=user_id,
@@ -271,25 +272,62 @@ def trip(
         _fire_on_kill(record, on_kill)
 
     # Auto-panic: if too many criticals fire in a short window, trip global.
+    # The window append, the count and the panic decision all happen under
+    # _global_panic_lock so concurrent trips cannot mutate the deque while
+    # another thread iterates it; the flag is flipped in the same critical
+    # section so the auto-panic fires exactly once.  Slow side effects
+    # (audit ring, logging, the on_kill callback) run after the lock is
+    # released.
     if severity == "critical" and not manual:
+        panic_record: Optional[KillRecord] = None
         now = time.monotonic()
-        _panic_window.append(now)
-        recent_in_window = sum(
-            1 for ts in _panic_window if now - ts <= _PANIC_WINDOW_SECONDS
-        )
-        if recent_in_window >= _PANIC_THRESHOLD and _global_panic is None:
-            trip_global(
-                reason=(
-                    f"auto-panic: {recent_in_window} critical trips in "
-                    f"{_PANIC_WINDOW_SECONDS}s"
-                ),
-                source="kill_switch.auto_panic",
-                on_kill=on_kill,
+        with _global_panic_lock:
+            _panic_window.append(now)
+            recent_in_window = sum(
+                1 for ts in _panic_window if now - ts <= _PANIC_WINDOW_SECONDS
             )
+            if recent_in_window >= _PANIC_THRESHOLD and _global_panic is None:
+                panic_record = _global_panic_record(
+                    reason=(
+                        f"auto-panic: {recent_in_window} critical trips in "
+                        f"{_PANIC_WINDOW_SECONDS}s"
+                    ),
+                    source="kill_switch.auto_panic",
+                    manual=False,
+                )
+                _global_panic = panic_record
+        if panic_record is not None:
+            _announce_global_panic(panic_record, on_kill)
 
     if raise_after_trip:
         raise AgentKilledError(run_id, reason, severity)
     return record
+
+
+def _global_panic_record(*, reason: str, source: str, manual: bool) -> KillRecord:
+    return KillRecord(
+        run_id=None,
+        user_id=None,
+        agent_id=None,
+        reason=reason,
+        severity="critical",
+        surface="global_panic",
+        source=source,
+        manual=manual,
+    )
+
+
+def _announce_global_panic(
+    record: KillRecord, on_kill: Optional[OnKillCallback]
+) -> None:
+    """Side effects of a global panic; must be called *without* the lock held."""
+    with _recent_lock:
+        _recent.append(record)
+    logger.critical(
+        "GLOBAL_KILL_SWITCH tripped source=%s manual=%s reason=%s",
+        record.source, record.manual, record.reason,
+    )
+    _fire_on_kill(record, on_kill)
 
 
 def trip_global(
@@ -305,25 +343,10 @@ def trip_global(
     :func:`clear_global_panic` is called, regardless of run id.
     """
     global _global_panic
-    record = KillRecord(
-        run_id=None,
-        user_id=None,
-        agent_id=None,
-        reason=reason,
-        severity="critical",
-        surface="global_panic",
-        source=source,
-        manual=manual,
-    )
+    record = _global_panic_record(reason=reason, source=source, manual=manual)
     with _global_panic_lock:
         _global_panic = record
-    with _recent_lock:
-        _recent.append(record)
-    logger.critical(
-        "GLOBAL_KILL_SWITCH tripped source=%s manual=%s reason=%s",
-        source, manual, reason,
-    )
-    _fire_on_kill(record, on_kill)
+    _announce_global_panic(record, on_kill)
     return record
 
 
@@ -557,11 +580,11 @@ def _reset_for_tests() -> None:
         _killed_runs.clear()
     with _global_panic_lock:
         _global_panic = None
+        _panic_window.clear()
     with _recent_lock:
         _recent.clear()
     with _default_on_kill_lock:
         _default_on_kill = None
-    _panic_window.clear()
 
 
 __all__ = [

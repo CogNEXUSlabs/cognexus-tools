@@ -12,6 +12,7 @@ or::
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from artzain import (
     GRADE_THRESHOLDS,
@@ -20,7 +21,9 @@ from artzain import (
     RuleSet,
     augment_system_prompt,
     evaluate_system_prompt,
+    prompt_defense,
 )
+from artzain.prompt_defense import _RULES, PromptDefenseConfig
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Base static-evaluator tests
@@ -361,6 +364,42 @@ class CombinedRuleSetTests(unittest.TestCase):
             rule_sets=[RuleSet.LEGAL, RuleSet.FINANCIAL],
         )
         self.assertEqual(forward, reverse)
+
+
+class SeverityMapCoverageTests(unittest.TestCase):
+    """Every vector in ``_RULES`` must carry an explicit severity.
+
+    ``evaluate`` falls back to ``"medium"`` for a vector the map does not
+    name, so a missing entry is not an error — it silently misgrades the
+    finding. Pinning the key set catches the next vector that is added to
+    the rule table without a severity.
+    """
+
+    def test_every_vector_has_an_explicit_severity(self) -> None:
+        severity_map = PromptDefenseConfig().severity_map
+        vector_ids = [r.vector_id for r in _RULES]
+        missing = [v for v in vector_ids if v not in severity_map]
+        self.assertEqual(
+            missing, [],
+            f"vectors without an explicit severity (default to 'medium'): {missing}",
+        )
+        stale = sorted(set(severity_map) - set(vector_ids))
+        self.assertEqual(stale, [], f"severity_map names vectors not in _RULES: {stale}")
+        for vector_id, severity in severity_map.items():
+            self.assertIn(severity, ("critical", "high", "medium", "low"), vector_id)
+
+
+class ModuleWordingTests(unittest.TestCase):
+    """The module text must not claim a vector count the rule table contradicts."""
+
+    def test_vector_count_matches_the_rule_table(self) -> None:
+        self.assertEqual(VECTOR_COUNT, len(_RULES))
+        self.assertEqual(len({r.vector_id for r in _RULES}), VECTOR_COUNT)
+
+    def test_stale_twelve_vector_wording_is_gone(self) -> None:
+        source = Path(prompt_defense.__file__).read_text(encoding="utf-8")
+        for stale in ("12 attack vectors", "all 12", '"4/12"'):
+            self.assertNotIn(stale, source, f"stale vector count in prompt_defense.py: {stale!r}")
 
 
 if __name__ == "__main__":  # pragma: no cover

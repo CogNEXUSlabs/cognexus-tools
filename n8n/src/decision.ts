@@ -8,6 +8,8 @@
 
 import { randomUUID } from "node:crypto";
 
+import { trimTrailingSlashes } from "./base-url.js";
+
 export type DecisionBranch = "allow" | "review" | "deny";
 
 /** Server-side cap on `request_id` (`application/api/decisions.py`). */
@@ -30,7 +32,7 @@ export interface DecisionBody {
 }
 
 export function decisionsUrl(baseUrl: string): string {
-  return `${baseUrl.replace(/\/+$/, "")}/api/v1/decisions`;
+  return `${trimTrailingSlashes(baseUrl)}/api/v1/decisions`;
 }
 
 export function buildDecisionBody(input: {

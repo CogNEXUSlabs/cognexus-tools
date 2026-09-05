@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import logging
 import os
 import sys
 import urllib.error
@@ -37,6 +38,8 @@ from artzain import (
     should_block,
 )
 from artzain.cloud import _sdk_headers
+
+_log = logging.getLogger("artzain.cli")
 
 _DEFAULT_BASE = "https://app.cognexuslabs.ai"
 _ENV_FILENAMES = (".env", ".env.local", ".env.development")
@@ -191,7 +194,7 @@ def resolve_api_key_for_quickstart() -> tuple[str | None, Path | None]:
         if key:
             return key, credentials_path()
     except Exception:
-        pass
+        _log.debug("credentials profile unavailable; no API key from it", exc_info=True)
     return None, None
 
 
@@ -233,7 +236,7 @@ def cmd_login(_args: argparse.Namespace) -> None:
     try:
         webbrowser.open(verify_url)
     except Exception:
-        pass
+        _log.debug("could not open a browser; user opens the URL by hand", exc_info=True)
 
     deadline = time.monotonic() + expires_in
     slow_extra = 0
@@ -292,7 +295,7 @@ def cmd_signup(_args: argparse.Namespace) -> None:
     try:
         webbrowser.open(url)
     except Exception:
-        pass
+        _log.debug("could not open a browser; user opens the URL by hand", exc_info=True)
     input("Press Enter when ready to continue with device login… ")
     cmd_login(_args)
 
@@ -512,7 +515,7 @@ def prompt_for_credentials(base_url: str) -> str:
 
 
 def run_quickstart_demo(api_key: str, *, base_url: str) -> None:
-    """Interactive tour mirroring the scenarios in ``test_artzain.py`` (no heavy model load)."""
+    """Interactive tour mirroring the scenarios in ``scripts/artzain_harness.py`` (no heavy model load)."""
     dashboard_url = f"{base_url.rstrip('/')}/dashboard.html"
     configure(api_key=api_key, base_url=base_url)
     announce_cloud_ingest()
@@ -889,7 +892,7 @@ def _licence_get(args: argparse.Namespace, path: str,
         try:
             detail = json.loads(raw).get("detail") or raw
         except Exception:
-            pass
+            _log.debug("error body is not JSON; reporting it verbatim", exc_info=True)
         print(f"{base} refused the request (HTTP {exc.code}): {detail}",
               file=sys.stderr)
         raise SystemExit(1) from exc
@@ -1224,7 +1227,7 @@ def cmd_audit_export(args: argparse.Namespace) -> None:
             data = resp.read()
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
-        raise SystemExit(f"Export failed ({exc.code}): {raw or str(exc)}")
+        raise SystemExit(f"Export failed ({exc.code}): {raw or str(exc)}") from exc
 
     out = Path(args.out) if getattr(args, "out", None) else None
     if out is None:
@@ -1261,7 +1264,7 @@ def cmd_policy_keygen(args: argparse.Namespace) -> None:
     try:
         key_id, pub_pem = generate_keypair(out_dir)
     except PolicySigningError as exc:
-        raise SystemExit(str(exc))
+        raise SystemExit(str(exc)) from exc
     print(f"Generated policy signing keypair in {out_dir}")
     print(f"  key_id: {key_id}")
     print("  Register the PUBLIC key with your team (owner role required):")
@@ -1278,7 +1281,7 @@ def cmd_policy_register_key(args: argparse.Namespace) -> None:
     try:
         pub_pem = load_public_pem(key_dir)
     except PolicySigningError as exc:
-        raise SystemExit(str(exc))
+        raise SystemExit(str(exc)) from exc
     url = f"{_effective_base_url()}/api/v1/policy-keys"
     status, payload = _http_json("POST", url, headers=_policy_auth_headers(), body={"public_key_pem": pub_pem})
     if status == 200:
@@ -1295,12 +1298,12 @@ def cmd_policy_sign(args: argparse.Namespace) -> None:
     try:
         bundle = json.loads(src.read_text(encoding="utf-8"))
     except Exception as exc:
-        raise SystemExit(f"Could not read bundle {src}: {exc}")
+        raise SystemExit(f"Could not read bundle {src}: {exc}") from exc
     key_dir = Path(args.key) if getattr(args, "key", None) else _default_policy_key_dir()
     try:
         signed = sign_bundle(bundle, key_dir)
     except PolicySigningError as exc:
-        raise SystemExit(str(exc))
+        raise SystemExit(str(exc)) from exc
     out = Path(args.out) if getattr(args, "out", None) else src.with_suffix(".signed.json")
     out.write_text(json.dumps(signed, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Signed bundle written to {out} (key_id={signed['signature']['key_id']}).")
@@ -1312,7 +1315,7 @@ def cmd_policy_push(args: argparse.Namespace) -> None:
     try:
         bundle = json.loads(src.read_text(encoding="utf-8"))
     except Exception as exc:
-        raise SystemExit(f"Could not read bundle {src}: {exc}")
+        raise SystemExit(f"Could not read bundle {src}: {exc}") from exc
     url = f"{_effective_base_url()}/api/v1/policy-bundles"
     status, payload = _http_json("POST", url, headers=_policy_auth_headers(), body=bundle)
     if status == 200:
@@ -1432,7 +1435,7 @@ def cmd_registry_export(args: argparse.Namespace) -> None:
             data = resp.read()
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
-        raise SystemExit(f"Export failed ({exc.code}): {raw or str(exc)}")
+        raise SystemExit(f"Export failed ({exc.code}): {raw or str(exc)}") from exc
     out = Path(args.out) if getattr(args, "out", None) else None
     if out is None:
         from datetime import datetime, timezone

@@ -52,10 +52,14 @@ def test_sdk_headers_browser_like_when_env_on(monkeypatch: pytest.MonkeyPatch) -
     assert h["Sec-Fetch-Dest"] == "empty"
 
 
-def test_sdk_headers_default_is_browser_like_for_now() -> None:
-    # Flip to honest once the CDN allowlists the SDK User-Agent (see runbook).
-    assert cloud._browser_headers_enabled() is True
-    assert "Mozilla" in cloud._sdk_headers(url=_URL)["User-Agent"]
+def test_sdk_headers_default_is_honest(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Since 0.6.11 the CDN allowlists ``artzain-python-sdk/`` on /api/*, so the
+    # default is the honest identity (runbook, "CDN / WAF allowlist").
+    monkeypatch.delenv(_ENV, raising=False)
+    assert cloud._browser_headers_enabled() is False
+    h = cloud._sdk_headers(url=_URL)
+    assert h["User-Agent"].startswith("artzain-python-sdk/")
+    assert "Sec-Fetch-Site" not in h
 
 
 def test_sdk_headers_explicit_argument_beats_env(monkeypatch: pytest.MonkeyPatch) -> None:

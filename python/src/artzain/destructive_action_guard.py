@@ -435,10 +435,17 @@ class ActionScreenResult:
 # ---------------------------------------------------------------------------
 
 
-#: Maximum payload size we will scan with full regex (defense-in-depth
+#: Maximum window size we will scan with full regex (defense-in-depth
 #: against ReDoS on adversarial inputs).  Inputs above this are still
-#: hashed and reported but only the first slice is regex-scanned.
+#: hashed and reported, but only the first and the last slice of this size
+#: are regex-scanned, and the truncation itself is reported as a HIGH
+#: finding (``input.truncated``) so padding cannot hide an action from a
+#: caller that fails on HIGH (open-items §9.81).
 MAX_SCAN_BYTES = 256 * 1024
+
+#: Rule id of the synthetic finding added whenever a payload exceeds the
+#: scan window.
+TRUNCATION_RULE_ID = "input.truncated"
 
 
 @dataclass
@@ -508,17 +515,27 @@ class DestructiveActionGuard:
     def _screen_impl(self, payload: str, *, surface: str) -> ActionScreenResult:
         encoded = payload.encode("utf-8", "ignore")
         payload_hash = hashlib.sha256(encoded).hexdigest()
-        scan_text = (
-            payload if len(encoded) <= MAX_SCAN_BYTES
-            else encoded[:MAX_SCAN_BYTES].decode("utf-8", "ignore")
+        total_bytes = len(encoded)
+        truncated = total_bytes > MAX_SCAN_BYTES
+        # Head and tail windows. Each rule is searched window by window and
+        # reported once, from the first window it hits, so a match that sits
+        # in the overlap of the two windows (input under 2 * MAX_SCAN_BYTES)
+        # is not double-counted.
+        windows = (
+            [payload] if not truncated
+            else [
+                encoded[:MAX_SCAN_BYTES].decode("utf-8", "ignore"),
+                encoded[-MAX_SCAN_BYTES:].decode("utf-8", "ignore"),
+            ]
         )
 
         matches: list[ActionMatch] = []
 
         for rule in self._rules:
-            m = rule.pattern.search(scan_text)
-            if not m:
+            hit = _first_hit(rule.pattern, windows)
+            if hit is None:
                 continue
+            scan_text, m = hit
             matches.append(
                 ActionMatch(
                     rule_id=rule.rule_id,
@@ -530,9 +547,10 @@ class DestructiveActionGuard:
             )
 
         for rule_id, severity, pattern in self._config.extra_rules:
-            m = pattern.search(scan_text)
-            if not m:
+            hit = _first_hit(pattern, windows)
+            if hit is None:
                 continue
+            scan_text, m = hit
             matches.append(
                 ActionMatch(
                     rule_id=rule_id,
@@ -540,6 +558,23 @@ class DestructiveActionGuard:
                     severity=severity,
                     owasp="custom",
                     excerpt=_excerpt(scan_text, m.start(), m.end()),
+                )
+            )
+
+        if truncated:
+            scanned_bytes = min(total_bytes, 2 * MAX_SCAN_BYTES)
+            matches.append(
+                ActionMatch(
+                    rule_id=TRUNCATION_RULE_ID,
+                    name="payload exceeds scan window (truncated)",
+                    severity=ActionSeverity.HIGH,
+                    owasp="LLM06",
+                    excerpt=(
+                        f"scanned {scanned_bytes} of {total_bytes} bytes "
+                        f"(head + tail windows of {MAX_SCAN_BYTES} bytes each); "
+                        "text outside them, or spanning their boundary, was not "
+                        "regex-scanned"
+                    ),
                 )
             )
 
@@ -572,6 +607,17 @@ class DestructiveActionGuard:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _first_hit(
+    pattern: re.Pattern[str], windows: list[str]
+) -> tuple[str, re.Match[str]] | None:
+    """Return ``(window_text, match)`` for the first window *pattern* hits."""
+    for text in windows:
+        m = pattern.search(text)
+        if m:
+            return text, m
+    return None
 
 
 # Group 1 keeps the key name, separator and surrounding whitespace so the
@@ -640,4 +686,5 @@ __all__ = [
     "screen_action",
     "reset_guard",
     "MAX_SCAN_BYTES",
+    "TRUNCATION_RULE_ID",
 ]

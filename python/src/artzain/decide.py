@@ -133,7 +133,7 @@ def decide(
             parsed = json.loads(exc.read().decode("utf-8", errors="replace") or "{}")
             detail = str(parsed.get("detail") or "")
         except Exception:
-            pass
+            _log.debug("HTTP %s error body is not JSON", exc.code, exc_info=True)
         raise DecisionError(
             f"decision API returned HTTP {exc.code}{': ' + detail if detail else ''}",
             status=exc.code,

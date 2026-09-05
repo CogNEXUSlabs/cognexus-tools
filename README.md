@@ -131,7 +131,7 @@ cd ../n8n && npm ci && npm test && npm run build
 
 ## Releases
 
-- Python: push tag `python-v<version>` (must match `python/pyproject.toml`). Publishes through a PyPI **Trusted Publisher** — no token, and each artifact carries a PEP 740 attestation. Do not add a `password:` to the publish step: an unset secret still takes the OIDC path at the pinned action version, so the line sits harmless until someone sets the secret — and then the release silently becomes a token publish with no attestation.
+- Python: push tag `python-v<version>` (must match `__version__` in `python/src/artzain/__init__.py`; `pyproject.toml` reads it from there). Publishes through a PyPI **Trusted Publisher** — no token, and each artifact carries a PEP 740 attestation. Do not add a `password:` to the publish step: an unset secret still takes the OIDC path at the pinned action version, so the line sits harmless until someone sets the secret — and then the release silently becomes a token publish with no attestation.
 - TypeScript: push tag `sdk-ts-v<version>` (must match `typescript/package.json`). Publishes through npm **Trusted Publishing** (OIDC) — no token; npm generates the provenance itself, and `npm audit signatures` verifies it.
 - OpenClaw plugin: push tag `openclaw-v<version>` (must match `openclaw/package.json`).
 - n8n nodes: push tag `n8n-v<version>` (must match `n8n/package.json`).

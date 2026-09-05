@@ -15,6 +15,9 @@ export type PayloadKind =
   | "model_output"
   | "tool_call";
 
+// The lockstep blocks below are copied verbatim into
+// sdk/openclaw/src/client.ts; lockstep.test.ts there fails when they drift.
+// lockstep:begin decision-types
 export type DecisionOutcome = "allow" | "deny" | "review";
 
 export interface AgentVote {
@@ -40,7 +43,7 @@ export type FetchLike = (
   init: {
     method: string;
     headers: Record<string, string>;
-    body: string;
+    body?: string;
     signal?: AbortSignal;
   },
 ) => Promise<{
@@ -49,6 +52,7 @@ export type FetchLike = (
   json(): Promise<unknown>;
   text(): Promise<string>;
 }>;
+// lockstep:end decision-types
 
 export interface DecideOptions {
   /** The proposed action verb, e.g. `"send_email"`. */
@@ -122,6 +126,7 @@ export async function decide(options: DecideOptions): Promise<DecisionResponse> 
     clearTimeout(timer);
   }
 
+  // lockstep:begin decision-response
   if (!resp.ok) {
     let detail: unknown;
     try {
@@ -137,5 +142,17 @@ export async function decide(options: DecideOptions): Promise<DecisionResponse> 
       { status: resp.status, detail },
     );
   }
-  return (await resp.json()) as DecisionResponse;
+  let parsed: unknown;
+  try {
+    parsed = await resp.json();
+  } catch (err) {
+    // A 2xx that is not JSON (a proxy or captive portal answering HTML)
+    // surfaced as a bare SyntaxError, outside the DecisionError contract.
+    throw new DecisionError(
+      `Decision API returned HTTP ${resp.status} with a non-JSON body: ${(err as Error).message}`,
+      { status: resp.status },
+    );
+  }
+  return parsed as DecisionResponse;
+  // lockstep:end decision-response
 }
