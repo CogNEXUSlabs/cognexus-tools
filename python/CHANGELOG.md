@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.12
+
+### Fixed
+
+- `artzain.pii_detector`: the `ssn` detector now matches the space and dot
+  separated forms (`536 22 1948`, `536.22.1948`) as well as the hyphenated
+  one, and no longer misses an SSN glued to an underscore
+  (`employee_536-22-1948`) — the previous `\b` word boundary treated `_` as
+  part of the word. A separator is still required: bare nine-digit runs are
+  tracking numbers, routing numbers and ZIP+4 far more often than SSNs, and
+  `redact_text` rewrites what it matches. Ported from the Agent Governance
+  Toolkit credential redactor (microsoft/agent-governance-toolkit#3531).
+
 ## 0.6.11
 
 ### Changed

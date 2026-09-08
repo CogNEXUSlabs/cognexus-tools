@@ -7,8 +7,9 @@ payload-hash rule in the decision leaves; see agent-expansion plan §3.2).
 
 Detectors
 ---------
-``ssn``            US Social Security numbers (hyphenated form ``AAA-GG-SSSS``,
-                   with invalid area/group/serial ranges rejected).
+``ssn``            US Social Security numbers in separated form
+                   (``AAA-GG-SSSS``, ``AAA GG SSSS`` or ``AAA.GG.SSSS``, with
+                   invalid area/group/serial ranges rejected).
 ``credit_card``    13–19 digit card numbers (separators allowed), validated
                    with the Luhn checksum and a same-digit-run rejection.
 ``iban``           International Bank Account Numbers, validated with the
@@ -72,9 +73,18 @@ _SEVERITY_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 BULK_EMAIL_THRESHOLD = 5
 BULK_PHONE_THRESHOLD = 5
 
-# ── SSN ── hyphenated form only; the contiguous 9-digit form collides with
-# order numbers, tax IDs, and tracking codes far too often to act on.
-_SSN_RE = re.compile(r"\b(\d{3})-(\d{2})-(\d{4})\b")
+# ── SSN ── separated forms only (hyphen, single space, or dot); the
+# contiguous 9-digit form collides with order numbers, tax IDs, routing
+# numbers and tracking codes far too often to act on, and this detector
+# drives redaction at the persistence boundary, so a bare-digit match would
+# silently rewrite legitimate records. Ported from the Agent Governance
+# Toolkit credential redactor (microsoft/agent-governance-toolkit#3531): the
+# space and dot separated forms were missed, and ``\b`` treated ``_`` as part
+# of the word, so ``employee_536-22-1948`` slipped through. Non-alphanumeric
+# lookarounds replace the word boundary. Upstream accepts any ``\s`` as the
+# separator; a literal space is deliberate here so tab- or newline-delimited
+# columns of short numbers are not redacted as one identifier.
+_SSN_RE = re.compile(r"(?<![A-Za-z0-9])(\d{3})[ .-](\d{2})[ .-](\d{4})(?![A-Za-z0-9])")
 
 # ── Credit card candidates ── 13–19 digits allowing single space/hyphen
 # separators; each candidate is confirmed with Luhn before it counts.
