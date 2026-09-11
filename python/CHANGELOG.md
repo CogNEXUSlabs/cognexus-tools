@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.14
+
+### Changed
+
+- `artzain registry list --source` and `artzain registry export --source`
+  accept the new `a2a` origin (FR-12 v5 slice 4: A2A agent-card discovery —
+  the public `/.well-known/agent-card.json` of each configured endpoint,
+  one row per card, identified by the endpoint).
+
 ## 0.6.13
 
 ### Changed
