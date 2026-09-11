@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.13
+
+### Changed
+
+- `artzain registry list --source` and `artzain registry export --source`
+  accept the new `google` origin (FR-12 v5 slice 1: Google Cloud discovery —
+  Vertex AI Agent Engine deployments inventoried per project × region over a
+  service-account key).
+
 ## 0.6.12
 
 ### Fixed
