@@ -100,6 +100,29 @@ def test_missing_manifest_file_names_the_fix(tmp_path):
         local.load_manifest(str(tmp_path / "nope.json"))
 
 
+def test_additive_installers_block_is_ignored_by_the_cli(tmp_path):
+    """Native MSI/PKG URLs live on the same stable.json. 0.6.x must keep
+    loading the channel when that key appears — it is additive."""
+    body = _manifest(installers={
+        "windows_msi": {
+            "url": "https://cognexuslabs.ai/downloads/ArtzAIn-Setup.msi",
+            "sha256": "a" * 64,
+            "signed": False,
+        },
+        "macos_pkg": {
+            "url": "https://cognexuslabs.ai/downloads/ArtzAIn-Setup.pkg",
+            "sha256": "b" * 64,
+            "signed": True,
+        },
+    })
+    p = tmp_path / "stable.json"
+    p.write_text(json.dumps(body), encoding="utf-8")
+    got = local.load_manifest(str(p))
+    refs = local.image_refs(got)
+    assert refs["cognexus-core"].endswith("@sha256:" + "d" * 64)
+    assert got["installers"]["macos_pkg"]["signed"] is True
+
+
 def test_image_refs_pin_digests_never_tags():
     refs = local.image_refs(_manifest())
     assert refs["cognexus-core"] == (
