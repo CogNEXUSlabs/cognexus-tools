@@ -74,11 +74,13 @@ user input ──► screen_user_input() ──► model ──► tool call ─
 | `action` | the tool name the model chose |
 | `target` | the resource the call touches, read out of the arguments |
 | `payload` | the whole call as JSON: `{"tool": <name>, "arguments": {…}}` |
-| `kind` | `"tool_call"`: structured-call checks plus the destructive-action guard |
+| `kind` | `"tool_call"`: shape and contract checks on the engine, plus the destructive-action guard |
 
 Only `allow` runs the tool; `review` means a human decides first. `decide()`
-raises `DecisionError` when the engine refuses to decide (HTTP 503) or cannot
-be reached. Treat that as `deny`.
+raises `DecisionError` on any non-2xx response or when the engine cannot be
+reached. Treat that as `deny`. When a tool's argument is raw SQL or shell,
+also screen that value on its own inside the step (`screen_agent_action()`):
+the destructive-action guard is tuned for commands as written.
 
 **OpenAI-style.** Tool calls arrive as a `tool_calls` array and
 `function.arguments` is a JSON string. Append the assistant message before the
@@ -92,16 +94,24 @@ msg = client.chat.completions.create(model=..., messages=messages, tools=tools).
 messages.append(msg)
 
 for tc in msg.tool_calls or []:
-    name, args = tc.function.name, json.loads(tc.function.arguments)
+    name = tc.function.name
     try:
-        d = artzain.decide(
-            action=name,
-            target=str(args.get("id") or args.get("to") or "unknown"),
-            payload=json.dumps({"tool": name, "arguments": args}),
-            kind="tool_call",
-        )
-    except artzain.DecisionError:
-        d = {"outcome": "deny"}  # the engine did not decide: fail closed
+        args = json.loads(tc.function.arguments)
+    except json.JSONDecodeError:
+        args = None
+
+    if not isinstance(args, dict):
+        d = {"outcome": "deny"}  # unparseable arguments: never run them
+    else:
+        try:
+            d = artzain.decide(
+                action=name,
+                target=str(args.get("id") or args.get("to") or "unknown")[:300],
+                payload=json.dumps({"tool": name, "arguments": args}, ensure_ascii=False),
+                kind="tool_call",
+            )
+        except artzain.DecisionError:
+            d = {"outcome": "deny"}  # the engine did not decide: fail closed
 
     result = dispatch(name, args) if d["outcome"] == "allow" else f"Not run ({d['outcome']})."
     messages.append({"role": "tool", "tool_call_id": tc.id, "content": str(result)})
@@ -123,8 +133,8 @@ for block in (b for b in resp.content if b.type == "tool_use"):
     try:
         d = artzain.decide(
             action=block.name,
-            target=str(block.input.get("id") or block.input.get("to") or "unknown"),
-            payload=json.dumps({"tool": block.name, "arguments": block.input}),
+            target=str(block.input.get("id") or block.input.get("to") or "unknown")[:300],
+            payload=json.dumps({"tool": block.name, "arguments": block.input}, ensure_ascii=False),
             kind="tool_call",
         )
     except artzain.DecisionError:
@@ -138,10 +148,14 @@ for block in (b for b in resp.content if b.type == "tool_use"):
         "is_error": d["outcome"] == "deny",
     })
 
-messages.append({"role": "assistant", "content": resp.content})
+if resp.content:
+    messages.append({"role": "assistant", "content": resp.content})
 if results:
     messages.append({"role": "user", "content": results})
 ```
+
+Serialize with `ensure_ascii=False`, as both examples do: escaped non-Latin
+text and emoji otherwise read as an encoding attack to the injection screen.
 
 **Cover every tool, not every call site.** Put `decide()` in the one function
 your agent dispatches tools through, so a tool added later is gated by
@@ -159,10 +173,13 @@ team's policy bundle and escalate the finding an undeclared tool draws.
 ```
 
 Without the `resolution` line an undeclared tool is only an advisory finding,
-and the line escalates every `medium` vote, not just this one. Contracts are
-checked only for `kind="tool_call"`, on a running engine with the bundle
-active (`artzain local up` is enough). Offline, with no API key, `decide()`
-runs the local guards only: `offline: true`, nothing sealed, no bundle.
+and the line escalates every `medium` vote, not just this one. The tool is
+named in the `tool-call-contract` vote in `contributing_agents` (`reasons`
+stays empty when only `resolution` escalated the call). Contracts are checked
+only for `kind="tool_call"`, on a running engine with the bundle active
+(`artzain local up` is enough). Offline, with no API key, `decide()` runs the
+local guards only: `offline: true`, nothing sealed, no shape check, no bundle.
+A call allowed offline can come back `review` or `deny` once you connect.
 
 The full guide covers `decide()` versus `screen_agent_action()`, where
 intent-level gating stops, and choosing what to gate:
