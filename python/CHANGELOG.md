@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.15
+
+### Changed
+
+- README: new "Gating tool calls" section for putting `decide()` into an
+  agent's tool loop. It covers the mapping from a tool call onto a decision
+  (`kind="tool_call"`, the whole call as the payload, serialized with
+  `ensure_ascii=False`), OpenAI-style and Anthropic examples that fail closed
+  on `DecisionError`, covering every tool through the dispatcher, and the
+  policy-bundle snippet that stops undeclared tools. Documentation only; no
+  code changes.
+
 ## 0.6.14
 
 ### Changed
