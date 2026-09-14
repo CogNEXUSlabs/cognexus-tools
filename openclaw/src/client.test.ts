@@ -8,10 +8,40 @@ import {
   type FetchLike,
 } from "./client.js";
 
+// Vote and response shapes recorded from POST /api/v1/decisions, trimmed to
+// a few of the engine's votes.
 const ALLOW = {
   outcome: "allow",
   decision_id: "01JZDECISIONXXXXXXXXXXXXXX",
+  audit_block_id: "01JZBLOCKXXXXXXXXXXXXXXXXX",
+  contributing_agents: [
+    { name: "prompt-injection", verdict: "allow", severity: "none", score: 0.0, findings: [], error: null },
+    { name: "tool-call-contract", verdict: "allow", severity: "none", score: 0.0, findings: [], error: null },
+  ],
+  policy_bundle_version: "builtin:v0",
+  resolution_policy: "builtin/strict-v0",
+  latency_ms: 12,
   reasons: [],
+  warnings: [],
+};
+
+/** A bundle's `resolution` escalated an undeclared tool: the vote keeps "allow". */
+const ESCALATED_REVIEW = {
+  ...ALLOW,
+  outcome: "review",
+  contributing_agents: [
+    { name: "prompt-injection", verdict: "allow", severity: "none", score: 0.0, findings: [], error: null },
+    {
+      name: "tool-call-contract",
+      verdict: "allow",
+      severity: "medium",
+      score: 0.5,
+      findings: ["call[0] 'exec': tool not declared in bundle tool_contracts"],
+      error: null,
+    },
+  ],
+  policy_bundle_version: "chapter-8:1.0.0",
+  resolution_policy: "bundle/chapter-8:1.0.0",
 };
 
 function fakeFetch(
@@ -100,6 +130,25 @@ describe("postDecision", () => {
     expect(sent.surface).toBe("openclaw");
     expect(sent.request_id).toBe("tc-1");
     expect(JSON.stringify(sent)).not.toContain("eyJ");
+  });
+
+  it("returns each vote's verdict, severity and findings (§8.4)", async () => {
+    const result = await postDecision({
+      apiKey: "cgnx_test",
+      baseUrl: "https://engine.example.com",
+      action: "exec",
+      target: "openclaw:tool:exec",
+      payload: '{"tool":"exec","arguments":{}}',
+      agentDid: "openclaw-gateway",
+      fetchImpl: fakeFetch(200, ESCALATED_REVIEW),
+    });
+    expect(result.outcome).toBe("review");
+    const contract = result.contributing_agents.find((vote) => vote.name === "tool-call-contract");
+    expect(contract?.verdict).toBe("allow");
+    expect(contract?.severity).toBe("medium");
+    expect(contract?.findings).toEqual([
+      "call[0] 'exec': tool not declared in bundle tool_contracts",
+    ]);
   });
 
   it("wraps a non-JSON 2xx body in DecisionError (§9.85)", async () => {

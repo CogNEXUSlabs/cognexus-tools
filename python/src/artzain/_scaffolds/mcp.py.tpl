@@ -95,7 +95,13 @@ def gate(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return artzain.decide(
             action=tool_name,
             target=target,
-            payload=json.dumps({"tool": tool_name, "arguments": arguments}),
+            # Keep ensure_ascii=False: the default writes non-Latin text as
+            # \uXXXX escapes, and the injection screen denies a run of them as
+            # an encoding attack.
+            payload=json.dumps(
+                {"tool": tool_name, "arguments": arguments},
+                ensure_ascii=False,
+            ),
             kind="tool_call",
             agent_did=AGENT_DID,
             surface="mcp",

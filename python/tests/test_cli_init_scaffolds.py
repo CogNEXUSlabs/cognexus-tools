@@ -15,21 +15,120 @@ Run::
 from __future__ import annotations
 
 import ast
+import asyncio
+import importlib
+import json
 import re
 import sys
+import types
 
 import pytest
 
+import artzain
 from artzain import cli
+from artzain.tool_call_contract import inspect_tool_call
 
 FRAMEWORKS = sorted(cli._SCAFFOLDS)
 BASE_URL = "https://engine.example.com"
+
+#: The scaffolds that gate a structured call with ``kind="tool_call"``.
+TOOL_CALL_FRAMEWORKS = ["crewai", "mcp"]
+
+#: Cyrillic, CJK and an emoji. ``json.dumps`` escapes all of it by default, and
+#: the injection screen denies four or more ``\uXXXX`` escapes in a row as an
+#: encoding attack.
+NON_LATIN = "Привет, это сводка 你好 🙂"
 
 
 @pytest.fixture(params=FRAMEWORKS)
 def scaffold(request) -> tuple[str, str]:
     """(framework, rendered source) for each shipped scaffold."""
     return request.param, cli.scaffold_contents(request.param, BASE_URL)
+
+
+@pytest.fixture
+def decisions(monkeypatch) -> list[dict]:
+    """Stand in for ``artzain.decide``: record every call, answer from the local guards.
+
+    The verdict is the SDK's offline evaluation, computed in-process, so no
+    API key is looked up and nothing leaves the process.
+    """
+    decide_module = importlib.import_module("artzain.decide")
+    calls: list[dict] = []
+
+    def fake_decide(**kwargs):
+        calls.append(kwargs)
+        return decide_module._decide_offline(
+            action=kwargs["action"],
+            target=kwargs["target"],
+            payload=kwargs["payload"],
+            kind=kwargs["kind"],
+            agent_did=kwargs["agent_did"],
+            request_id=None,
+        )
+
+    monkeypatch.setattr(artzain, "decide", fake_decide)
+    return calls
+
+
+class _StubMCPServer:
+    """The decorator surface of ``mcp.server.Server`` that the scaffold uses."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def list_tools(self):
+        return lambda fn: fn
+
+    def call_tool(self):
+        return lambda fn: fn
+
+
+def _framework_stubs(framework: str) -> dict[str, types.ModuleType]:
+    """Modules standing in for the names a scaffold imports from its framework."""
+    if framework == "crewai":
+        crewai = types.ModuleType("crewai")
+        crewai.Agent = crewai.Crew = crewai.Task = object
+        tools = types.ModuleType("crewai.tools")
+        tools.tool = lambda _name: (lambda fn: fn)  # leaves the governed callable in place
+        return {"crewai": crewai, "crewai.tools": tools}
+    if framework == "mcp":
+        server = types.ModuleType("mcp.server")
+        server.Server = _StubMCPServer
+        stdio = types.ModuleType("mcp.server.stdio")
+        stdio.stdio_server = None
+        mcp_types = types.ModuleType("mcp.types")
+        mcp_types.TextContent = mcp_types.Tool = dict
+        return {
+            "mcp": types.ModuleType("mcp"),
+            "mcp.server": server,
+            "mcp.server.stdio": stdio,
+            "mcp.types": mcp_types,
+        }
+    raise KeyError(f"no framework stubs for {framework!r}")
+
+
+def _load_scaffold(monkeypatch, framework: str) -> types.ModuleType:
+    """Run a rendered scaffold as a module, with its framework imports stubbed.
+
+    Neither CrewAI nor the MCP SDK is a test dependency. The stubs replace only
+    the framework, so the guard code that runs is the code a developer gets.
+    """
+    for name, stub in _framework_stubs(framework).items():
+        monkeypatch.setitem(sys.modules, name, stub)
+    module = types.ModuleType(f"artzain_{framework}_guard")
+    source = cli.scaffold_contents(framework, BASE_URL)
+    exec(compile(source, f"{module.__name__}.py", "exec"), module.__dict__)
+    return module
+
+
+def _send_email(monkeypatch, framework: str, body: str) -> str:
+    """Invoke the scaffold's guarded send_email the way its framework would."""
+    guard = _load_scaffold(monkeypatch, framework)
+    if framework == "crewai":
+        return guard.send_email(body=body)  # CrewAI passes tool arguments by keyword
+    (content,) = asyncio.run(guard.call_tool("send_email", {"contact_id": "123", "body": body}))
+    return content["text"]
 
 
 # ── every scaffold ───────────────────────────────────────────────────────────
@@ -110,6 +209,76 @@ def test_scaffold_declares_its_install_line(scaffold):
         return
     assert "pip install artzain" in src
     assert framework in src
+
+
+def test_scaffold_serializes_json_without_ascii_escapes(scaffold):
+    """Every ``json.dumps`` passes ``ensure_ascii=False`` (see NON_LATIN)."""
+    framework, src = scaffold
+    if framework == "openclaw":
+        pytest.skip("JSON.stringify leaves non-ASCII text as it is")
+    for node in ast.walk(ast.parse(src)):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "dumps"
+        ):
+            assert any(
+                k.arg == "ensure_ascii"
+                and isinstance(k.value, ast.Constant)
+                and k.value.value is False
+                for k in node.keywords
+            ), f"serialized without ensure_ascii=False: {ast.unparse(node)}"
+
+
+# ── tool_call scaffolds: run them, check what the engine would receive ──────
+
+@pytest.mark.parametrize("framework", TOOL_CALL_FRAMEWORKS)
+def test_tool_call_payload_passes_the_engine_contract_check(framework, monkeypatch, decisions):
+    """One call object, ``{"tool": <the action>, "arguments": {...}}``.
+
+    The engine's contract check reads ``args`` as the argument object too, so a
+    payload carrying ``"args": [...]`` is a ``high`` finding, and every online
+    call goes to review.
+    """
+    result = _send_email(monkeypatch, framework, "Following up on the meeting.")
+
+    (sent,) = decisions
+    assert sent["kind"] == "tool_call"
+    call = json.loads(sent["payload"])
+    assert set(call) == {"tool", "arguments"}
+    assert call["tool"] == sent["action"] == "send_email"
+    assert call["arguments"]["body"] == "Following up on the meeting."
+    report = inspect_tool_call(sent["payload"])
+    assert (report.severity, report.findings) == ("none", [])
+    assert result.startswith("Sent email"), result
+
+
+def test_crewai_payload_names_arguments_however_the_tool_is_called(monkeypatch, decisions):
+    """Arguments keyed by parameter name; the tool is the action, not the function name."""
+    guard = _load_scaffold(monkeypatch, "crewai")
+
+    @guard.governed(action="send_email", target="crm:contact:9")
+    def notify(body: str, cc: str = "") -> str:
+        return "sent"
+
+    notify(body="Following up.", cc="ops@example.com")
+    notify("Following up.", "ops@example.com")
+
+    by_keyword, by_position = (json.loads(call["payload"]) for call in decisions)
+    assert by_keyword == by_position == {
+        "tool": "send_email",
+        "arguments": {"body": "Following up.", "cc": "ops@example.com"},
+    }
+
+
+@pytest.mark.parametrize("framework", TOOL_CALL_FRAMEWORKS)
+def test_tool_call_with_non_latin_arguments_is_not_denied(framework, monkeypatch, decisions):
+    result = _send_email(monkeypatch, framework, NON_LATIN)
+
+    (sent,) = decisions
+    assert NON_LATIN in sent["payload"], "the payload escaped non-ASCII text"
+    assert json.loads(sent["payload"])["arguments"]["body"] == NON_LATIN
+    assert result.startswith("Sent email"), result
 
 
 # ── seam-specific: each framework is gated in the right place ────────────────

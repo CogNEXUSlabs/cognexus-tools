@@ -38,11 +38,22 @@ export class DecisionError extends Error {
 // lockstep:begin decision-types
 export type DecisionOutcome = "allow" | "deny" | "review";
 
+/** One enforcer's vote. The Decision API sends every field on every vote. */
 export interface AgentVote {
-  agent: string;
-  verdict: string;
-  score?: number | null;
-  reason?: string | null;
+  /** The enforcer, e.g. `"tool-call-contract"`. */
+  name: string;
+  /**
+   * The enforcer's own verdict. A policy bundle's `resolution` can raise the
+   * outcome above it, and the vote still reads what its enforcer said.
+   */
+  verdict: DecisionOutcome;
+  /** On the engine's scale: `"none"`, `"low"`, `"medium"`, `"high"`, `"critical"`. */
+  severity: string;
+  /** Normalised 0–1 risk score; `null` when the enforcer does not score. */
+  score: number | null;
+  findings: string[];
+  /** Set when the enforcer could not vote: its exception, or a code such as `registry_unavailable`. */
+  error: string | null;
 }
 
 export interface DecisionResponse {
@@ -53,7 +64,16 @@ export interface DecisionResponse {
   policy_bundle_version: string;
   resolution_policy: string;
   latency_ms: number;
+  /**
+   * Summary lines for a non-`allow` outcome, empty on `allow`. A line quotes
+   * at most one finding per vote; the votes carry all of them.
+   */
   reasons: string[];
+  /**
+   * Non-fatal advisories, e.g. `{ warning: "idempotent_replay", ... }`. They
+   * never change the outcome. Engines older than the field omit it.
+   */
+  warnings?: Record<string, unknown>[];
 }
 
 export type FetchLike = (

@@ -245,7 +245,13 @@ def _offline_injection_vote(payload: str, kind: str, agent_did: str) -> dict[str
 
     sensitivity = _INJECTION_PRESET.get(kind, "balanced")
     detector = PromptInjectionDetector(config=DetectionConfig(sensitivity=sensitivity))
-    result = detector.detect(payload, source=agent_did)
+    if kind == "tool_call":
+        # Read as sent and as the tool reads it: JSON-decoded.
+        from artzain.tool_call_contract import detect_tool_call_injection
+
+        result = detect_tool_call_injection(detector, payload, source=agent_did)
+    else:
+        result = detector.detect(payload, source=agent_did)
     if not result.is_injection:
         return _vote("prompt-injection", "allow", "none", score=round(float(result.confidence), 3))
     severity = result.threat_level.value
@@ -267,9 +273,15 @@ def _offline_injection_vote(payload: str, kind: str, agent_did: str) -> dict[str
 def _offline_destructive_vote(payload: str, kind: str, *, surface: str) -> dict[str, Any]:
     if kind not in _OUTPUT_KINDS:
         return _vote("destructive-action", "allow", "none", findings=[f"skipped (payload_kind={kind})"])
-    from artzain.destructive_action_guard import screen_action
+    if kind == "tool_call":
+        # Read as sent and as the tool reads it: JSON-decoded.
+        from artzain.tool_call_contract import screen_tool_call_action
 
-    result = screen_action(payload, surface=surface)
+        result = screen_tool_call_action(payload, surface=surface)
+    else:
+        from artzain.destructive_action_guard import screen_action
+
+        result = screen_action(payload, surface=surface)
     severity = result.severity.value if result.is_destructive else "none"
     verdict = _SEVERITY_VERDICT.get(severity, "allow")
     findings = [f"{m.rule_id}: {m.excerpt}" for m in result.matches[:8]]

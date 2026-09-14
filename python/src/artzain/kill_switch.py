@@ -465,7 +465,10 @@ def screen_agent_action(
     result = screen_action(payload, surface=source)
 
     if result.severity == ActionSeverity.CRITICAL:
-        trip(
+        # Trip without raising, mirror the kill, then raise: raising inside
+        # trip() would skip the event, and the kills that stop a run are the
+        # ones the dashboard most needs to see.
+        record = trip(
             run_id,
             reason=result.explanation,
             severity="critical",
@@ -476,7 +479,7 @@ def screen_agent_action(
             payload_sha256=result.payload_sha256,
             matches=[m.__dict__ for m in result.matches],
             manual=False,
-            raise_after_trip=raise_on_critical,
+            raise_after_trip=False,
             on_kill=on_kill,
         )
         _cloud_log_agent_guard(
@@ -491,6 +494,8 @@ def screen_agent_action(
             source=source,
             result=result,
         )
+        if raise_on_critical:
+            raise AgentKilledError(run_id, record.reason, record.severity)
     elif result.is_destructive:
         # HIGH / MEDIUM — log loudly so SOC sees it, but do not auto-kill.
         logger.warning(
