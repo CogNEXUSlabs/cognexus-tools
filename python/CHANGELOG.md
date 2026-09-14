@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.6.17
+
+### Fixed
+
+- The prompt-injection screen (`PromptInjectionDetector`,
+  `screen_user_input`, `screen_external_content`, `screen_tabular_payload`
+  and offline `decide()`) reads text written in Unicode tag characters
+  (U+E0000-U+E007F). Tag characters display as nothing, and most of them map
+  one-to-one onto printable ASCII, so text written in them can be read by a
+  model but not seen by a person. The screen now applies its rules to that
+  text decoded, and the characters are a finding of their own,
+  `token_smuggle:tag_characters`: `high` (`deny`) from four tag characters
+  anywhere in the input, not counting the ones described below. Below that it
+  is `medium`, which is `review`, except under the permissive `tabular` preset,
+  which does not report it.
+- Tag characters that do not draw that finding: the flags of England,
+  Scotland and Wales (the one recommended use of tag characters), and a piece
+  of one of them at the start or end of the text, as truncating, chunking or
+  streaming text leaves.
+- Tag characters that do draw it, usually at `high`: other subdivision flags,
+  which few platforms display, and a flag broken up in the middle of the
+  text.
+
+### Changed
+
+- `artzain.prompt_injection` adds `RGI_EMOJI_TAG_SEQUENCE_RE`, which matches
+  the three flag emoji that do not draw the tag-character finding.
+
 ## 0.6.16
 
 ### Fixed
