@@ -17,6 +17,10 @@ of damage already done.
 The agent sees the refusal as a normal tool result and can reason about it,
 which is usually what you want: it re-plans instead of crashing.
 
+Note the payload: one call object, `{"tool": ..., "arguments": {...}}`, with
+kind `tool_call`. That is the shape the engine's tool-contract check reads, so
+the arguments go in by parameter name, however CrewAI passed them.
+
 Install::
 
     pip install artzain crewai crewai-tools
@@ -29,6 +33,7 @@ Run::
 from __future__ import annotations
 
 import functools
+import inspect
 import json
 import os
 from typing import Any, Callable
@@ -51,6 +56,9 @@ AGENT_DID = os.environ.get("COGNEXUS_AGENT_DID", "crewai-demo-agent")
 def governed(action: str, target: str) -> Callable:
     """Wrap a CrewAI tool so every invocation clears the Decision API first.
 
+    `action` is the tool's name: the decision's action, and the tool the
+    payload names (policy-bundle tool contracts are keyed by it).
+
     Stack it *under* @tool so CrewAI sees the guarded callable:
 
         @tool("send_email")
@@ -59,10 +67,18 @@ def governed(action: str, target: str) -> Callable:
     """
 
     def decorator(fn: Callable) -> Callable:
+        signature = inspect.signature(fn)
+
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> str:
+            # The whole call, arguments keyed by parameter name. Keep
+            # ensure_ascii=False: the default writes non-Latin text as \uXXXX
+            # escapes, and the injection screen denies a run of them as an
+            # encoding attack.
+            arguments = signature.bind(*args, **kwargs).arguments
             payload = json.dumps(
-                {"tool": fn.__name__, "args": args, "kwargs": kwargs},
+                {"tool": action, "arguments": arguments},
+                ensure_ascii=False,
                 default=str,
             )
             try:

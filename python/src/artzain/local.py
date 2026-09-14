@@ -66,6 +66,8 @@ _MIN_FREE_BYTES = 2 * 1024**3
 
 _REQUIRED_IMAGES = ("cognexus-core", "cognexus-frontend")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+#: A variable the compose template interpolates: ``${NAME}``, ``${NAME:-x}``.
+_INTERPOLATED_RE = re.compile(r"\$\{(\w+)")
 
 #: Secrets the workspace .env must carry. Generation is per-key so a
 #: hand-created file (e.g. someone editing the port before first run) is
@@ -466,11 +468,27 @@ def _compose_cmd(args: list[str]) -> list[str]:
             "--env-file", str(_env_path()), "-p", _PROJECT, *args]
 
 
+def _compose_env() -> dict[str, str]:
+    """This process's environment minus every variable compose.yaml
+    interpolates.
+
+    Compose ranks the calling shell's variables above ``--env-file``, so an
+    exported ``COGNEXUS_UNREGISTERED_AGENTS=allow`` (a shell profile, a CI
+    job, a leftover dev export) would silently undo ``deny`` in the
+    workspace .env, and an exported ``POSTGRES_PASSWORD`` would not match
+    the volume it initialised. The .env is the only source for them.
+    """
+    template = resources.files("artzain").joinpath(_COMPOSE_TEMPLATE).read_text(
+        encoding="utf-8")
+    interpolated = set(_INTERPOLATED_RE.findall(template))
+    return {k: v for k, v in os.environ.items() if k not in interpolated}
+
+
 def _compose(args: list[str], check: bool = True,
              timeout: int = 900) -> subprocess.CompletedProcess:
     try:
         proc = subprocess.run(_compose_cmd(args), capture_output=True,
-                              text=True, timeout=timeout)
+                              text=True, timeout=timeout, env=_compose_env())
     except FileNotFoundError as exc:
         raise LocalError("docker is not installed — run `artzain local "
                          "doctor` for the fix.") from exc

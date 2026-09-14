@@ -6,6 +6,8 @@ import threading
 import time
 import unittest
 from collections import deque
+from typing import Any
+from unittest import mock
 
 import artzain.kill_switch as kill_switch
 from artzain import (
@@ -27,6 +29,16 @@ from artzain.kill_switch import _reset_for_tests
 class KillSwitchTests(unittest.TestCase):
     def setUp(self) -> None:
         _reset_for_tests()
+        # screen_agent_action mirrors its findings to the cloud. Record them
+        # here instead, so no test in this class can post an event even when
+        # the environment carries an API key.
+        self.sent: list[tuple[str, dict[str, Any]]] = []
+        patcher = mock.patch(
+            "artzain.cloud.post_sdk_event",
+            side_effect=lambda event_type, **kwargs: self.sent.append((event_type, kwargs)),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self) -> None:
         _reset_for_tests()
@@ -93,6 +105,58 @@ class KillSwitchTests(unittest.TestCase):
         rec = kill_record(10)
         self.assertIsNotNone(rec)
         self.assertEqual(rec.severity, "critical")
+
+    def test_screen_agent_action_critical_sends_kill_event_before_raising(self) -> None:
+        # The default raise_on_critical=True used to raise inside trip(),
+        # before the agent_kill_switch event was built, so the dashboard
+        # never saw a kill that stopped the run.
+        killed_when_sent: list[bool] = []
+
+        def record(event_type: str, **kwargs: Any) -> None:
+            killed_when_sent.append(is_killed(12))
+            self.sent.append((event_type, kwargs))
+
+        with mock.patch("artzain.cloud.post_sdk_event", side_effect=record):
+            with self.assertRaises(AgentKilledError) as ctx:
+                screen_agent_action(
+                    "DROP DATABASE production;",
+                    run_id=12,
+                    user_id=1,
+                    agent_id="my-agent",
+                    source="unit-test",
+                )
+
+        self.assertEqual([event for event, _ in self.sent], ["agent_kill_switch"])
+        self.assertEqual(killed_when_sent, [True])  # the run is marked killed first
+        _, event = self.sent[0]
+        self.assertEqual(event["level"], "error")
+        self.assertEqual(event["payload"]["run_id"], "12")
+        self.assertEqual(event["payload"]["agent_id"], "my-agent")
+        self.assertEqual(event["payload"]["component_source"], "unit-test")
+        self.assertEqual(event["payload"]["severity"], "critical")
+        # The exception still reaches the caller, carrying the trip's details.
+        self.assertEqual(ctx.exception.run_id, 12)
+        self.assertEqual(ctx.exception.severity, "critical")
+        self.assertEqual(ctx.exception.reason, kill_record(12).reason)
+
+    def test_screen_agent_action_critical_without_raise_sends_one_kill_event(self) -> None:
+        result = screen_agent_action(
+            "DROP DATABASE production;",
+            run_id=13,
+            raise_on_critical=False,
+        )
+        self.assertEqual(result.severity.value, "critical")
+        self.assertTrue(is_killed(13))
+        self.assertEqual([event for event, _ in self.sent], ["agent_kill_switch"])
+
+    def test_failing_cloud_mirror_does_not_replace_the_kill(self) -> None:
+        with mock.patch(
+            "artzain.cloud.post_sdk_event",
+            side_effect=RuntimeError("simulated cloud failure"),
+        ):
+            with self.assertRaises(AgentKilledError):
+                screen_agent_action("DROP DATABASE production;", run_id=14)
+        self.assertTrue(is_killed(14))
 
     def test_screen_agent_action_high_does_not_kill(self) -> None:
         # `git clean -fd` is HIGH (not CRITICAL) — should log loudly but

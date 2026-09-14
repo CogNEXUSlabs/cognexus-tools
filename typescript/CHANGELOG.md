@@ -4,7 +4,28 @@ All notable changes to `@cognexuslabs/artzain`. Headings are the bare
 version (`## 0.1.5`): the mirror's `publish-npm.yml` cuts the GitHub release
 notes for tag `sdk-ts-v<version>` from the matching section.
 
+## 0.1.6
+
+### Fixed
+
+- **`AgentVote` matches the votes the Decision API sends.** It declared
+  `agent` and `reason`, which no response carries, and left out `name`,
+  `severity`, `findings` and `error`, so a TypeScript caller could not read a
+  vote's findings without a cast. `reasons` quotes at most one finding per
+  vote, so when a vote has several (one per undeclared tool in a batch of
+  calls, say) the rest are only on the vote. The interface is now `name`,
+  `verdict`, `severity`, `score`, `findings` and `error`, all present on every
+  vote; `verdict` is a `DecisionOutcome`, and `score` and `error` are `null`
+  when unset. Code that read `vote.agent` or `vote.reason` always got
+  `undefined` and now fails to compile: use `vote.name`, and `vote.findings`
+  for the explanation.
+- `DecisionResponse` declares `warnings`, the non-fatal advisories (a
+  plan-quota over-cap, an `idempotent_replay`) the API returns alongside a
+  decision. It is optional because engines older than the field omit it.
+
 ## 0.1.5
+
+Published 2026-09-05.
 
 ### Fixed
 

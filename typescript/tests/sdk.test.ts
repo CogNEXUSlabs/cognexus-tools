@@ -15,15 +15,58 @@ import { join } from "node:path";
 import { _resetConfigForTests, effectiveBaseUrl, readProfile } from "../src/config.js";
 import type { FetchLike } from "../src/decide.js";
 
+// Vote and response shapes recorded from POST /api/v1/decisions, trimmed to
+// a few of the engine's votes.
 const ALLOW = {
   outcome: "allow",
   decision_id: "01JZDECISIONXXXXXXXXXXXXXX",
   audit_block_id: "01JZBLOCKXXXXXXXXXXXXXXXXX",
-  contributing_agents: [{ agent: "security-sentinel", verdict: "allow" }],
+  contributing_agents: [
+    { name: "prompt-injection", verdict: "allow", severity: "none", score: 0.0, findings: [], error: null },
+    {
+      name: "destructive-action",
+      verdict: "allow",
+      severity: "none",
+      score: null,
+      findings: ["skipped (payload_kind=user_input)"],
+      error: null,
+    },
+  ],
   policy_bundle_version: "builtin:v0",
   resolution_policy: "builtin/strict-v0",
   latency_ms: 12,
   reasons: [],
+  warnings: [],
+};
+
+/** A batch naming two undeclared tools, raised to review by the chapter 8 §8.4 bundle. */
+const ESCALATED_REVIEW = {
+  ...ALLOW,
+  outcome: "review",
+  contributing_agents: [
+    { name: "prompt-injection", verdict: "allow", severity: "none", score: 0.0, findings: [], error: null },
+    {
+      name: "tool-call-contract",
+      verdict: "allow",
+      severity: "medium",
+      score: 0.5,
+      findings: [
+        "call[0] 'export_contacts': tool not declared in bundle tool_contracts",
+        "call[1] 'archive_notes': tool not declared in bundle tool_contracts",
+      ],
+      error: null,
+    },
+    {
+      name: "agent-registry",
+      verdict: "allow",
+      severity: "low",
+      score: null,
+      findings: ["agent 'cognexus-sdk-ts' not in registry"],
+      error: null,
+    },
+  ],
+  policy_bundle_version: "chapter-8:1.0.0",
+  resolution_policy: "bundle/chapter-8:1.0.0",
 };
 
 function fakeFetch(
@@ -176,6 +219,31 @@ describe("decide", () => {
     });
     expect(result.outcome).toBe("deny");
     expect(result.reasons).toContain("destructive");
+  });
+
+  it("exposes each vote's verdict, severity and every finding (§8.4)", async () => {
+    configure({ apiKey: "cnx_test" });
+    const result = await decide({
+      action: "export_contacts",
+      target: "crm:contacts",
+      payload: JSON.stringify([
+        { tool: "export_contacts", arguments: { limit: 10 } },
+        { tool: "archive_notes", arguments: {} },
+      ]),
+      kind: "tool_call",
+      fetchImpl: fakeFetch(200, ESCALATED_REVIEW),
+    });
+    // The bundle raised the outcome, not the vote, and `reasons` quotes at most
+    // one finding per vote: the second undeclared tool is only on the vote.
+    expect(result.outcome).toBe("review");
+    const contract = result.contributing_agents.find((vote) => vote.name === "tool-call-contract");
+    expect(contract?.verdict).toBe("allow");
+    expect(contract?.severity).toBe("medium");
+    expect(contract?.findings).toEqual([
+      "call[0] 'export_contacts': tool not declared in bundle tool_contracts",
+      "call[1] 'archive_notes': tool not declared in bundle tool_contracts",
+    ]);
+    expect(result.warnings).toEqual([]);
   });
 
   it("throws a typed DecisionError on engine refusal (503)", async () => {

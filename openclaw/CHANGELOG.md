@@ -4,7 +4,21 @@ All notable changes to `@cognexuslabs/openclaw-artzain`. Headings are the
 bare version (`## 0.2.2`): the mirror's `publish-npm.yml` cuts the GitHub
 release notes for tag `openclaw-v<version>` from the matching section.
 
+## 0.2.3
+
+### Fixed
+
+- The Decision API types in `client.ts` match what the API sends.
+  `AgentVote` is `name`, `verdict` (now a `DecisionOutcome`), `severity`,
+  `score`, `findings` and `error`, where it declared `agent` and `reason`,
+  which no response carries; `score` and `error` are `null` when unset.
+  `DecisionResponse` gains the optional `warnings`. Same fix as
+  `@cognexuslabs/artzain` 0.1.6, whose types these remain verbatim copies of.
+  The gate's behaviour does not change.
+
 ## 0.2.2
+
+Published 2026-09-05.
 
 ### Fixed
 

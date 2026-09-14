@@ -52,17 +52,23 @@ services:
       # First-run bootstrap (manual §8.1): /welcome?token=<this> creates the
       # first verified platform admin — no email infrastructure needed.
       - COGNEXUS_BOOTSTRAP_TOKEN=${COGNEXUS_BOOTSTRAP_TOKEN}
-      # Observe posture for a fresh evaluation install — the operator
-      # checklist walks through flipping enforcement deliberately.
-      - COGNEXUS_IDENTITY_BINDING=observe
-      - COGNEXUS_CAPABILITY_ENFORCEMENT=observe
-      - COGNEXUS_UNREGISTERED_AGENTS=observe
-      - COGNEXUS_PRODUCT_ENFORCEMENT=observe
-      - COGNEXUS_CONTEXT_SCREENING=observe
-      - COGNEXUS_CONTEXT_HISTORY=1
-      - COGNEXUS_LIFECYCLE_GATE=observe
-      - COGNEXUS_RECONCILE_ENFORCEMENT=observe
-      - COGNEXUS_KILL_SWITCH_RBAC=1
+      # Advisory enforcement posture: the engine's code defaults (manual
+      # §3.3a), written out so the running posture is readable here. The first
+      # decision allows and seals without registering agents; the enforcers
+      # record what enforcing would have denied. To change a flag, set it in
+      # the .env beside this file and re-run `artzain local up`. Upgrades
+      # keep the file, and the CLI ignores the same variable exported in a
+      # shell. A mode value §3.3a does not list logs a WARNING on every read
+      # and falls back to the code default.
+      - COGNEXUS_IDENTITY_BINDING=${COGNEXUS_IDENTITY_BINDING:-advisory}
+      - COGNEXUS_CAPABILITY_ENFORCEMENT=${COGNEXUS_CAPABILITY_ENFORCEMENT:-review}
+      - COGNEXUS_UNREGISTERED_AGENTS=${COGNEXUS_UNREGISTERED_AGENTS:-allow}
+      - COGNEXUS_PRODUCT_ENFORCEMENT=${COGNEXUS_PRODUCT_ENFORCEMENT:-permissive}
+      - COGNEXUS_CONTEXT_SCREENING=${COGNEXUS_CONTEXT_SCREENING:-advisory}
+      - COGNEXUS_CONTEXT_HISTORY=${COGNEXUS_CONTEXT_HISTORY:-1}
+      - COGNEXUS_LIFECYCLE_GATE=${COGNEXUS_LIFECYCLE_GATE:-advisory}
+      - COGNEXUS_RECONCILE_ENFORCEMENT=${COGNEXUS_RECONCILE_ENFORCEMENT:-advisory}
+      - COGNEXUS_KILL_SWITCH_RBAC=${COGNEXUS_KILL_SWITCH_RBAC:-1}
       # The core image has no local LLM; keep the LLM-dependent scouts quiet
       # rather than surfacing permanent "degraded" noise on the status pill.
       - COGNEXUS_REGISTRY_SCOUT_DISABLED=1

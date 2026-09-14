@@ -78,9 +78,17 @@ user input ──► screen_user_input() ──► model ──► tool call ─
 
 Only `allow` runs the tool; `review` means a human decides first. `decide()`
 raises `DecisionError` on any non-2xx response or when the engine cannot be
-reached. Treat that as `deny`. When a tool's argument is raw SQL or shell,
-also screen that value on its own inside the step (`screen_agent_action()`):
-the destructive-action guard is tuned for commands as written.
+reached. Treat that as `deny`. The destructive-action and injection screens
+read the serialized call, and every string in it as the tool receives them:
+JSON-decoded, so an argument's text is screened as it would be on its own
+(one that is itself valid JSON, through its decoded strings). A line of only
+`---` or three backticks in an argument comes back `review`; inline base64 or
+escape sequences written out as text can come back `deny`. Parse arguments
+with a strict JSON parser and send the parsed call, as the examples do. The
+destructive-action screen also reads a list of strings joined, as an argv list
+runs, but a command a tool assembles from separate fields (a `cmd` beside its
+`args`) is not seen whole: screen that command inside the step as well
+(`screen_agent_action()`).
 
 **OpenAI-style.** Tool calls arrive as a `tool_calls` array and
 `function.arguments` is a JSON string. Append the assistant message before the
@@ -154,8 +162,11 @@ if results:
     messages.append({"role": "user", "content": results})
 ```
 
-Serialize with `ensure_ascii=False`, as both examples do: escaped non-Latin
-text and emoji otherwise read as an encoding attack to the injection screen.
+Serialize with `ensure_ascii=False`, as both examples do. Escaped, each
+non-ASCII character takes six characters of the payload limit (twelve above
+U+FFFF, as for most emoji). Offline screens before artzain 0.6.16, and engines
+without this change, read a run of those escapes as an encoding attack; current
+screens still do when the escaped characters are invisible.
 
 **Cover every tool, not every call site.** Put `decide()` in the one function
 your agent dispatches tools through, so a tool added later is gated by
@@ -173,9 +184,9 @@ team's policy bundle and escalate the finding an undeclared tool draws.
 ```
 
 Without the `resolution` line an undeclared tool is only an advisory finding,
-and the line escalates every `medium` vote, not just this one. The tool is
-named in the `tool-call-contract` vote in `contributing_agents` (`reasons`
-stays empty when only `resolution` escalated the call). Contracts are checked
+and the line escalates every `medium` vote, not just this one. `reasons` names
+the tool and says the bundle escalated the call; a batch's other findings are
+on the `tool-call-contract` vote in `contributing_agents`. Contracts are checked
 only for `kind="tool_call"`, on a running engine with the bundle active
 (`artzain local up` is enough). Offline, with no API key, `decide()` runs the
 local guards only: `offline: true`, nothing sealed, no shape check, no bundle.

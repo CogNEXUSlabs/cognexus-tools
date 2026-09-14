@@ -36,6 +36,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -672,6 +673,77 @@ def reset_guard() -> None:
     _default_guard = None
 
 
+# ---------------------------------------------------------------------------
+# Combining screens of one payload
+# ---------------------------------------------------------------------------
+
+
+#: Rule id of the match that stands for a screen which failed internally, once
+#: screens are combined. No ``disabled_rule_ids`` entry removes it.
+GUARD_ERROR_RULE_ID = "guard.error"
+
+
+def combine_screens(
+    results: Sequence[ActionScreenResult],
+    *,
+    disabled_rule_ids: Collection[str] = (),
+) -> ActionScreenResult:
+    """Fold several screens of the same payload into one result; the worst wins.
+
+    A caller that reads a payload more than one way (a tool call as sent, and
+    each string in it decoded) screens every reading and combines them here.
+    Matches are merged by rule id, keeping the first excerpt; rules named in
+    *disabled_rule_ids* are dropped **before** the severity is taken, so a
+    disabled rule cannot set it. A screen that failed internally (destructive
+    with no matches, see :meth:`DestructiveActionGuard.screen`) becomes a
+    ``critical`` :data:`GUARD_ERROR_RULE_ID` match: disabling rules must not
+    turn fail-closed into allow.
+    """
+    merged: dict[str, ActionMatch] = {}
+    failed = False
+    for result in results:
+        if result.is_destructive and not result.matches:
+            failed = True
+        for match in result.matches:
+            if match.rule_id == GUARD_ERROR_RULE_ID:
+                failed = True
+            elif match.rule_id not in disabled_rule_ids:
+                merged.setdefault(match.rule_id, match)
+    matches = sorted(merged.values(), key=lambda m: -_SEVERITY_ORDER[m.severity])
+    if failed:
+        matches.insert(0, ActionMatch(
+            rule_id=GUARD_ERROR_RULE_ID,
+            name="guard internal error",
+            severity=ActionSeverity.CRITICAL,
+            owasp="LLM06",
+            excerpt="a screen failed internally; failing closed",
+        ))
+    first = results[0] if results else None
+    payload_hash = first.payload_sha256 if first else ""
+    surface = first.surface if first else "agent_action"
+    if not matches:
+        return ActionScreenResult(
+            is_destructive=False,
+            severity=ActionSeverity.NONE,
+            explanation="no destructive action patterns matched",
+            payload_sha256=payload_hash,
+            surface=surface,
+        )
+    worst = matches[0]
+    return ActionScreenResult(
+        is_destructive=True,
+        severity=worst.severity,
+        matches=matches,
+        explanation=(
+            f"Destructive action detected: {worst.name} "
+            f"({worst.severity.value}, rule={worst.rule_id}); "
+            f"{len(matches)} pattern(s) matched"
+        ),
+        payload_sha256=payload_hash,
+        surface=surface,
+    )
+
+
 def now_iso() -> str:
     """ISO 8601 UTC timestamp helper (re-exported for callers)."""
     return datetime.now(timezone.utc).isoformat()
@@ -685,6 +757,8 @@ __all__ = [
     "DestructiveActionGuardConfig",
     "screen_action",
     "reset_guard",
+    "combine_screens",
     "MAX_SCAN_BYTES",
     "TRUNCATION_RULE_ID",
+    "GUARD_ERROR_RULE_ID",
 ]

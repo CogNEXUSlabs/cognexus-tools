@@ -155,6 +155,64 @@ def test_every_image_in_the_rendered_compose_is_digest_pinned():
             assert "@sha256:" in stripped, stripped
 
 
+#: The posture `artzain local` ships: the engine's code defaults (manual
+#: §3.3a). Unregistered agents are allowed, so a first decision needs no
+#: agent registration.
+_SHIPPED_POSTURE = {
+    "COGNEXUS_IDENTITY_BINDING": "advisory",
+    "COGNEXUS_CAPABILITY_ENFORCEMENT": "review",
+    "COGNEXUS_UNREGISTERED_AGENTS": "allow",
+    "COGNEXUS_PRODUCT_ENFORCEMENT": "permissive",
+    "COGNEXUS_CONTEXT_SCREENING": "advisory",
+    "COGNEXUS_CONTEXT_HISTORY": "1",
+    "COGNEXUS_LIFECYCLE_GATE": "advisory",
+    "COGNEXUS_RECONCILE_ENFORCEMENT": "advisory",
+    "COGNEXUS_KILL_SWITCH_RBAC": "1",
+}
+
+
+def test_posture_ships_advisory_and_takes_overrides_from_the_env(_workspace):
+    """Through 0.6.15 the template wrote `observe` into seven of these, a
+    value none of them accepts, and wrote all nine as bare values in a file
+    every `up` rewrites, so an install could not enforce durably. Each now
+    reads ``${NAME:-default}``, and an operator's line in .env survives the
+    rewrite."""
+    local.ensure_workspace(_manifest())
+    compose = (local.workspace_dir() / "compose.yaml").read_text(encoding="utf-8")
+    for name, default in _SHIPPED_POSTURE.items():
+        assert f"- {name}=${{{name}:-{default}}}\n" in compose, name
+
+    with (local.workspace_dir() / ".env").open("a", encoding="utf-8") as fh:
+        fh.write("COGNEXUS_UNREGISTERED_AGENTS=deny\n")
+    local.ensure_workspace(_manifest())  # every `up` re-renders first
+    assert local.read_env()["COGNEXUS_UNREGISTERED_AGENTS"] == "deny"
+
+
+def test_compose_calls_keep_exported_template_variables_out(monkeypatch):
+    """Compose ranks the calling shell's variables above --env-file. An
+    exported ``COGNEXUS_UNREGISTERED_AGENTS=allow`` (a shell profile, a CI
+    job, a leftover dev export) would silently undo ``deny`` in the
+    workspace .env, and an exported JWT_SECRET_KEY or POSTGRES_PASSWORD
+    would replace the install's own. The .env is the only source."""
+    monkeypatch.setenv("COGNEXUS_UNREGISTERED_AGENTS", "allow")
+    monkeypatch.setenv("JWT_SECRET_KEY", "from-the-shell")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "from-the-shell")
+    monkeypatch.setenv("DOCKER_HOST", "tcp://127.0.0.1:2375")
+    seen: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(local.subprocess, "run", fake_run)
+    local._compose(["up", "-d"])
+    env = seen.get("env")
+    assert env is not None, "compose inherited the whole shell environment"
+    for name in ("COGNEXUS_UNREGISTERED_AGENTS", "JWT_SECRET_KEY", "POSTGRES_PASSWORD"):
+        assert name not in env, name
+    assert env["DOCKER_HOST"] == "tcp://127.0.0.1:2375", "docker's own settings pass through"
+
+
 def test_env_is_generated_once_and_never_overwritten(_workspace):
     state = local.ensure_workspace(_manifest())
     assert state["env_created"] is True
@@ -500,3 +558,16 @@ def test_rendered_compose_is_valid_compose(_workspace):
          "--env-file", str(local.workspace_dir() / ".env"), "config", "--quiet"],
         capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.skipif(shutil.which("docker") is None,
+                    reason="docker CLI not installed")
+def test_exported_posture_variable_does_not_beat_the_workspace_env(_workspace, monkeypatch):
+    """The review repro, through the helper every `up` uses."""
+    local.ensure_workspace(_manifest())
+    with (local.workspace_dir() / ".env").open("a", encoding="utf-8") as fh:
+        fh.write("COGNEXUS_UNREGISTERED_AGENTS=deny\n")
+    monkeypatch.setenv("COGNEXUS_UNREGISTERED_AGENTS", "allow")
+    proc = local._compose(["config", "--format", "json"], timeout=60)
+    analyzer = json.loads(proc.stdout)["services"]["analyzer"]["environment"]
+    assert analyzer["COGNEXUS_UNREGISTERED_AGENTS"] == "deny"

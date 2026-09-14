@@ -20,7 +20,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const SDK_SRC = join(here, "..", "..", "typescript", "src");
 
 function read(path: string): string {
-  return readFileSync(path, "utf8");
+  // Git stores these files with LF, but a Windows checkout (`* text=auto`, no
+  // core.eol) writes CRLF, and the `\n` in `block` then finds no marker.
+  return readFileSync(path, "utf8").replace(/\r\n/g, "\n");
 }
 
 function block(source: string, file: string, name: string): string {
