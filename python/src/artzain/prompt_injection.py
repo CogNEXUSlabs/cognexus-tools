@@ -22,7 +22,11 @@
 #   CogNEXUS also normalises the text before the regex pass (NFKC, and
 #   zero-width / soft-hyphen characters stripped) — see _normalise_for_scan.
 #   Upstream matches the raw string, so one zero-width space inside a keyword
-#   defeats every pattern there (open-items §9.3).
+#   defeats every pattern there (open-items §9.3). Text in Unicode tag
+#   characters (U+E0000-E007F) is decoded and scanned too, and its presence is
+#   a token-smuggling finding (HIGH from four such characters); the three RGI
+#   flag emoji, and pieces of them cut off at either end of the text, are not
+#   hidden text.
 #   Provenance and drift detail: docs/third-party/agent-governance-toolkit.md
 #
 """Prompt Injection Detection — OWASP LLM01 / ASI01.
@@ -66,7 +70,7 @@ import re
 import unicodedata
 import warnings
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -338,8 +342,80 @@ _INVISIBLE_CHARS_RE: re.Pattern[str] = re.compile(
 )
 
 
-def _normalise_for_scan(text: str) -> tuple[str, int, bool]:
-    """Return ``(scan_text, invisible_removed, nfkc_changed)`` for *text*.
+# Unicode tag characters (U+E0000-E007F) render as nothing too, and
+# U+E0020-E007E map one-to-one onto printable ASCII, so a run of them is text a
+# model can read and a person cannot see. Their one recommended use is the
+# emoji tag sequence (RGI_Emoji_Tag_Sequence, UTS #51): the flags of England,
+# Scotland and Wales, each U+1F3F4, the subdivision code in tag letters, then
+# U+E007F CANCEL TAG. Those three, and pieces of them cut off at either end of
+# the text (_cut_flag_ends), are left as they are; every other tag character is
+# hidden text. (Other subdivision codes form valid flags too, but chained, their
+# tag letters would spell short words nobody sees.)
+_RGI_EMOJI_TAG_SEQUENCES: tuple[str, ...] = tuple(
+    chr(0x1F3F4) + "".join(chr(0xE0000 + ord(c)) for c in code) + chr(0xE007F)
+    for code in ("gbeng", "gbsct", "gbwls")
+)
+RGI_EMOJI_TAG_SEQUENCE_RE: re.Pattern[str] = re.compile(
+    "({})".format("|".join(map(re.escape, _RGI_EMOJI_TAG_SEQUENCES))),
+)
+_TAG_CHARS_RE: re.Pattern[str] = re.compile(r"[\U000E0000-\U000E007F]+")
+# A printable tag reads as its ASCII character; U+E0000-E001F (no printable
+# counterpart) and CANCEL TAG read as nothing.
+_TAG_TO_ASCII: dict[int, int | None] = {
+    cp: cp - 0xE0000 if 0xE0020 <= cp <= 0xE007E else None
+    for cp in range(0xE0000, 0xE0080)
+}
+# From this many hidden tag characters (enough to carry a word) the hidden text
+# is a HIGH finding on its own; fewer are MEDIUM.
+_HIDDEN_TAG_CHARS_HIGH = 4
+
+
+@dataclass(frozen=True)
+class _ScanText:
+    """What the literal checks read for one input (see _normalise_for_scan).
+
+    Attributes:
+        views: The distinct non-empty readings; one unless tag characters hide
+            text.
+        visible: The reading a person sees; the only one the allowlist reads.
+        literal: The text with its tag characters as they arrived; the
+            blocklist, canary check and custom patterns read it as well, so an
+            entry written in tag characters still matches.
+        invisible_removed: Zero-width / soft-hyphen characters stripped.
+        nfkc_changed: Whether NFKC changed any reading.
+        hidden_tag_chars: Tag characters that are not part of an RGI flag or of
+            a piece of one cut off at either end of the text.
+    """
+    views: tuple[str, ...]
+    visible: str
+    literal: str
+    invisible_removed: int
+    nfkc_changed: bool
+    hidden_tag_chars: int
+
+
+def _cut_flag_ends(text: str) -> tuple[str, str, str]:
+    """Split *text* into ``(head, body, tail)`` around cut-off RGI flags.
+
+    Truncating, chunking or streaming text can cut a flag in two. *head* is
+    the end of a flag the text starts with, *tail* the start of one it ends
+    with, and a text that is all one piece of a flag is all *head*. A piece
+    holds only letters of that flag's code, so it carries no hidden text. A
+    whole flag is not a piece: it stays in *body*, read as it always was.
+    """
+    for flag in _RGI_EMOJI_TAG_SEQUENCES:
+        if text != flag and text in flag:
+            return text, "", ""
+    pieces = [(flag[:cut], flag[cut:]) for flag in _RGI_EMOJI_TAG_SEQUENCES
+              for cut in range(1, len(flag))]
+    head = max((end for _, end in pieces if text.startswith(end)), key=len, default="")
+    rest = text[len(head):]
+    tail = max((start for start, _ in pieces if rest.endswith(start)), key=len, default="")
+    return head, rest[:len(rest) - len(tail)], tail
+
+
+def _normalise_for_scan(text: str) -> _ScanText:
+    """Return the readings of *text* that the literal checks run over.
 
     The pattern set matches literal ASCII keywords, so it is defeated by a
     single invisible character inside a word (``ign\u200bore``) or by a
@@ -348,10 +424,70 @@ def _normalise_for_scan(text: str) -> tuple[str, int, bool]:
     Scanning runs over the stripped, NFKC-normalised text; the original is
     still what gets hashed for the audit record and what the zero-width-run
     check inspects.
+
+    Tag characters hide text unless they belong to an RGI flag, or to a piece
+    of one cut off at either end of the text. Hidden text is read three ways:
+    decoded where it sits, left out (the text a person sees), and on its own
+    with the hidden runs joined. A hidden character therefore cannot split a
+    visible keyword, and hidden text next to visible letters is also read
+    without them. Without tag characters there is one reading, as before.
     """
     stripped, removed = _INVISIBLE_CHARS_RE.subn("", text)
     normalised = unicodedata.normalize("NFKC", stripped)
-    return normalised, removed, normalised != stripped
+    if not _TAG_CHARS_RE.search(stripped):
+        return _ScanText((normalised,), normalised, normalised, removed, normalised != stripped, 0)
+    head, body, tail = _cut_flag_ends(stripped)
+    # A cut-off piece's tag letters are neither hidden text nor anything a
+    # reader sees, so every reading leaves them out (a black flag stays).
+    # Kept raw, a piece at the start would break the ^-anchored rules.
+    head, tail = _TAG_CHARS_RE.sub("", head), _TAG_CHARS_RE.sub("", tail)
+    decoded: list[str] = [head]
+    visible: list[str] = [head]
+    hidden: list[str] = []
+    hidden_count = 0
+    # split() with a capturing group puts each flag at an odd index.
+    for index, part in enumerate(RGI_EMOJI_TAG_SEQUENCE_RE.split(body)):
+        if index % 2:
+            decoded.append(part)
+            visible.append(part)
+            continue
+        runs = _TAG_CHARS_RE.findall(part)
+        hidden_count += sum(len(run) for run in runs)
+        decoded.append(part.translate(_TAG_TO_ASCII))
+        visible.append(_TAG_CHARS_RE.sub("", part))
+        hidden.append("".join(runs).translate(_TAG_TO_ASCII))
+    decoded.append(tail)
+    visible.append(tail)
+    readings = ["".join(decoded), "".join(visible), "".join(hidden)]
+    normalised_readings = [unicodedata.normalize("NFKC", reading) for reading in readings]
+    views = tuple(dict.fromkeys(r for r in normalised_readings if r)) or ("",)
+    return _ScanText(
+        views, normalised_readings[1], normalised, removed,
+        normalised_readings != readings or normalised != stripped, hidden_count,
+    )
+
+
+_Finding = tuple[InjectionType, ThreatLevel, float, str]
+
+
+def _over_views(
+    check: Callable[[str], list[_Finding]], views: tuple[str, ...],
+) -> list[_Finding]:
+    """Run *check* over every reading; a later reading adds only new findings.
+
+    The first reading's findings are kept exactly as *check* returns them, so
+    an input without hidden text gets the same list as a single scan would.
+    New findings are looked up in a set: the base64 check adds one finding per
+    blob, and a list scan would make merging quadratic.
+    """
+    findings = check(views[0])
+    seen = set(findings)
+    for view in views[1:]:
+        for finding in check(view):
+            if finding not in seen:
+                seen.add(finding)
+                findings.append(finding)
+    return findings
 
 # Base64 detection: 20+ chars of valid base64 alphabet
 _BASE64_PATTERN: re.Pattern[str] = re.compile(
@@ -563,13 +699,20 @@ class PromptInjectionDetector:
         canary_tokens: list[str] | None,
     ) -> DetectionResult:
         """Core detection logic — runs all check methods and aggregates."""
-        # Every literal check below runs over the normalised text; the raw
-        # text is kept for the audit hash, the canary check (run on both) and
-        # the zero-width-run check, which needs the characters we strip.
-        scan_text, invisible_removed, nfkc_changed = _normalise_for_scan(text)
+        # Every literal check below runs over each reading of the normalised
+        # text (one reading unless tag characters hide text); the raw text is
+        # kept for the audit hash, the canary check (run on it and on every
+        # reading) and the zero-width-run check, which needs the characters we
+        # strip. The rules a deployment configures (blocklist, canary tokens,
+        # custom patterns) also read the text with its tag characters as they
+        # arrived, so an entry written in tag characters still matches.
+        scan = _normalise_for_scan(text)
+        views = scan.views
+        config_views = tuple(dict.fromkeys((scan.literal, *views)))
 
-        # Fast-path: allowlisted inputs
-        text_lower = scan_text.lower()
+        # Fast-path: allowlisted inputs. Matched against the text a person
+        # sees, so text hidden in tag characters cannot match an entry.
+        text_lower = scan.visible.lower()
         for allowed in self._config.allowlist:
             if allowed.lower() in text_lower:
                 result = DetectionResult(
@@ -582,9 +725,10 @@ class PromptInjectionDetector:
                 self._record_audit(text, source, result)
                 return result
 
-        # Fast-path: blocklisted inputs
+        # Fast-path: blocklisted inputs (any reading, hidden text included)
+        views_lower = [view.lower() for view in config_views]
         for blocked in self._config.blocklist:
-            if blocked.lower() in text_lower:
+            if any(blocked.lower() in view for view in views_lower):
                 result = DetectionResult(
                     is_injection=True,
                     threat_level=ThreatLevel.HIGH,
@@ -599,27 +743,24 @@ class PromptInjectionDetector:
         # Run all check methods
         findings: list[tuple[InjectionType, ThreatLevel, float, str]] = []
 
-        findings.extend(self._check_direct_override(scan_text))
-        findings.extend(self._check_delimiter_attacks(scan_text))
-        findings.extend(self._check_encoding_attacks(scan_text))
-        findings.extend(self._check_role_play(scan_text))
-        findings.extend(self._check_context_manipulation(scan_text))
-        canary_findings = self._check_canary_leak(text, canary_tokens)
-        if scan_text != text:
-            canary_findings.extend(
-                f for f in self._check_canary_leak(scan_text, canary_tokens)
-                if f not in canary_findings
-            )
-        findings.extend(canary_findings)
-        findings.extend(self._check_multi_turn(scan_text))
-        findings.extend(self._check_cross_plugin(scan_text))
-        findings.extend(self._check_markup_injection(scan_text))
+        findings.extend(_over_views(self._check_direct_override, views))
+        findings.extend(_over_views(self._check_delimiter_attacks, views))
+        findings.extend(_over_views(self._check_encoding_attacks, views))
+        findings.extend(_over_views(self._check_role_play, views))
+        findings.extend(_over_views(self._check_context_manipulation, views))
+        findings.extend(_over_views(
+            lambda view: self._check_canary_leak(view, canary_tokens),
+            tuple(dict.fromkeys((text, *config_views))),
+        ))
+        findings.extend(_over_views(self._check_multi_turn, views))
+        findings.extend(_over_views(self._check_cross_plugin, views))
+        findings.extend(_over_views(self._check_markup_injection, views))
         findings.extend(self._check_token_smuggling(text))
-        findings.extend(self._check_credential_exfil(scan_text))
+        findings.extend(_over_views(self._check_credential_exfil, views))
 
         # Check custom patterns
         for pattern in self._config.custom_patterns:
-            if pattern.search(scan_text):
+            if any(pattern.search(view) for view in config_views):
                 findings.append((
                     InjectionType.DIRECT_OVERRIDE,
                     ThreatLevel.HIGH,
@@ -627,18 +768,31 @@ class PromptInjectionDetector:
                     f"custom:{pattern.pattern}",
                 ))
 
+        # Hidden text is a finding whether or not a rule matched what it says:
+        # a person reviewing the input cannot see it. It goes after the rules,
+        # so the injection type still comes from a rule that matched at the
+        # same level or higher.
+        if scan.hidden_tag_chars:
+            high = scan.hidden_tag_chars >= _HIDDEN_TAG_CHARS_HIGH
+            findings.append((
+                InjectionType.TOKEN_SMUGGLING,
+                ThreatLevel.HIGH if high else ThreatLevel.MEDIUM,
+                0.85 if high else 0.7,
+                "token_smuggle:tag_characters",
+            ))
+
         # Record that normalisation happened, as its own low-confidence
         # signal: invisible characters are a smuggling tell on their own
         # (below the run length the MEDIUM rule needs), and an NFKC change is
         # worth naming only when something matched the normalised form.
-        if invisible_removed:
+        if scan.invisible_removed:
             findings.append((
                 InjectionType.TOKEN_SMUGGLING,
                 ThreatLevel.LOW,
                 0.45,
-                f"normalisation:invisible_chars_stripped:{invisible_removed}",
+                f"normalisation:invisible_chars_stripped:{scan.invisible_removed}",
             ))
-        if nfkc_changed and findings:
+        if scan.nfkc_changed and findings:
             findings.append((
                 InjectionType.ENCODING_ATTACK,
                 ThreatLevel.LOW,
