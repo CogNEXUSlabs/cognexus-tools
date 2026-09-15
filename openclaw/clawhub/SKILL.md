@@ -49,7 +49,7 @@ CogNEXUS deployment for a sealed decision before any host tool runs:
          "artzain-tool-gate": {
            enabled: true,
            config: {
-             // apiKey: "cgnx_…",        // or COGNEXUS_API_KEY on the Gateway
+             // apiKey: "cnx_…",         // or COGNEXUS_API_KEY on the Gateway
              // baseUrl: "https://your-cognexus-deployment.example",
              // agentDid: "did:…",       // optional identity override
            },

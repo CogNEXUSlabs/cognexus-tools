@@ -4,6 +4,14 @@ All notable changes to `@cognexuslabs/openclaw-artzain`. Headings are the
 bare version (`## 0.2.2`): the mirror's `publish-npm.yml` cuts the GitHub
 release notes for tag `openclaw-v<version>` from the matching section.
 
+## 0.2.4
+
+### Changed
+
+- README: the plugin configuration example's Decision API key sample reads
+  `cnx_…`, the prefix every Decision API key has. It said `cgnx_…`. The code
+  does not change.
+
 ## 0.2.3
 
 ### Fixed

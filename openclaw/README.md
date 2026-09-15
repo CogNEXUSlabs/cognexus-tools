@@ -32,7 +32,7 @@ a dashboard JWT and **not** an envelope `cnxe_…` key). Optional:
       "artzain-tool-gate": {
         enabled: true,
         config: {
-          // apiKey: "cgnx_…",   // or COGNEXUS_API_KEY
+          // apiKey: "cnx_…",    // or COGNEXUS_API_KEY
           // baseUrl: "https://app.cognexuslabs.ai",
         },
       },

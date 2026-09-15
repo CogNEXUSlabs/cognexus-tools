@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 import unittest
@@ -148,6 +149,28 @@ class KillSwitchTests(unittest.TestCase):
         self.assertEqual(result.severity.value, "critical")
         self.assertTrue(is_killed(13))
         self.assertEqual([event for event, _ in self.sent], ["agent_kill_switch"])
+
+    def test_guard_trip_record_is_json_serializable(self) -> None:
+        # An on_kill callback that stored the record as JSON raised
+        # "Object of type ActionSeverity is not JSON serializable": the
+        # record's matches carried the guard's severity enum.
+        received: list = []
+        result = screen_agent_action(
+            "DROP DATABASE production;",
+            run_id=15,
+            raise_on_critical=False,
+            on_kill=received.append,
+        )
+        record = kill_record(15)
+        self.assertEqual(received, [record])
+        json.dumps(record.to_dict())
+        json.dumps(recent_activations())
+        # Every field of each guard match, with severity as its string value.
+        self.assertEqual(
+            record.matches,
+            [{**vars(m), "severity": m.severity.value} for m in result.matches],
+        )
+        self.assertEqual(record.matches[0]["severity"], "critical")
 
     def test_failing_cloud_mirror_does_not_replace_the_kill(self) -> None:
         with mock.patch(

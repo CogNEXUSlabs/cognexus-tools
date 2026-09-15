@@ -21,11 +21,16 @@ tool names and argument key names.
 
 The second half of the module lets the regex screens read a tool call the way
 its tool does (:func:`screen_tool_call_action`,
-:func:`detect_tool_call_injection`). JSON escaping changes the text a regex
-sees: ``json.dumps`` writes a newline inside an argument as the two characters
+:func:`detect_tool_call_injection`, :func:`decoded_texts`,
+:func:`evaluate_tool_call_policy`). JSON escaping changes the text a regex sees:
+``json.dumps`` writes a newline inside an argument as the two characters
 ``\\n``, so ``DROP\\nDATABASE`` has no whitespace between its words, and
 ``ensure_ascii`` writes Cyrillic, CJK and emoji as runs of ``\\uXXXX``, which
 read as escape-sequence smuggling. The tool decodes the JSON and sees neither.
+
+A tool call also names its values: an argument's name is the label that PII
+detectors look for in prose, as in ``dob: 1990-01-01``. :func:`member_text`
+writes each object member as such a line for :func:`scan_tool_call_pii`.
 """
 
 from __future__ import annotations
@@ -36,12 +41,18 @@ import unicodedata
 from collections import deque
 from dataclasses import dataclass, field
 from json.decoder import scanstring
-from typing import TYPE_CHECKING, Any, Collection, Deque, Dict, Iterator, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Collection, Deque, Dict, Iterator, List, Optional, Sequence, Set, Tuple
 
 from artzain.prompt_injection import RGI_EMOJI_TAG_SEQUENCE_RE
 
 if TYPE_CHECKING:
     from artzain.destructive_action_guard import ActionScreenResult
+    from artzain.policy_enforcement import (
+        ClientPolicyRule,
+        PolicyEnforcementEvaluator,
+        PolicyEnforcementFinding,
+        PolicyEnforcementReport,
+    )
     from artzain.prompt_injection import DetectionResult, PromptInjectionDetector
 
 __all__ = [
@@ -51,9 +62,14 @@ __all__ = [
     "MAX_SCREENED_STRINGS",
     "NESTED_TOO_DEEP_RULE_ID",
     "TOO_MANY_STRINGS_RULE_ID",
+    "combine_policy_reports",
     "decode_strings",
+    "decoded_texts",
     "detect_tool_call_injection",
+    "evaluate_tool_call_policy",
     "inspect_tool_call",
+    "member_text",
+    "scan_tool_call_pii",
     "screen_tool_call_action",
     "unescape_non_ascii",
 ]
@@ -293,6 +309,23 @@ def _inspect(payload: str, contracts: Optional[Dict[str, Any]]) -> ContractRepor
 #   escapes. It also reads the decoded strings as one text: no injection
 #   pattern can be switched off by a neighbouring string (a detector allowlist
 #   entry anywhere in the text still clears all of it, as for any text).
+# * The policy screen (tenant rules and the conduct rules), and on the engine
+#   the PII and special-category screens, read the payload as sent, so what
+#   they caught there they still catch, and each of :func:`decoded_texts`: the
+#   call with its string escapes written out where they sit, once for the
+#   call's own strings and once more for each level of JSON inside strings,
+#   each text judged on its own. Writing escapes out in place keeps the rest as
+#   sent (keys, order, repeated strings, numbers), except that a line break
+#   takes the place of the comma or bracket after each string, so a pattern
+#   that stops at a line break does not run from one string value into the
+#   next; a key still runs into its value, and a number into the string after
+#   it, as in the call as sent. A tool may decode a string that looks like JSON
+#   (a stringified ``arguments``) or use it as text (an email body that opens
+#   with a bracket), and each level decoded shortens the text, so each text is
+#   judged with the approval markers it holds: a marker that decoding a deeper
+#   level brings near a match does not suppress the match where it already
+#   shows one level up. The conduct rule weighs profanity against client
+#   context anywhere in a text, keys included, as it does in the call as sent.
 #
 # The decoded strings are every JSON string in the call, keys and values from
 # any shape, and the strings inside a string that is itself JSON (OpenAI's
@@ -510,6 +543,70 @@ def decode_strings(payload: str) -> DecodedStrings:
     return DecodedStrings(strings, too_deep, [c for c in commands if c not in screened])
 
 
+#: What may follow a JSON string: optional JSON whitespace, then ``,``, ``}`` or ``]``.
+_AFTER_STRING_RE = re.compile(r"[ \t\n\r]*[,}\]]")
+
+
+def decoded_texts(payload: str) -> List[str]:
+    """*payload* with its JSON string escapes written out in place, once per decoding depth.
+
+    The first text writes out the escapes in the call's own strings, keys and
+    values; each next one also writes out, inside every string that looks like
+    JSON, the escapes of the strings one level deeper, down to
+    :data:`MAX_NESTED_JSON` levels, whether or not a strict parser accepts it.
+    Each string keeps its quotes and its place. Between strings the text stays
+    as sent, except that the ``,``, ``}`` or ``]`` right after a string becomes
+    a line break, so a pattern that stops at a line break does not run from one
+    string value into the next once escapes are written out; a key still runs
+    into its value, and a number into the string after it. A payload without a
+    backslash has nothing to write out and gets no text, and a text the same as
+    the one before it is left out. Decoding only shortens text: no text is
+    longer than *payload*, and two positions are never further apart in a text
+    than in the one before it. Reading a text stops at the first string that
+    does not decode, and the rest of that text stays as it is. Lone surrogates
+    become U+FFFD, since the screens hash what they read.
+    """
+    payload = payload or ""
+    if "\\" not in payload:
+        return []
+    texts: List[str] = []
+    for depth in range(1, MAX_NESTED_JSON + 2):
+        text = _clean(_write_out_strings(payload, 0, depth))
+        if not texts or text != texts[-1]:
+            texts.append(text)
+    return texts
+
+
+def _write_out_strings(text: str, level: int, depth: int) -> str:
+    """*text* with the strings at *level* decoded, and deeper ones while ``level + 1 < depth``.
+
+    The ``,``, ``}`` or ``]`` right after each string becomes a line break.
+    """
+    parts: List[str] = []
+    pos = 0
+    while True:
+        start = text.find('"', pos)
+        if start < 0:
+            break
+        try:
+            value, end = scanstring(text, start + 1, False)
+        except ValueError:
+            break
+        if level + 1 < depth and _looks_like_json(value):
+            value = _write_out_strings(value, level + 1, depth)
+        parts.append(text[pos:start + 1])
+        parts.append(value)
+        parts.append('"')
+        pos = end
+        after = _AFTER_STRING_RE.match(text, pos)
+        if after:
+            parts.append(text[pos:after.end() - 1])
+            parts.append("\n")
+            pos = after.end()
+    parts.append(text[pos:])
+    return "".join(parts)
+
+
 def _kept_if_invisible(char: str, escape: str) -> str:
     if unicodedata.category(char) in _KEEP_ESCAPED or _DEFAULT_IGNORABLE_RE.match(char):
         return escape
@@ -649,3 +746,275 @@ def detect_tool_call_injection(
         matched_patterns=list(dict.fromkeys(p for r in (worst, *hits) for p in r.matched_patterns)),
         explanation=worst.explanation,
     )
+
+
+def _rule_key(finding: "PolicyEnforcementFinding") -> Tuple[str, str, str, str, str]:
+    """What tells one rule's finding from another's: rule ids need not be unique."""
+    return (finding.rule_id, finding.rule_title, finding.category, finding.severity, finding.summary)
+
+
+def combine_policy_reports(reports: Sequence["PolicyEnforcementReport"]) -> "PolicyEnforcementReport":
+    """One policy report for several readings of one payload, the payload as sent first.
+
+    Every finding of the first reading is kept, and a later reading adds each
+    finding whose rule no earlier reading reported. Rules are told apart by id,
+    title, category, severity and summary, since a bundle can give two rules the
+    same id. A rule that one reading suppresses and another reports is a
+    finding: a pattern any reading reports as a finding is not also recorded as
+    suppressed, and a suppression several readings make is recorded once. The
+    report carries the first reading's hash and rule count; a single report
+    comes back as it is.
+    """
+    from artzain.policy_enforcement import PolicyEnforcementReport
+
+    first, *rest = reports
+    if not rest:
+        return first
+    findings = list(first.findings)
+    reported = {_rule_key(f) for f in findings}
+    for finding in (f for report in rest for f in report.findings):
+        if _rule_key(finding) not in reported:
+            reported.add(_rule_key(finding))
+            findings.append(finding)
+
+    found = {(_rule_key(f), f.matched_pattern) for report in reports for f in report.findings}
+    suppressed: List["PolicyEnforcementFinding"] = []
+    recorded: Set[Tuple[Tuple[str, str, str, str, str], str]] = set()
+    for entry in (s for report in reports for s in report.suppressed):
+        key = (_rule_key(entry), entry.matched_pattern)
+        if key not in found and key not in recorded:
+            recorded.add(key)
+            suppressed.append(entry)
+
+    return PolicyEnforcementReport(
+        violation_count=len(findings),
+        findings=findings,
+        rules_checked=first.rules_checked,
+        text_hash=first.text_hash,
+        suppressed=suppressed,
+    )
+
+
+def evaluate_tool_call_policy(
+    evaluator: "PolicyEnforcementEvaluator",
+    payload: str,
+    rules: "Sequence[ClientPolicyRule]",
+) -> "PolicyEnforcementReport":
+    """Policy screen of a ``tool_call`` payload: as sent, then each of :func:`decoded_texts`.
+
+    *evaluator* reads each text on its own, so an approval marker counts only in
+    the text it is in, and :func:`combine_policy_reports` folds the reports into
+    one.
+    """
+    texts = [payload, *decoded_texts(payload)]
+    return combine_policy_reports([evaluator.evaluate(text, rules) for text in texts])
+
+
+# ---------------------------------------------------------------------------
+# Argument names as labels
+# ---------------------------------------------------------------------------
+#
+# Some PII detectors count a value only after its label written as prose:
+# ``dob: 1990-01-01``, ``passport: X1234567``, ``password: ...``. In a tool
+# call the label is an argument's name, a JSON key, and the value a separate
+# string, so the call as sent never puts the two side by side. The PII screen
+# also reads the call with each object member written as a ``key: value`` line.
+#
+# * A key is written as its words, the way a label reads in prose:
+#   ``date_of_birth`` as ``date of birth``, ``passportNumber`` as ``passport
+#   Number``, ``guest1_dob`` as ``guest dob``. The words are its runs of ASCII
+#   letters, split where the case changes; digits, punctuation and spacing are
+#   left out. A label therefore holds no digit and no ``@``, so it cannot hold
+#   or complete a number or an address, and the ``: `` after it keeps it from
+#   running into the value.
+# * A string value is written when it has a letter or digit in it, and a number
+#   when it has at least four digits. ``null``, ``true``, ``false``, ``NaN``, an
+#   empty or masked string, and a number of fewer digits (a count, a flag or a
+#   code) have no line, so ``{"require_password": false}`` or ``1`` is not a
+#   password. A string flag still is (``"require_password": "yes"``), as the
+#   same words are in prose. An object has no line of its own; its members have
+#   theirs.
+# * A list's values follow its key the way a list follows its label in prose:
+#   the key goes before the first of its values written, and the rest stand
+#   alone. Writing it before every value would repeat a long key once per
+#   item.
+# * A string that looks like JSON the way :func:`decode_strings` reads it (it
+#   opens with a bracket, a brace or a quote, and holds a quote) is read as
+#   JSON, down to :data:`MAX_NESTED_JSON` levels, like a stringified
+#   ``arguments``: through its members and values when the parser reads it,
+#   and they take the key the string had. A string the parser does not read
+#   reaches the tool as it is, and is written as it is; each string inside it
+#   that holds an escape is also written decoded, without a key. Past the last
+#   level, or when it does not look like JSON, a string is written as it is.
+# * A call the parser does not read, because it is not JSON or nests deeper
+#   than the parser goes, is JSON the tool decodes: it is read in pieces, each
+#   of its strings (keys included) as a value, decoded, and the text between
+#   them as it is.
+# * Lines are joined with :data:`_JOIN`. No PII pattern matches across its
+#   ``;``, so no match runs from one member or list item into the next.
+
+
+class _Number(str):
+    """A JSON number, as the payload writes it."""
+
+
+#: Fewest digits a number needs for a line of its own: a shorter one is a count,
+#: a flag or a code, not an identifier or a credential.
+_MIN_NUMBER_DIGITS = 4
+
+
+def _no_constant(_: str) -> None:
+    return None
+
+
+#: :func:`_parse_json`'s parser, keeping numbers as written and ``NaN`` or
+#: ``Infinity`` as ``null``. Built once: a call can hold many strings to try.
+_VALUES_DECODER = json.JSONDecoder(
+    object_pairs_hook=_Members,
+    parse_int=_Number,
+    parse_float=_Number,
+    parse_constant=_no_constant,
+)
+
+
+def _parse_values(value: str) -> Any:
+    try:
+        return _VALUES_DECODER.decode(value)
+    except (ValueError, RecursionError):
+        return _UNPARSED
+
+
+#: A word of a key: a run of ASCII letters, split where the case changes
+#: (``dateOfBirth``, ``HTTPPassword``, ``userDOB``).
+_KEY_WORD_RE = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+")
+
+
+def _has_word(text: str) -> bool:
+    return any(char.isalnum() for char in text)
+
+
+def _label(key: str) -> Optional[str]:
+    return " ".join(_KEY_WORD_RE.findall(key)) or None
+
+
+class _Unread(str):
+    """Text the parser did not read."""
+
+
+class _Text(str):
+    """Text written as it is, never read as JSON again."""
+
+
+def _pieces(text: str) -> Iterator[str]:
+    """*text* in order: the text before each JSON string literal, then the literal decoded.
+
+    Found the way :func:`_literals` finds them. From a literal that does not
+    decode, the rest of *text* is one piece of text between strings.
+    """
+    pos = 0
+    while True:
+        start = text.find('"', pos)
+        if start < 0:
+            break
+        try:
+            value, end = scanstring(text, start + 1, False)
+        except ValueError:
+            break
+        yield _Text(text[pos:start])
+        yield value
+        pos = end
+    yield _Text(text[pos:])
+
+
+def _escaped_strings(text: str) -> List[str]:
+    """Each JSON string literal in *text* that holds an escape, decoded, found as :func:`_literals` finds them."""
+    found: List[str] = []
+    pos = 0
+    while True:
+        start = text.find('"', pos)
+        if start < 0:
+            return found
+        try:
+            value, end = scanstring(text, start + 1, False)
+        except ValueError:
+            return found
+        if "\\" in text[start + 1:end - 1]:
+            found.append(value)
+        pos = end
+
+
+def _read(text: str) -> Any:
+    parsed = _parse_values(text)
+    return _Unread(text) if parsed is _UNPARSED else parsed
+
+
+def _written(value: str) -> bool:
+    if isinstance(value, _Number):
+        return sum(char.isdigit() for char in value) >= _MIN_NUMBER_DIGITS
+    return _has_word(value)
+
+
+def member_text(payload: str) -> str:
+    """*payload* with each JSON object member written as a ``key: value`` line.
+
+    The text the label-gated PII detectors read in a tool call: the call's
+    argument names are their labels. A key is written as its words, a list's
+    values follow its key once, JSON inside strings is read through its
+    members, and the lines are joined with ``"\\n;\\n"`` (see the comment
+    above). Values are written decoded, in document order, repeated keys
+    included. A payload the strict parser does not read is read in pieces:
+    its strings decoded and the text between them as it is. JSON inside a
+    string that does not parse is written as it is, with its escaped strings
+    decoded after it. The text is never more than twice as long as *payload*.
+    """
+    lines: List[str] = []
+    # A string that repeats is read once: what the parser made of it, and the
+    # escaped strings of one it did not read. The walk never changes either.
+    reads: Dict[str, Any] = {}
+    escaped: Dict[str, List[str]] = {}
+    # A value, the one-item list holding the key its member's first written
+    # value takes (emptied once taken), and its level of JSON inside strings.
+    stack: List[Tuple[Any, List[Optional[str]], int]] = [(_read(payload or ""), [None], 0)]
+    while stack:
+        node, label, level = stack.pop()
+        if isinstance(node, _Unread):
+            stack.extend((piece, [None], level) for piece in reversed(list(_pieces(node))))
+        elif isinstance(node, _Members):
+            stack.extend((value, [_label(key)], level) for key, value in reversed(node))
+        elif isinstance(node, list):
+            stack.extend((item, label, level) for item in reversed(node))
+        elif isinstance(node, str):
+            if not isinstance(node, (_Number, _Text)) and level < MAX_NESTED_JSON and _looks_like_json(node):
+                if node not in reads:
+                    reads[node] = _read(node)
+                if not isinstance(reads[node], _Unread):
+                    stack.append((reads[node], label, level + 1))
+                    continue
+                # Not parsed: the tool receives it as it is, written below, and
+                # each string in it that holds an escape is read decoded after it.
+                if node not in escaped:
+                    escaped[node] = _escaped_strings(node)
+                stack.extend((_Text(value), [None], level) for value in reversed(escaped[node]))
+            if _written(node):
+                if label[0] is None:
+                    lines.append(node)
+                else:
+                    lines.append(f"{label[0]}: {node}")
+                    label[0] = None
+    return _JOIN.join(lines)
+
+
+def scan_tool_call_pii(payload: str) -> Dict[str, int]:
+    """PII counts for a ``tool_call`` payload, as sent and member by member.
+
+    :func:`~artzain.pii_detector.scan_text` reads the payload as sent and
+    :func:`member_text`, and each detector keeps the larger count.
+    """
+    from artzain.pii_detector import scan_text
+
+    counts = scan_text(payload)
+    text = member_text(payload)
+    if text:
+        for detector, count in scan_text(text).items():
+            counts[detector] = max(count, counts.get(detector, 0))
+    return counts

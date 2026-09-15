@@ -477,7 +477,9 @@ def screen_agent_action(
             surface="agent_action",
             source=source,
             payload_sha256=result.payload_sha256,
-            matches=[m.__dict__ for m in result.matches],
+            # to_dict() writes each match's severity as its string value, so
+            # an on_kill callback can store the record as JSON.
+            matches=result.to_dict()["matches"],
             manual=False,
             raise_after_trip=False,
             on_kill=on_kill,

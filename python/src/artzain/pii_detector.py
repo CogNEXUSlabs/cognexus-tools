@@ -126,21 +126,44 @@ _NINO_RE = re.compile(
 )
 _NINO_INVALID_PREFIXES = {"BG", "GB", "KN", "NK", "NT", "TN", "ZZ"}
 
+# Label gates: a passport number or a date of birth counts only right after its
+# label. Between the label and the value there may be a parenthesised note such
+# as the label's abbreviation or a date format (up to 32 characters, with no
+# line break or parenthesis inside), then blanks and up to two marks, each one
+# ``:``, ``#``, a hyphen, an en dash or an em dash, and each followed by any
+# blanks. Every blank repetition is followed by something a blank is not: a
+# letter of the label, the note's ``(``, a mark or the value. A run of blanks
+# can then be matched in one way only; two blank repetitions side by side, as
+# in ``\s*[:#]?\s*``, tried every split of a run that no value followed, in
+# time quadratic in its length.
+_LABEL_NOTE = r"(?:\s*\([^()\r\n]{1,32}\))?"
+_LABEL_SEPARATOR = r"\s*(?:[:#\u2013\u2014-]\s*){0,2}"
+
 # Label-gated passport number: the word "passport" within a few tokens of a
-# 6–9 char alphanumeric identifier. The separator after the label is
-# ``\s*(?:[:#]\s*)?``, which matches what ``\s*[:#]?\s*`` did: with the
-# optional ``:``/``#`` between two blank runs, a label followed by n blanks and
-# no identifier was tried in n² ways.
+# 6–9 char alphanumeric identifier that contains a digit. A word after the label
+# is a status or the rest of a field name ("passport: pending", "passport
+# country: France"), not the number. Passport numbers in use carry a digit; a
+# German document issued before November 2023 can exceptionally have letters
+# only, and is not counted. The digits are ASCII, as the machine-readable zone
+# prints them. The letters match regardless of case, so besides A-Z they take
+# the four letters Python's re treats as case variants of ASCII ones (U+0130,
+# U+0131, U+017F, U+212A). The tokens allowed between the label and
+# the number are the usual ways of introducing one ("passport number is",
+# "passport details:", "passport no -"), with an abbreviation point allowed
+# after "no" and "num".
 _PASSPORT_RE = re.compile(
-    r"\bpassport(?:\s+(?:no|num|number|#))?\s*(?:[:#]\s*)?([A-Z0-9]{6,9})\b",
+    r"\bpassport(?:\s+(?:no\.?|num\.?|numbers?|details|#))?(?:\s+(?:is|was))?"
+    + _LABEL_NOTE + _LABEL_SEPARATOR
+    + r"((?=[A-Z]*[0-9])[A-Z0-9]{6,9})\b",
     re.IGNORECASE,
 )
 
-# Label-gated date of birth: "dob" / "date of birth" / "born (on)" + a date.
-# The separator is written as in _PASSPORT_RE, for the same reason.
+# Date of birth: a date after "dob" (or its dotted initials, "d.o.b."), "date of
+# birth", "born" or "born on".
 _DOB_RE = re.compile(
-    r"\b(?:dob|date\s+of\s+birth|born(?:\s+on)?)\s*(?:[:#]\s*)?"
-    r"(\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4})\b",
+    r"\b(?:dob|d\.\s?o\.\s?b\.?|date\s+of\s+birth|born(?:\s+on)?)"
+    + _LABEL_NOTE + _LABEL_SEPARATOR
+    + r"(\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4})\b",
     re.IGNORECASE,
 )
 
@@ -164,12 +187,16 @@ def _ip_significant(candidate: str) -> bool:
 
 
 def luhn_ok(digits: str) -> bool:
-    """Return True when *digits* (numeric string) passes the Luhn checksum."""
-    if not digits.isdigit() or len(digits) < 13 or len(digits) > 19:
+    """Return True when *digits* (numeric string) passes the Luhn checksum.
+
+    Decimal digits of any script count by their value, as ``\\d`` finds them in
+    text: a card number typed in fullwidth digits is checked like its ASCII form.
+    """
+    if not digits.isdecimal() or len(digits) < 13 or len(digits) > 19:
         return False
     total = 0
     for i, ch in enumerate(reversed(digits)):
-        d = ord(ch) - 48
+        d = int(ch)
         if i % 2 == 1:
             d *= 2
             if d > 9:
@@ -194,10 +221,15 @@ def iban_ok(candidate: str) -> bool:
 
 
 def _ssn_valid(area: str, group: str, serial: str) -> bool:
-    """Reject never-issued SSN ranges (000/666/9xx areas, 00 group, 0000 serial)."""
-    if area in ("000", "666") or area.startswith("9"):
+    """Reject never-issued SSN ranges (000/666/9xx areas, 00 group, 0000 serial).
+
+    The groups are compared by value, so digits of any script are judged the
+    way their ASCII form is.
+    """
+    area_number = int(area)
+    if area_number in (0, 666) or area_number >= 900:
         return False
-    if group == "00" or serial == "0000":
+    if int(group) == 0 or int(serial) == 0:
         return False
     return True
 
@@ -211,7 +243,8 @@ def _count_cards(text: str) -> int:
     for m in _CARD_CANDIDATE_RE.finditer(text):
         digits = re.sub(r"[ -]", "", m.group(0))
         # A long run of one repeated digit passes Luhn but is filler, not a PAN.
-        if len(set(digits)) <= 1:
+        # Digits are compared by value, as luhn_ok reads them, whatever the script.
+        if len({int(ch) for ch in digits}) <= 1:
             continue
         if luhn_ok(digits):
             count += 1
@@ -327,7 +360,7 @@ def redact_text(text: str) -> "tuple[str, Dict[str, int]]":
 
     def _sub_card(m: "re.Match[str]") -> str:
         digits = re.sub(r"[ -]", "", m.group(0))
-        if len(set(digits)) > 1 and luhn_ok(digits):
+        if len({int(ch) for ch in digits}) > 1 and luhn_ok(digits):
             counts["credit_card"] = counts.get("credit_card", 0) + 1
             return "[REDACTED-CARD]"
         return m.group(0)
