@@ -10,6 +10,12 @@
   stops the reading. Screens that use those strings therefore see a line
   break JSON wrote as an escape, even when the payload was cut inside that
   string.
+- Offline `decide(kind="tool_call")`: argv-style command reconstruction no
+  longer depends on the duplicate-key JSON parser accepting the whole call.
+  When that parser cannot take a nested payload that a plain parse still
+  accepts, the command is still rebuilt and screened, including when the
+  current thread is already out of stack. Repeated keys still keep every
+  value when the duplicate-key parser accepts the call.
 
 ## 0.6.20
 

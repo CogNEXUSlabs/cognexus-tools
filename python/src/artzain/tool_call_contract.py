@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import unicodedata
 from collections import deque
 from dataclasses import dataclass, field
@@ -506,15 +507,42 @@ class _Members(tuple):
     """Every ``(key, value)`` pair of a parsed JSON object, repeated keys included."""
 
 
+def _plain_json(value: str) -> Any:
+    try:
+        return json.loads(value)
+    except (ValueError, RecursionError):
+        return _UNPARSED
+
+
+def _plain_json_fresh_stack(value: str) -> Any:
+    """Plain parse on a new thread, whose stack the caller has not already used."""
+    box: List[Any] = [_UNPARSED]
+
+    def run() -> None:
+        box[0] = _plain_json(value)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    thread.join()
+    return box[0]
+
+
 def _parse_json(value: str) -> Any:
     """What a strict JSON parser makes of *value*, or ``_UNPARSED``.
 
     Objects come back as :class:`_Members` rather than dicts, so a key given
     twice keeps both values: a tool whose parser keeps the first one runs it.
+    If that hooked parse cannot take the value, a plain parse is tried so
+    argv-style arrays are still reconstructed; a repeated key then keeps only
+    its last value. The plain parse is tried on this thread first, then on a
+    new thread if this one is already out of stack.
     """
     try:
         return json.loads(value, object_pairs_hook=_Members)
-    except (ValueError, RecursionError):
+    except RecursionError:
+        parsed = _plain_json(value)
+        return parsed if parsed is not _UNPARSED else _plain_json_fresh_stack(value)
+    except ValueError:
         return _UNPARSED
 
 
@@ -561,6 +589,9 @@ def _argv_commands(parsed: Any) -> Iterator[str]:
         node = stack.pop()
         if isinstance(node, _Members):
             stack.extend(member for _, member in node)
+            continue
+        if isinstance(node, dict):
+            stack.extend(node.values())
             continue
         if not isinstance(node, list):
             continue
