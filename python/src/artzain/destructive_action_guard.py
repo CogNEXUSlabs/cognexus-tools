@@ -17,7 +17,9 @@ deterministic, regex-based safety net that **also** watches outputs.
 Design properties:
 
 * **Pure regex, no LLM.** Sub-millisecond per scan, no network, no
-  external dependencies.
+  external dependencies. The SQL rules add a linear-time walk over keyword
+  chains, so a comment between two keywords reads as the separator it is to
+  a SQL engine (see "SQL statements" below).
 * **Severity-classified.** Each pattern is tagged ``low / medium / high /
   critical``; ``critical`` matches are intended to *trip the kill switch*
   (see :mod:`artzain.kill_switch`).
@@ -36,10 +38,12 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from collections.abc import Collection, Sequence
+from bisect import bisect_left
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from itertools import chain
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -81,90 +85,796 @@ class _ActionRule:
     rule_id: str
     name: str
     severity: ActionSeverity
-    pattern: re.Pattern[str]
+    pattern: re.Pattern[str] | _SqlPattern
     owasp: str = "LLM06"
+    #: Named group the finding's excerpt starts at (with the usual context
+    #: either side), for a pattern whose match starts well before what it found
+    #: (the ``rm`` rules match from the start of the command). ``None``: the
+    #: whole match.
+    excerpt_group: str | None = None
 
 
-# One character of the *current* SQL statement, for the no-WHERE rules below.
-# Consumes anything except a statement terminator (";"), a comment start
-# ("--" / "/*"), or a newline that begins another statement. Each character
-# matches exactly one alternative, so the lazy repeats built on it cannot
-# backtrack combinatorially.
-_SQL_STMT_ATOM = (
-    r"(?:[^;\-/\n]"
-    r"|-(?!-)"
-    r"|/(?!\*)"
-    r"|\n(?!\s*(?:SELECT|INSERT|UPDATE|DELETE|WITH|CREATE|DROP|ALTER|TRUNCATE|GRANT|REVOKE)\b))"
+# ---------------------------------------------------------------------------
+# SQL statements
+# ---------------------------------------------------------------------------
+#
+# SQL engines read a comment as a token separator, so the SQL rules accept a
+# comment wherever they accept whitespace: `DROP/**/TABLE`, `DELETE -- x` and
+# a newline before `FROM`. One regex cannot do that in linear time. A comment
+# can hold the next keyword, and a search restarts at every keyword inside
+# it, so `DROP /* DROP /* DROP ...` would be rescanned from each one. The SQL
+# rules therefore walk keyword chains over indexes built once per scan window
+# (sorted delimiter positions; memoized gap, name and quote ends). Every
+# keyword is judged on its own, so a comment opener inside a string literal
+# (`SELECT '/*'`) cannot hide the statement after it.
+#
+# A gap between two keywords is whitespace and comments. Engines disagree on
+# what a comment is, so each gap is read three ways, and any reading that
+# reaches the next keyword counts:
+#
+# * MySQL and MariaDB: a block comment ends at the first `*/`, a line comment
+#   (`--` or `#`) at `\n`. `/*!50000` and `/*M!100100` open an executable
+#   comment whose body is code, so they and the `*/` that closes one read as
+#   whitespace.
+# * SQLite: the same, except that `/*!...*/` is an ordinary comment.
+# * PostgreSQL and SQL Server: block comments nest, and a line comment also
+#   ends at `\r`.
+#
+# `#` starts a line comment in all three readings. Only MySQL has such
+# comments, but an extra reading can only add matches. Where a table name is
+# expected, `#` is also read as the start of the name, since `#staging` names
+# a SQL Server temporary table.
+
+_SQL_STATEMENT_KEYWORDS = (
+    r"SELECT|INSERT|UPDATE|DELETE|WITH|CREATE|DROP|ALTER|TRUNCATE|GRANT|REVOKE"
+)
+_SQL_MYSQL, _SQL_SQLITE, _SQL_NESTED = range(3)
+# Whitespace, with the openers of MySQL executable comments. Their digits are
+# taken whole, so a pattern cannot end the gap inside them. The `*/` that
+# closes such a comment is accepted only by the walk, which can see the opener.
+_SQL_EXECUTABLE_GAP = r"(?:(?:\s*/\*(?-i:M)?![0-9]*(?![0-9]))+\s*|\s+)"
+_SQL_EXECUTABLE_GAP_RE = re.compile(_SQL_EXECUTABLE_GAP)
+_SQL_SPACE_RE = re.compile(r"\s+")
+_SQL_QUOTE_CLOSERS = {"\"": "\"", "`": "`", "[": "]"}
+# A plain identifier in quotes, the only quoted name that may be glued to its
+# keyword: `"Run TRUNCATE", "table"` is the end of one string and the start
+# of the next, not TRUNCATE and a name.
+_SQL_IDENTIFIER = r"[A-Za-z_#@][\w#@$]*"
+_SQL_GLUED_NAME = re.compile(
+    r"\"" + _SQL_IDENTIFIER + r"\"|`" + _SQL_IDENTIFIER + r"`|\[" + _SQL_IDENTIFIER + r"\]"
+)
+_SQL_BARE_NAME = re.compile(r"[\w#@$]+")
+_SQL_WORD = re.compile(r"\w+")
+# Where a no-WHERE rule stops looking for WHERE: a statement terminator, a
+# comment start, or a line break before a line that begins another statement.
+_SQL_STOP = re.compile(
+    r";|-(?=-)|/(?=\*)|\n(?=[^\S\n]*(?:" + _SQL_STATEMENT_KEYWORDS + r")\b)",
+    re.IGNORECASE,
+)
+_SQL_WHERE = re.compile(r"\bWHERE\b", re.IGNORECASE)
+_SQL_EXECUTABLE_OPENER = re.compile(r"/\*M?![0-9]*")
+_SQL_TERMINATOR = re.compile(r";|--|/\*|$", re.MULTILINE)
+
+
+def _sql_keyword(word: str) -> str:
+    """*word* after a word boundary or a MySQL / MariaDB executable-comment opener.
+
+    The literal comes first so a search keeps its fast literal prefix; the
+    boundary is checked behind it, once for each length of the version.
+    """
+    openers = "".join(
+        r"|(?<=/\*" + marker + "![0-9]{" + str(digits) + "}" + word + ")"
+        for marker in ("", "(?-i:M)")
+        for digits in range(1, 7)
+    )
+    return word + r"(?:(?<=\b" + word + ")" + openers + ")"
+
+
+def _has_sql_comment(text: str) -> bool:
+    return "/*" in text or "--" in text or "#" in text
+
+
+def _positions(text: str, needle: str) -> list[int]:
+    found, i = [], text.find(needle)
+    while i != -1:
+        found.append(i)
+        i = text.find(needle, i + 1)
+    return found
+
+
+def _next_position(positions: list[int], at: int) -> int | None:
+    i = bisect_left(positions, at)
+    return positions[i] if i < len(positions) else None
+
+
+class _SqlMatch:
+    """The span a SQL rule matched; stands in for :class:`re.Match`."""
+
+    __slots__ = ("_start", "_end")
+
+    def __init__(self, start: int, end: int) -> None:
+        self._start, self._end = start, end
+
+    def start(self) -> int:
+        return self._start
+
+    def end(self) -> int:
+        return self._end
+
+
+class _SqlWindow:
+    """Indexes over one scan window, built on demand and shared by the SQL rules."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self._indexes: dict[str, list[int]] = {}
+        self._breaks: list[int] | None = None
+        self._nested: dict[int, int | None] = {}
+        self._gaps: dict[tuple[int, bool], dict[int, tuple[int, bool]]] = {
+            (reading, hashes): {}
+            for reading in (_SQL_MYSQL, _SQL_SQLITE, _SQL_NESTED)
+            for hashes in (False, True)
+        }
+        self._gap_maps: dict[str, dict[int, int]] = {}
+        self._has_hash: bool | None = None
+        self._names: dict[int, int | None] = {}
+        self._quote_ends: dict[tuple[str, int], int | None] = {}
+        self._line_comments: list[int] | None = None
+        self._escapes: dict[int, bool] = {}
+        self._string_ends: dict[tuple[str, bool, int], int | None] = {}
+        self._body_starts: list[int] | None = None
+        self._executable_closes: dict[bool, dict[int, int | None]] = {True: {}, False: {}}
+        self._executable_closers: set[int] | None = None
+        self._wheres: list[int] | None = None
+        self._stops: list[int] | None = None
+
+    def _index(self, needle: str) -> list[int]:
+        found = self._indexes.get(needle)
+        if found is None:
+            found = self._indexes[needle] = _positions(self.text, needle)
+        return found
+
+    def _line_break(self, pos: int, nested: bool) -> int | None:
+        if not nested:
+            return _next_position(self._index("\n"), pos)
+        if self._breaks is None:
+            self._breaks = sorted(self._index("\n") + self._index("\r"))
+        return _next_position(self._breaks, pos)
+
+    def _nested_end(self, pos: int) -> int | None:
+        """End of the nesting block comment opened at *pos*; None if unclosed."""
+        memo = self._nested
+        if pos in memo:
+            return memo[pos]
+        closes, opens = self._index("*/"), self._index("/*")
+        stack, at, ci, oi = [pos], pos + 2, 0, 0
+        while stack:
+            # *at* only grows, so each search resumes where the last one ended.
+            ci = bisect_left(closes, at, ci)
+            oi = bisect_left(opens, at, oi)
+            close = closes[ci] if ci < len(closes) else None
+            opener = opens[oi] if oi < len(opens) else None
+            if close is not None and (opener is None or close < opener):
+                at = close + 2
+                memo[stack.pop()] = at
+                continue
+            inner = memo.get(opener, 0) if close is not None else None
+            if inner is None:
+                for p in stack:
+                    memo[p] = None
+                return None
+            if inner:
+                at = inner
+            else:
+                stack.append(opener)
+                at = opener + 2
+        return memo[pos]
+
+    def _mysql_line_comments(self) -> list[int]:
+        """Starts of MySQL line comments: `#`, and `--` before a space, a control character or the end."""
+        if self._line_comments is None:
+            text = self.text
+            dashes = [
+                i for i in self._index("--")
+                if text[i + 2 : i + 3] <= " " or text[i + 2] == "\x7f"
+            ]
+            self._line_comments = sorted(dashes + self._index("#"))
+        return self._line_comments
+
+    def _escaped(self, pos: int) -> bool:
+        """True when an odd run of backslashes ends right before *pos*."""
+        found = self._escapes.get(pos)
+        if found is None:
+            start = pos
+            while start and self.text[start - 1] == "\\":
+                start -= 1
+            found = self._escapes[pos] = (pos - start) % 2 == 1
+        return found
+
+    def _string_end(self, pos: int, backslashes: bool) -> int | None:
+        """End of the string or identifier quoted at *pos* in an executable body.
+
+        A doubled quote stands for one; with *backslashes* (MySQL's default
+        mode), a backslash also escapes a string quote, though not a backtick.
+        Ends are memoized by search position.
+        """
+        text = self.text
+        quote = text[pos]
+        escapes = backslashes and quote != "`"
+        positions, memo = self._index(quote), self._string_ends
+        path, at = [], pos + 1
+        while True:
+            key = (quote, escapes, at)
+            if key in memo:
+                end = memo[key]
+                break
+            path.append(key)
+            close = _next_position(positions, at)
+            if close is None:
+                end = None
+                break
+            if escapes and self._escaped(close):
+                at = close + 1
+            elif text.startswith(quote, close + 1):
+                at = close + 2
+            else:
+                end = close + 1
+                break
+        for key in path:
+            memo[key] = end
+        return end
+
+    def _executable_close(self, pos: int, backslashes: bool) -> int | None:
+        """The `*/` that closes the executable comment whose body continues at *pos*.
+
+        MySQL reads the body as SQL, so a `*/` inside a line comment, a block
+        comment, a string or a quoted identifier does not end it. Results are
+        memoized by body position, so overlapping bodies are read once.
+        """
+        memo, path = self._executable_closes[backslashes], []
+        closes = self._index("*/")
+        if self._body_starts is None:
+            self._body_starts = sorted(
+                self._index("/*") + self._mysql_line_comments()
+                + self._index("'") + self._index("\"") + self._index("`")
+            )
+        while True:
+            if pos in memo:
+                end = memo[pos]
+                break
+            path.append(pos)
+            close = _next_position(closes, pos)
+            if close is None:
+                end = None
+                break
+            first = _next_position(self._body_starts, pos)
+            if first is None or first > close:
+                end = close
+                break
+            if self.text.startswith("/*", first):
+                inner = _next_position(closes, first + 2)
+                resume = None if inner is None else inner + 2
+            elif self.text[first] in "'\"`":
+                resume = self._string_end(first, backslashes)
+            else:
+                brk = _next_position(self._index("\n"), first)
+                resume = None if brk is None else brk + 1
+            if resume is None:
+                end = None
+                break
+            pos = resume
+        for p in path:
+            memo[p] = end
+        return end
+
+    def _closes_executable(self, pos: int) -> bool:
+        """True when the `*/` at *pos* closes a MySQL executable comment.
+
+        Either escape mode counts: with or without backslash escapes.
+        """
+        if self._executable_closers is None:
+            closers = set()
+            modes = (False, True) if "\\" in self.text else (False,)
+            for m in _SQL_EXECUTABLE_OPENER.finditer(self.text):
+                for backslashes in modes:
+                    close = self._executable_close(m.end(), backslashes)
+                    if close is not None:
+                        closers.add(close)
+            self._executable_closers = closers
+        return pos in self._executable_closers
+
+    def _walk_gap(self, pos: int, reading: int, hashes: bool) -> tuple[int, bool]:
+        """``(end, another reading may end elsewhere)`` for the gap at *pos*.
+
+        The flag is meaningful for the MySQL reading. It is set wherever the
+        other two readings read an item differently, except at the close of an
+        executable comment, where they stop and no keyword can start. Every
+        item boundary on the way is memoized, so a run of comments that
+        follows many keywords is walked once.
+        """
+        memo = self._gaps[(reading, hashes)]
+        text, path = self.text, []
+        while True:
+            known = memo.get(pos)
+            if known is not None:
+                end, differs = known
+                break
+            item_differs, nxt = False, None
+            space = (
+                _SQL_EXECUTABLE_GAP_RE if reading == _SQL_MYSQL else _SQL_SPACE_RE
+            ).match(text, pos)
+            if space:
+                nxt = space.end()
+                item_differs = text.find("/*", pos, nxt) != -1
+            elif text.startswith("*/", pos):
+                # The other readings stop here, where no keyword can start.
+                if reading == _SQL_MYSQL and self._closes_executable(pos):
+                    nxt = pos + 2
+            elif text.startswith("/*", pos):
+                close = _next_position(self._index("*/"), pos + 2)
+                if close is not None and reading == _SQL_NESTED:
+                    nxt = self._nested_end(pos)
+                elif close is not None:
+                    nxt = close + 2
+                    inner = _next_position(self._index("/*"), pos + 2)
+                    item_differs = inner is not None and inner < close
+            elif text.startswith("--", pos) or (hashes and text.startswith("#", pos)):
+                brk = self._line_break(pos, reading == _SQL_NESTED)
+                ret = _next_position(self._index("\r"), pos)
+                item_differs = ret is not None and (brk is None or ret < brk)
+                nxt = None if brk is None else brk + 1
+            if nxt is None:
+                end, differs = pos, item_differs
+                memo[pos] = (end, differs)
+                break
+            path.append((pos, item_differs))
+            pos = nxt
+        for p, item_differs in reversed(path):
+            differs = differs or item_differs
+            memo[p] = (end, differs)
+        return end, differs
+
+    def gap_ends(self, pos: int, hashes: bool) -> list[int]:
+        """Where the gap at *pos* ends in each reading, without repeats."""
+        end, differs = self._walk_gap(pos, _SQL_MYSQL, hashes)
+        if not differs:
+            return [end]
+        others = {self._walk_gap(pos, reading, hashes)[0] for reading in (_SQL_SQLITE, _SQL_NESTED)}
+        return sorted(others | {end})
+
+    def name_gap_ends(self, pos: int) -> list[int]:
+        """Where the gap before a table name ends, with `#` read both ways.
+
+        To MySQL `#` starts a comment; to SQL Server `#staging` is a table.
+        """
+        if self._has_hash is None:
+            self._has_hash = "#" in self.text
+        if not self._has_hash:
+            return self.gap_ends(pos, False)
+        return sorted(set(self.gap_ends(pos, False) + self.gap_ends(pos, True)))
+
+    def gap_map(self, pattern: _SqlPattern) -> dict[int, int]:
+        """``{gap end: keyword start}`` over every non-empty gap after the keyword."""
+        found = self._gap_maps.get(pattern.keyword)
+        if found is None:
+            found = {}
+            for m in pattern.keyword_re.finditer(self.text):
+                start, end = m.span()
+                for gap in self.gap_ends(end, True):
+                    if gap > end:
+                        found.setdefault(gap, start)
+            self._gap_maps[pattern.keyword] = found
+        return found
+
+    def quote_end(self, pos: int) -> int | None:
+        """End of the quoted name part opened at *pos*; None if it never closes.
+
+        A doubled closing quote stands for one. Ends are memoized by search
+        position, so parts that share a closing quote are searched once.
+        """
+        text = self.text
+        closer = _SQL_QUOTE_CLOSERS[text[pos]]
+        positions, memo = self._index(closer), self._quote_ends
+        path, at = [], pos + 1
+        while True:
+            key = (closer, at)
+            if key in memo:
+                end = memo[key]
+                break
+            path.append(key)
+            close = _next_position(positions, at)
+            if close is None:
+                end = None
+                break
+            if not text.startswith(closer, close + 1):
+                end = close + 1
+                break
+            at = close + 2
+        for key in path:
+            memo[key] = end
+        return end
+
+    def _name_part_end(self, pos: int) -> int | None:
+        text = self.text
+        if pos >= len(text):
+            return None
+        if text[pos] in _SQL_QUOTE_CLOSERS:
+            return self.quote_end(pos)
+        m = _SQL_BARE_NAME.match(text, pos)
+        return m.end() if m else None
+
+    def _chain_end(self, pos: int) -> int | None:
+        """End of the name parts that start at *pos*, or None.
+
+        Parts join across a dot, or where a quoted part follows directly: a
+        name glued to a quoted one is aliased by it (`a"WHERE"`). Memoized at
+        every part start along the chain, so names that share a tail (a
+        keyword inside a quoted part starts another name) read it once.
+        """
+        memo, text, path, start = self._names, self.text, [], pos
+        while True:
+            if pos in memo:
+                tail = memo[pos]
+                break
+            part = self._name_part_end(pos)
+            if part is None:
+                memo[pos] = tail = None
+                break
+            path.append((pos, part))
+            if text.startswith(".", part):
+                pos = part + 1
+            elif part < len(text) and text[part] in _SQL_QUOTE_CLOSERS:
+                pos = part
+            else:
+                tail = None
+                break
+        for part_start, part in reversed(path):
+            tail = memo[part_start] = part if tail is None else tail
+        return memo[start]
+
+    def name_end(self, pos: int) -> int | None:
+        """End of the dot-separated table name at *pos*, or None.
+
+        A bare WHERE is not a name: reading `#staging` as a comment in
+        `DELETE FROM #staging`, newline, `WHERE ...` finds no table there.
+        """
+        end = self._chain_end(pos)
+        if end is not None and end - pos == 5 and self.text[pos:end].upper() == "WHERE":
+            return None
+        return end
+
+    def lacks_where(self, pos: int) -> bool:
+        """True when no WHERE follows *pos* before the statement ends.
+
+        The lookahead is bounded to the statement being screened: it stops at
+        ";", at a comment start ("--" or "/*"), and at a line that begins a
+        new statement. An earlier version scanned to the end of the whole
+        payload, so any later WHERE (a trailing `-- where` comment, or a
+        second harmless `SELECT ... WHERE ...`) switched the rule off, and the
+        text being screened is model output (open-items section 9.2). A WHERE
+        on a continuation line of the same statement still counts.
+        """
+        if self._wheres is None or self._stops is None:
+            self._wheres = [m.start() for m in _SQL_WHERE.finditer(self.text)]
+            self._stops = [m.start() for m in _SQL_STOP.finditer(self.text)]
+        where = _next_position(self._wheres, pos)
+        if where is None:
+            return True
+        stop = _next_position(self._stops, pos)
+        return stop is not None and where >= stop
+
+
+class _SqlPattern:
+    """Matcher for one SQL rule; :meth:`search` works like a compiled pattern's."""
+
+    def __init__(
+        self,
+        keyword: str,
+        finish: Callable[[_SqlWindow, _SqlPattern], _SqlMatch | None],
+        plain: str | None = None,
+    ) -> None:
+        self.keyword = keyword
+        self.keyword_re = re.compile(_sql_keyword(keyword), re.IGNORECASE)
+        self._finish = finish
+        # *plain* matches the rule when no gap holds a comment, in one regex
+        # pass; the walk runs only when that fails and the text has a comment.
+        self._plain = (
+            re.compile(_sql_keyword(keyword) + plain, re.IGNORECASE) if plain else None
+        )
+
+    def search(
+        self, text: str, window: _SqlWindow | None = None
+    ) -> re.Match[str] | _SqlMatch | None:
+        if self._plain is not None:
+            hit = self._plain.search(text)
+            if hit is not None or not _has_sql_comment(text):
+                return hit
+        return self._finish(window if window is not None else _SqlWindow(text), self)
+
+
+def _sql_then(tail: str) -> Callable[[_SqlWindow, _SqlPattern], _SqlMatch | None]:
+    """Finish a rule whose keyword is followed by a gap and *tail*."""
+    tail_re = re.compile(tail, re.IGNORECASE)
+
+    def finish(window: _SqlWindow, pattern: _SqlPattern) -> _SqlMatch | None:
+        tails = tail_re.finditer(window.text)
+        first = next(tails, None)
+        if first is None:
+            return None
+        gaps = window.gap_map(pattern)
+        for m in chain((first,), tails):
+            start = gaps.get(m.start())
+            if start is not None:
+                return _SqlMatch(start, m.end())
+        return None
+
+    return finish
+
+
+_SQL_DROP_OBJECT = _sql_then(r"(?:INDEX|VIEW|TRIGGER)\b")
+_SQL_MATERIALIZED = re.compile(r"MATERIALIZED", re.IGNORECASE)
+_SQL_VIEW = re.compile(r"VIEW\b", re.IGNORECASE)
+_SQL_FROM = re.compile(r"FROM", re.IGNORECASE)
+_SQL_SET = re.compile(r"SET\b", re.IGNORECASE)
+
+
+def _sql_drop_index(window: _SqlWindow, pattern: _SqlPattern) -> _SqlMatch | None:
+    hit = _SQL_DROP_OBJECT(window, pattern)
+    if hit is not None or not _SQL_VIEW.search(window.text):
+        return hit
+    text, gaps = window.text, window.gap_map(pattern)
+    for m in _SQL_MATERIALIZED.finditer(text):
+        start = gaps.get(m.start())
+        if start is None:
+            continue
+        for gap in window.gap_ends(m.end(), True):
+            view = _SQL_VIEW.match(text, gap) if gap > m.end() else None
+            if view:
+                return _SqlMatch(start, view.end())
+    return None
+
+
+def _sql_name_follows(text: str, keyword_end: int, pos: int, *, brackets: bool = True) -> bool:
+    """True when a table name may start at *pos*, the end of the gap after a keyword.
+
+    A bare name needs a gap. A quoted plain identifier does not
+    (`DELETE FROM"orders"`). Anything else glued on is text around the
+    keyword: the quote closing the string it sits in (`{"mode": "TRUNCATE"}`),
+    the next JSON string, or a regex (`DELETE FROM[ \\t]+`). A glued `[` is
+    refused where *brackets* is false.
+    """
+    if pos > keyword_end:
+        return True
+    if pos >= len(text) or (text[pos] == "[" and not brackets):
+        return False
+    return _SQL_GLUED_NAME.match(text, pos) is not None
+
+
+def _sql_truncate_target(window: _SqlWindow, pos: int) -> int | None:
+    """End of the word or quoted name at *pos* that TRUNCATE acts on, or None."""
+    text = window.text
+    if pos >= len(text):
+        return None
+    if text[pos] in _SQL_QUOTE_CLOSERS:
+        return window.quote_end(pos) or pos + 1
+    m = _SQL_WORD.match(text, pos)
+    return m.end() if m else None
+
+
+def _sql_truncate(window: _SqlWindow, pattern: _SqlPattern) -> _SqlMatch | None:
+    text = window.text
+    for m in pattern.keyword_re.finditer(text):
+        for gap in window.gap_ends(m.end(), True):
+            # SQL Server takes `[name]` only after TRUNCATE TABLE, so a `[`
+            # glued to TRUNCATE is a subscript (`TRUNCATE[idx]`), not a name.
+            follows = _sql_name_follows(text, m.end(), gap, brackets=False)
+            end = _sql_truncate_target(window, gap) if follows else None
+            if end is None:
+                continue
+            # Like `TRUNCATE\s+(?:TABLE\s+)?\w+`, the match takes the name
+            # after TABLE, so the excerpt around it keeps its length.
+            if end - gap == 5 and text[gap:end].upper() == "TABLE":
+                for gap2 in window.gap_ends(end, True):
+                    name = _sql_truncate_target(window, gap2) if gap2 > end else None
+                    if name is not None:
+                        end = name
+                        break
+            return _SqlMatch(m.start(), end)
+    return None
+
+
+def _sql_delete_no_where(window: _SqlWindow, pattern: _SqlPattern) -> _SqlMatch | None:
+    text = window.text
+    if not _SQL_FROM.search(text):
+        return None
+    gaps = window.gap_map(pattern)
+    for m in _SQL_FROM.finditer(text):
+        start = gaps.get(m.start())
+        if start is None:
+            continue
+        for gap in window.name_gap_ends(m.end()):
+            follows = _sql_name_follows(text, m.end(), gap)
+            name = window.name_end(gap) if follows else None
+            if name is not None and window.lacks_where(name):
+                return _SqlMatch(start, _SQL_TERMINATOR.search(text, name).end())
+    return None
+
+
+def _sql_update_no_where(window: _SqlWindow, pattern: _SqlPattern) -> _SqlMatch | None:
+    text = window.text
+    if not _SQL_SET.search(text):
+        return None
+    for m in pattern.keyword_re.finditer(text):
+        for gap in window.name_gap_ends(m.end()):
+            follows = _sql_name_follows(text, m.end(), gap)
+            name = window.name_end(gap) if follows else None
+            if name is None:
+                continue
+            for gap2 in window.gap_ends(name, True):
+                # With no gap, SET can only follow a closing quote (`"users"SET`):
+                # a bare name would have taken its letters.
+                set_m = _SQL_SET.match(text, gap2)
+                if set_m and window.lacks_where(set_m.end()):
+                    return _SqlMatch(
+                        m.start(), _SQL_TERMINATOR.search(text, set_m.end()).end()
+                    )
+    return None
+
+
+# The rm rules read one shell command at a time. A command runs until a
+# separator: a line break, ";", "&", "|", "(", ")", a backtick, a quote or a
+# backslash. Quotes matter because the screened text is often a tool call
+# serialized as JSON, where each argument is a quoted string: a word in a
+# neighbouring field (a ``description`` beside a ``command``) is a different
+# command, not one of rm's operands. A backslash ends the command for the same
+# reason — a newline inside a JSON string is written ``\n`` (a backslash then
+# ``n``), so the backslash stands where the real newline does. So the options
+# and operands of another command, another line or another field are not taken
+# for rm's. A "#" also ends the command (a trailing comment) but, unlike the
+# rest, does not begin one: the text after it is the comment, not a command.
+_CMD_BREAK = "\\n\\r\\x0b\\x0c\\x85\\u2028\\u2029;&|()`\"'\\\\"
+_CMD_CHAR = r"[^" + _CMD_BREAK + r"#]"
+_CMD_START = r"(?:^|(?<=[" + _CMD_BREAK + r"]))"
+# Up to a command's first ``rm`` word: ``rm`` on its own, not inside a longer
+# word or a flag, and not the ``rm`` subcommand of a version-control tool
+# (``git``/``svn``/``hg``/``bzr`` ``rm`` only touches tracked files, not the
+# filesystem). A following whitespace, quote or redirection (``rm>log -rf /``
+# runs rm with its output redirected) ends the word. The match starts where
+# the command does. The lookahead finds the shortest prefix ending at such a
+# word and, once it has matched, is never re-entered; ``(?P=before)`` then
+# consumes exactly that prefix. So a command holding many ``rm`` words is read
+# a fixed number of times, not once per word, and the words after the first
+# ``rm`` are read by the lookaheads below. Words of the *enclosing* command
+# that follow the ``rm`` word do count as rm's (``ssh host "rm -f x" -R ...``),
+# and the boundary approximates a shell's rather than parsing it.
+# Reject the ``rm`` when it is the ``rm`` subcommand of a version-control tool.
+# The VCS word must be a whole word at a real boundary — the start of the text
+# or a character that is neither a word character nor ``/`` — so ``git`` inside
+# ``legit`` or after a path (``/git``) does not disable the rule. One space or
+# tab may sit between it and ``rm`` (fixed-width lookbehinds cannot span a
+# variable run, so an unusual double space leaves the real ``rm`` matched, which
+# is safe). ``\b`` alone would treat ``/`` as a boundary and miss ``X=/git rm``.
+_VCS_RM = "".join(
+    r"(?<![^\w/]" + name + r"[ \t]rm)(?<!\A" + name + r"[ \t]rm)"
+    for name in ("git", "svn", "hg", "bzr")
+)
+_RM_COMMAND_START = (
+    _CMD_START
+    + r"(?=(?P<before>" + _CMD_CHAR + r"*?)rm(?<![-\w]rm)" + _VCS_RM + r"(?=[\s\"'<>]))"
+    + r"(?P=before)"
+)
+# From the ``rm`` word to the end of the command. This whole group is the
+# finding's excerpt, shown with no surrounding context (see the screen loop),
+# so a secret in a neighbouring JSON field cannot ride along into an audit
+# leaf or kill record; secret redaction covers a value inside the command.
+_RM_COMMAND = r"(?P<rm_command>rm" + _CMD_CHAR + r"*)"
+
+#: rm's own short options across GNU coreutils and BSD/macOS: -d -f -i -I -r -R
+#: -v (GNU) and -P -W -x (BSD). IGNORECASE covers I/R/P/W/X. A cluster is read
+#: as recursive/force only if it is made of these, so a word like ``-Force`` or
+#: ``-print`` — which merely contains r and f but has other letters — is not
+#: (the cluster must also end at a non-word character).
+_RM_SHORT_FLAGS = "dfiprvwx"
+
+
+def _rm_option(letter: str, long_name: str) -> str:
+    """An option word: a cluster of rm's short options holding *letter*, or
+    ``--long_name`` or a prefix of it (GNU getopt accepts any unambiguous one).
+
+    The lookahead finds the letter and the cluster is then read once more, so a
+    long cluster costs a few passes over its length, not its length squared.
+    """
+    prefixes = "|".join(long_name[:n] for n in range(len(long_name), 0, -1))
+    return (
+        r"(?:-(?=[" + _RM_SHORT_FLAGS + r"]*" + letter + r")[" + _RM_SHORT_FLAGS + r"]+(?!\w)"
+        r"|--(?:" + prefixes + r")(?![\w-]))"
+    )
+
+
+def _rm_argument(word: str) -> str:
+    """Lookahead from an ``rm`` word: a word matching *word* follows it in the
+    same command."""
+    return r"(?=" + _CMD_CHAR + r"*?(?<=\s)" + word + r")"
+
+
+_RM_RECURSIVE = _rm_argument(_rm_option("r", "recursive"))
+_RM_FORCE = _rm_argument(_rm_option("f", "force"))
+# A whole-word root or glob target, matched as a literal path token. ``/``, a
+# glob of root (``/*``, ``//``, ``/*/``), ``~``, ``~/``, ``$HOME`` or ``$HOME/``
+# count wherever they stand among the operands. A bare ``*`` (a glob of the
+# working directory) counts as the last operand, or when another operand (a
+# word that is not an option) follows it — ``rm -r * .git`` wipes the directory
+# just as ``rm -r *`` does. It does not count when an option follows, so a
+# ``*`` that is the value of an option, such as
+# ``aws s3 rm --recursive --exclude * --include ...``, is not a root wipe. A
+# ``/`` or ``*`` followed by a name is a narrower path (``/etc``, ``/tmp/*``,
+# ``*.pyc``), left to the generic rule.
+_AFTER_TARGET = r"(?=[\s\"';&|()`\\#]|$)"
+_RM_ROOT_TARGET = _rm_argument(
+    r"(?:(?:/[/*]*|~/?|\$HOME/?)" + _AFTER_TARGET
+    + r"|\*(?=\s*(?:[" + _CMD_BREAK + r"#]|$)|\s+[^-\s" + _CMD_BREAK + r"#]))"
 )
 
 _RULES: tuple[_ActionRule, ...] = (
     # ── SQL: irreversible schema / data destruction ──────────────────────
+    # Gaps between keywords may hold comments; see "SQL statements" above.
     _ActionRule(
         rule_id="sql.drop_database",
         name="DROP DATABASE / SCHEMA",
         severity=ActionSeverity.CRITICAL,
-        pattern=re.compile(
-            r"\bDROP\s+(?:DATABASE|SCHEMA)\b",
-            re.IGNORECASE,
+        pattern=_SqlPattern(
+            "DROP",
+            _sql_then(r"(?:DATABASE|SCHEMA)\b"),
+            plain=_SQL_EXECUTABLE_GAP + r"(?:DATABASE|SCHEMA)\b",
         ),
     ),
     _ActionRule(
         rule_id="sql.drop_table",
         name="DROP TABLE",
         severity=ActionSeverity.CRITICAL,
-        pattern=re.compile(
-            r"\bDROP\s+TABLE\b",
-            re.IGNORECASE,
+        pattern=_SqlPattern(
+            "DROP",
+            _sql_then(r"TABLE\b"),
+            plain=_SQL_EXECUTABLE_GAP + r"TABLE\b",
         ),
     ),
     _ActionRule(
         rule_id="sql.truncate",
         name="TRUNCATE TABLE",
         severity=ActionSeverity.CRITICAL,
-        pattern=re.compile(
-            r"\bTRUNCATE\s+(?:TABLE\s+)?\w+",
-            re.IGNORECASE,
+        # TRUNCATE, a gap, then a word (TABLE or the name) or a quoted name. A
+        # quoted name may be glued on, as _sql_name_follows describes.
+        pattern=_SqlPattern(
+            "TRUNCATE",
+            _sql_truncate,
+            plain=r"(?:" + _SQL_EXECUTABLE_GAP
+            + r"(?:(?:TABLE" + _SQL_EXECUTABLE_GAP + r")?\w+|[\"`\[])"
+            + r"|\"(?=" + _SQL_IDENTIFIER + r"\")|`(?=" + _SQL_IDENTIFIER + r"`))",
         ),
     ),
     _ActionRule(
-        # DELETE / UPDATE without a WHERE clause = mass mutation.
-        #
-        # The WHERE lookahead is bounded to the *statement* being screened:
-        # it stops at ";", at a comment start ("--" or "/*"), and at a line
-        # that begins a new statement. An earlier version scanned to the end
-        # of the whole payload (`(?![\s\S]*?\bWHERE\b)`), so any later
-        # WHERE — a trailing `-- where` comment, or a second harmless
-        # `SELECT … WHERE …` — switched the rule off, and the text being
-        # screened is model output (open-items §9.2). A WHERE on a
-        # continuation line of the same statement still counts.
+        # DELETE / UPDATE without a WHERE clause = mass mutation. The WHERE
+        # search is bounded to the statement; see _SqlWindow.lacks_where.
         rule_id="sql.delete_no_where",
         name="DELETE FROM without WHERE",
         severity=ActionSeverity.CRITICAL,
-        pattern=re.compile(
-            r"\bDELETE\s+FROM\s+\w[\w\.\"]*"
-            r"(?!" + _SQL_STMT_ATOM + r"*?\bWHERE\b)"
-            + _SQL_STMT_ATOM + r"*?(?:;|--|/\*|$)",
-            re.IGNORECASE | re.MULTILINE,
-        ),
+        pattern=_SqlPattern("DELETE", _sql_delete_no_where),
     ),
     _ActionRule(
         rule_id="sql.update_no_where",
         name="UPDATE without WHERE",
         severity=ActionSeverity.HIGH,
-        pattern=re.compile(
-            r"\bUPDATE\s+\w[\w\.\"]*\s+SET\b"
-            r"(?!" + _SQL_STMT_ATOM + r"*?\bWHERE\b)"
-            + _SQL_STMT_ATOM + r"*?(?:;|--|/\*|$)",
-            re.IGNORECASE | re.MULTILINE,
-        ),
+        pattern=_SqlPattern("UPDATE", _sql_update_no_where),
     ),
     _ActionRule(
         rule_id="sql.drop_index",
         name="DROP INDEX / VIEW / TRIGGER",
         severity=ActionSeverity.HIGH,
-        pattern=re.compile(
-            r"\bDROP\s+(?:INDEX|VIEW|TRIGGER|MATERIALIZED\s+VIEW)\b",
-            re.IGNORECASE,
+        pattern=_SqlPattern(
+            "DROP",
+            _sql_drop_index,
+            plain=_SQL_EXECUTABLE_GAP
+            + r"(?:INDEX|VIEW|TRIGGER|MATERIALIZED" + _SQL_EXECUTABLE_GAP + r"VIEW)\b",
         ),
     ),
     # ── git: destructive history rewrites ────────────────────────────────
@@ -218,25 +928,34 @@ _RULES: tuple[_ActionRule, ...] = (
         rule_id="fs.rm_rf_root",
         name="rm -rf /",
         severity=ActionSeverity.CRITICAL,
-        # The target must be exactly `/`, `~` or `$HOME` (optionally
-        # followed by a shell separator), or a bare/root glob `*` / `/*`.
-        # A plain prefix match would rate `rm -rf /tmp/build-cache` as a
-        # root wipe; that is the generic rule's job (HIGH).
+        # Recursive removal of `/`, a glob of root (`/*`, `//`, `/*/`), `~` or
+        # `$HOME`, each a literal path token among the operands, or a bare `*`
+        # (a glob of the working directory) as the last operand,
+        # with or without force. Without force, rm prompts for a write-protected
+        # file only when its input is a terminal (checked: GNU coreutils `rm -r`
+        # removed a read-only file with stdin from `/dev/null`); writable files
+        # go either way, so force does not change what a recursive removal takes
+        # with it, and `--preserve-root` protects `/` either way. (`-i`/`-I` do
+        # change it, but a rule cannot assume they are absent.) A longer path is
+        # the generic rule's job (HIGH): `rm -rf /tmp/build-cache` is not a root
+        # wipe. This also fires on prose or a comment that spells such a command.
         pattern=re.compile(
-            r"\brm\s+(?:-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)"
-            r"[a-zA-Z]*\s+(?:--no-preserve-root\s+)?"
-            r"(?:(?:/|~/?|\$HOME/?)(?=\s|$|[;&|])|/?\*\s*$)",
+            _RM_COMMAND_START + _RM_RECURSIVE + _RM_ROOT_TARGET + _RM_COMMAND,
             re.IGNORECASE,
         ),
+        excerpt_group="rm_command",
     ),
     _ActionRule(
         rule_id="fs.rm_rf_generic",
         name="rm -rf <path>",
         severity=ActionSeverity.HIGH,
+        # Recursive and force, whatever the operands, as short options alone or
+        # in one cluster, or as long options, in any order.
         pattern=re.compile(
-            r"\brm\s+(?:-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)\b",
+            _RM_COMMAND_START + _RM_RECURSIVE + _RM_FORCE + _RM_COMMAND,
             re.IGNORECASE,
         ),
+        excerpt_group="rm_command",
     ),
     _ActionRule(
         rule_id="fs.shutil_rmtree",
@@ -531,24 +1250,34 @@ class DestructiveActionGuard:
         )
 
         matches: list[ActionMatch] = []
+        # Built on first use and shared by the SQL rules, one per window.
+        sql_windows: list[_SqlWindow | None] = [None] * len(windows)
 
         for rule in self._rules:
-            hit = _first_hit(rule.pattern, windows)
+            hit = _first_hit(rule.pattern, windows, sql_windows)
             if hit is None:
                 continue
             scan_text, m = hit
+            if rule.excerpt_group:
+                # The group is the whole command (rm to the first break). Show
+                # exactly it, with no surrounding context, so a neighbouring
+                # field — a secret in an adjacent JSON key — cannot ride along.
+                start, end = m.span(rule.excerpt_group)
+                excerpt = _excerpt(scan_text, start, end, window=0)
+            else:
+                excerpt = _excerpt(scan_text, m.start(), m.end())
             matches.append(
                 ActionMatch(
                     rule_id=rule.rule_id,
                     name=rule.name,
                     severity=rule.severity,
                     owasp=rule.owasp,
-                    excerpt=_excerpt(scan_text, m.start(), m.end()),
+                    excerpt=excerpt,
                 )
             )
 
         for rule_id, severity, pattern in self._config.extra_rules:
-            hit = _first_hit(pattern, windows)
+            hit = _first_hit(pattern, windows, sql_windows)
             if hit is None:
                 continue
             scan_text, m = hit
@@ -611,20 +1340,31 @@ class DestructiveActionGuard:
 
 
 def _first_hit(
-    pattern: re.Pattern[str], windows: list[str]
-) -> tuple[str, re.Match[str]] | None:
+    pattern: re.Pattern[str] | _SqlPattern,
+    windows: list[str],
+    sql_windows: list[_SqlWindow | None],
+) -> tuple[str, re.Match[str] | _SqlMatch] | None:
     """Return ``(window_text, match)`` for the first window *pattern* hits."""
-    for text in windows:
-        m = pattern.search(text)
+    for i, text in enumerate(windows):
+        if isinstance(pattern, _SqlPattern):
+            window = sql_windows[i]
+            if window is None:
+                window = sql_windows[i] = _SqlWindow(text)
+            m = pattern.search(text, window)
+        else:
+            m = pattern.search(text)
         if m:
             return text, m
     return None
 
 
 # Group 1 keeps the key name, separator and surrounding whitespace so the
-# rewrite works for both ``key=value`` and ``key: value`` forms.
+# rewrite works for ``key=value``, ``key: value`` and the JSON ``"key": "value"``
+# form (an optional quote may sit between the key and the separator, and before
+# the value). The excerpt can span into a neighbouring JSON field, so redacting
+# that form keeps a secret out of the audit leaf and kill record.
 _SECRET_REDACT_RE = re.compile(
-    r"((?:api[_-]?key|secret|token|password|bearer)\s*[=:]\s*)\S{8,}",
+    r"((?:api[_-]?key|secret|token|password|bearer)[\"']?\s*[=:]\s*[\"']?)\S{8,}",
     re.IGNORECASE,
 )
 

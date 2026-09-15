@@ -329,5 +329,287 @@ class ScanWindowTruncationTests(unittest.TestCase):
         )
 
 
+class SqlCommentSeparatorTests(unittest.TestCase):
+    """A SQL comment separates two keywords the way whitespace does.
+
+    The SQL rules used to require whitespace between keywords, so
+    ``DROP/**/DATABASE prod;`` screened clean although SQL engines run it.
+    """
+
+    def setUp(self) -> None:
+        reset_guard()
+        self.guard = DestructiveActionGuard()
+
+    def _sql_rules(self, text: str) -> list[str]:
+        return [m.rule_id for m in self.guard.screen(text).matches if m.rule_id.startswith("sql.")]
+
+    def _assert_rule(self, cases: tuple[tuple[str, str], ...]) -> None:
+        for text, rule_id in cases:
+            with self.subTest(text=text):
+                self.assertIn(rule_id, self._sql_rules(text))
+
+    def _assert_clean(self, texts: tuple[str, ...]) -> None:
+        for text in texts:
+            with self.subTest(text=text):
+                self.assertEqual([], self._sql_rules(text))
+
+    def test_block_comment_separates_keywords(self) -> None:
+        self._assert_rule((
+            ("DROP/**/DATABASE prod;", "sql.drop_database"),
+            ("DROP/*x*/TABLE users", "sql.drop_table"),
+            ("DROP /* a */ /* b */ SCHEMA billing;", "sql.drop_database"),
+            ("DROP /*\n  reason\n*/ TABLE users;", "sql.drop_table"),
+            ("DELETE/**/FROM orders;", "sql.delete_no_where"),
+            ("DELETE FROM/**/orders;", "sql.delete_no_where"),
+            ("TRUNCATE/**/TABLE users;", "sql.truncate"),
+            ("UPDATE/**/users/**/SET active = false;", "sql.update_no_where"),
+            ("DROP/**/INDEX idx_users;", "sql.drop_index"),
+            ("DROP MATERIALIZED/**/VIEW totals;", "sql.drop_index"),
+        ))
+
+    def test_line_comment_ending_in_a_newline_separates_keywords(self) -> None:
+        self._assert_rule((
+            ("DROP -- note\nDATABASE prod;", "sql.drop_database"),
+            ("DELETE -- all of it\nFROM orders;", "sql.delete_no_where"),
+            ("UPDATE users -- reset\nSET active = false;", "sql.update_no_where"),
+            ("TRUNCATE -- x\n-- y\nTABLE users;", "sql.truncate"),
+            # MySQL line comment; PostgreSQL also ends a line comment at CR.
+            ("DROP # note\nTABLE users;", "sql.drop_table"),
+            ("DROP --x\rTABLE users;", "sql.drop_table"),
+            # Before a table name `#` is read as a comment as well as a name.
+            ("DELETE FROM#c\norders;", "sql.delete_no_where"),
+            ("DELETE FROM # WHERE kept\norders;", "sql.delete_no_where"),
+            ("UPDATE#c\nusers SET active = 0;", "sql.update_no_where"),
+        ))
+
+    def test_nested_block_comment_separates_keywords(self) -> None:
+        # PostgreSQL and SQL Server nest block comments. Each case needs the
+        # nesting reading: ending the comment at the first `*/` leaves `c`.
+        self._assert_rule((
+            ("DROP /* a /* b */ c */ TABLE users;", "sql.drop_table"),
+            ("DROP /* a /*/ b */ c */ TABLE users;", "sql.drop_table"),
+            ("DELETE /* a /* b */ c */ FROM orders;", "sql.delete_no_where"),
+            ("UPDATE /* a /* b */ c */ users SET a = 1;", "sql.update_no_where"),
+        ))
+
+    def test_mysql_executable_comments_are_read_as_code(self) -> None:
+        self._assert_rule((
+            ("/*!DROP*/ TABLE users;", "sql.drop_table"),
+            ("DROP /*!50000 TABLE */ users;", "sql.drop_table"),
+            ("/*!50000DROP TABLE users*/;", "sql.drop_table"),
+            ("/*M!100100DELETE FROM orders*/;", "sql.delete_no_where"),
+            ("/*M!10000DROP TABLE users*/;", "sql.drop_table"),
+            # A `*/` inside a line comment in the body does not close it.
+            ("DROP /*!50000 -- x */\n */ TABLE users;", "sql.drop_table"),
+            ("DROP /*!50000 # x */\n */ TABLE users;", "sql.drop_table"),
+            ("DROP /*!50000 --\x7f x */\n */ TABLE users;", "sql.drop_table"),
+            # Nor does one inside a quoted identifier or string in the body.
+            ("UPDATE /*!50000 `order#items` */ SET active = 0;", "sql.update_no_where"),
+            ("/*!50000 WITH x AS (SELECT '*/') DELETE */ FROM orders;", "sql.delete_no_where"),
+            # The string ends differently with and without backslash escapes.
+            ("/*!50000 WITH x AS (SELECT '\\' */') DELETE */ FROM orders;", "sql.delete_no_where"),
+            ("/*!50000 WITH x AS (SELECT 'a\\') DELETE */ FROM orders;", "sql.delete_no_where"),
+            ("DELETE /*!50000 -- x */\n */ FROM users;", "sql.delete_no_where"),
+            # A block comment in the body closes on its own; only the MySQL reading sees this.
+            ("DROP /*!50000 /* x */ -- /*\n */ TABLE users;", "sql.drop_table"),
+        ))
+
+    def test_executable_comment_syntax_is_an_ordinary_comment_elsewhere(self) -> None:
+        self._assert_rule((
+            # PostgreSQL and SQLite: an ordinary comment.
+            ("DROP /*! note */ TABLE users;", "sql.drop_table"),
+            # PostgreSQL only: the comment nests.
+            ("DROP /*! a /* b */ c */ TABLE users;", "sql.drop_table"),
+            # SQLite: the comment ends at the first `*/`.
+            ("DROP /*! x /* */ TABLE users;", "sql.drop_table"),
+            ("DELETE /*! x /* */ FROM users;", "sql.delete_no_where"),
+        ))
+
+    def test_quoted_table_names_are_read(self) -> None:
+        self._assert_rule((
+            ('DELETE FROM "orders";', "sql.delete_no_where"),
+            ("DELETE FROM [dbo].[orders];", "sql.delete_no_where"),
+            ("DELETE FROM #staging\n;", "sql.delete_no_where"),
+            ("UPDATE #staging\nSET a = 1;", "sql.update_no_where"),
+            ("TRUNCATE `users`;", "sql.truncate"),
+            ('UPDATE "users" SET active = false;', "sql.update_no_where"),
+            ('UPDATE "users"SET active = false;', "sql.update_no_where"),
+            # A quoted name needs no gap before it.
+            ('DELETE FROM"orders";', "sql.delete_no_where"),
+            ("DELETE FROM`orders`;", "sql.delete_no_where"),
+            ('TRUNCATE"orders";', "sql.truncate"),
+            ('TRUNCATE"orders"; -- nightly', "sql.truncate"),
+            ("TRUNCATE`orders`;", "sql.truncate"),
+            ("UPDATE`users`SET note = 1;", "sql.update_no_where"),
+            ("DELETE FROM[orders];", "sql.delete_no_where"),
+            # A glued quote unlike the one before the statement opens a name.
+            ('cur.execute("DELETE FROM`orders`")', "sql.delete_no_where"),
+            ('{"sql": "TRUNCATE`orders`"}', "sql.truncate"),
+            ('$db->query("UPDATE`orders`SET active=0");', "sql.update_no_where"),
+        ))
+
+    def test_where_inside_a_quoted_name_is_not_a_where_clause(self) -> None:
+        self._assert_rule((
+            ('DELETE FROM "x WHERE y";', "sql.delete_no_where"),
+            ('DELETE FROM "a""b WHERE c";', "sql.delete_no_where"),
+            ("DELETE FROM [a WHERE b];", "sql.delete_no_where"),
+            ("UPDATE `a WHERE b` SET x = 1;", "sql.update_no_where"),
+            ('DELETE FROM "x".[a WHERE b];', "sql.delete_no_where"),
+            # A quoted identifier glued to the name aliases it.
+            ('DELETE FROM a"WHERE";', "sql.delete_no_where"),
+        ))
+        self._assert_clean((
+            'DELETE FROM "orders" WHERE id = 9;',
+            'DELETE FROM t WHERE"id" = 9;',
+            'DELETE FROM "users"WHERE"id"=1;',
+            'parts = ["DELETE FROM users", "WHERE", "id = %s"]',
+            "DELETE FROM `t`WHERE`id`=1;",
+            'UPDATE t SET a="x"WHERE"id"=2;',
+        ))
+
+    def test_comment_opener_inside_a_string_does_not_hide_the_statement(self) -> None:
+        self._assert_rule((
+            ("SELECT '/*'; DROP/**/TABLE users; SELECT '*/';", "sql.drop_table"),
+            ("SELECT 'DROP --'; DROP/**/TABLE users;", "sql.drop_table"),
+            ("SELECT 'UPDATE /*'; DROP/**/TABLE users; SELECT '*/';", "sql.drop_table"),
+        ))
+
+    def test_where_in_a_comment_still_does_not_disarm_the_statement(self) -> None:
+        self._assert_rule((
+            ("DELETE/**/FROM users /* where */;", "sql.delete_no_where"),
+            ("UPDATE users -- x\nSET a = 1 -- where\n", "sql.update_no_where"),
+        ))
+
+    def test_guarded_statements_with_comments_stay_clean(self) -> None:
+        self._assert_clean((
+            "DELETE/**/FROM orders WHERE id = 9;",
+            "UPDATE users /* x */ SET a = 1 WHERE id = 2;",
+            "DELETE FROM #staging WHERE id = 1;",
+            "DELETE FROM #staging\nWHERE id = 1;",
+            "UPDATE #staging\nSET a = 1\nWHERE id = 2;",
+            "UPDATE -- note\n users SET a = 1\n WHERE id = 2;",
+        ))
+
+    def test_text_that_is_not_a_separator_does_not_match(self) -> None:
+        self._assert_clean((
+            "DROP /* never closed TABLE users",
+            "DROP /*/ TABLE users",
+            "DROPTABLE users; -- no gap",
+            "DELETE FROMorders;",
+            "TRUNCATE /*!50000 = 1;",
+            "DROP /*m! TABLE users */;",
+            "/*!x*/ DROP */ TABLE users",
+            "DROP -- TABLE users",
+            "DROP /* x */ y TABLE users",
+            "DROP FUNCTION f; -- TABLE t",
+            "You can drop -- if needed -- the table later.",
+            "Please update docs -- thanks\nSettings are next.",
+        ))
+
+    def test_keywords_in_quotes_and_comments_stay_clean(self) -> None:
+        # A keyword inside a quoted string or a block comment starts no
+        # statement, even when the quote or `*/` that ends it is followed by
+        # what would complete one.
+        self._assert_clean((
+            '{"mode": "TRUNCATE"}',
+            '{"mode": "TRUNCATE"} # config',
+            "Use `TRUNCATE` here.",
+            "Run `DELETE FROM` with care, see `docs`.",
+            '{"title": "How to TRUNCATE"}',
+            '{"name": "db_admin", "arguments": {"action": "Run TRUNCATE", "table": "events"}}',
+            '{"note": "run DELETE FROM", "table": "users"}',
+            "Press `sudo TRUNCATE` then `VACUUM`.",
+            'verbs: "UPDATE", "SET"',
+            "SELECT count(*) /* rows the job will DELETE */ FROM orders;",
+            "/* TODO: DROP */ table.remove(row)",
+            "/* /*!50000 */ DELETE */ FROM orders;",
+            "/*!50000 SET @msg = 'DROP */ TABLE users' */;",
+            # Code that matches SQL with regular expressions.
+            "pattern = re.compile(r'DELETE FROM[ \\t]+(\\w+)')",
+            "TRUNCATE_RE = re.compile(r'TRUNCATE[\\s(]+', re.I)",
+            "log.info('TRUNCATE[{}] finished', table)",
+            "Avoid TRUNCATE[^1] on replicated tables.",
+            "ops = SqlOp.TRUNCATE[0]",
+            "result = TRUNCATE[idx]  # latest",
+            "df = TRUNCATE[colname].sum()",
+        ))
+
+    def test_truncate_excerpt_keeps_a_following_secret_redacted(self) -> None:
+        # The match runs to the table name, as the whitespace-only rule did.
+        for gap in (" ", " /**/ "):
+            text = f"TRUNCATE{gap}TABLE orders_archive_2024 api_key=sk_live_ABCDEFGHIJKLMNOP"
+            with self.subTest(text=text):
+                (match,) = [m for m in self.guard.screen(text).matches if m.rule_id == "sql.truncate"]
+                self.assertIn("api_key=[REDACTED]", match.excerpt)
+                self.assertNotIn("sk_", match.excerpt)
+
+
+class SqlLinearTimeTests(unittest.TestCase):
+    """Crafted SQL payloads must be screened in time linear in their length.
+
+    A comment between keywords can hold another keyword, and so can a quoted
+    name, so a rule that rescanned either from every keyword inside it would
+    be quadratic. Each shape is ``(prefix, repeated unit, suffix)``, expanded
+    to 64 KB and timed against plain text of the same length.
+    """
+
+    _LENGTH = 64 * 1024
+    _EXTRA_SECONDS = 0.5
+    _SHAPES = (
+        ("DELETE FROM ", "a", " WHERE"),
+        ("", "DELETE FROM x ", "WHERE"),
+        ("", "UPDATE x SET ", "WHERE"),
+        ("DELETE FROM x", "\n", "WHERE"),
+        ("", "DROP /* ", "TABLE"),
+        ("", "DROP -- ", "TABLE"),
+        ("", "-- DROP\n", "TABLE"),
+        ("", "-- DROP\n", "/**/TABLE"),
+        ("", "-- /*!1\n", "*/ DROP */ TABLE"),
+        ("", "/*!1 '", "' */ DROP */ TABLE"),
+        ("", "/* DROP ", "*/ x TABLE"),
+        ("DROP ", "/*", " TABLE"),
+        ("", "DROP /*!", "TABLE"),
+        ("", "/*!DROP */", " TABLE"),
+        ("", "DROP -- x\r", "TABLE"),
+        ("", "DROP MATERIALIZED /* ", "VIEW"),
+        ("", "DELETE /* ", "FROM"),
+        ("", "DELETE FROM -- ", ""),
+        ("UPDATE users -- ", "UPDATE/**/t -- ", "SET"),
+        ("", "UPDATE a -- b\n", "SET"),
+        ("", "UPDATE x /* ", "SET"),
+        ("", "TRUNCATE /* ", ""),
+        ("", "UPDATE [", "] SET a WHERE x"),
+        ("", "UPDATE [a].[", "] SET a WHERE b"),
+        ("", "DELETE FROM x.[y].[", "] WHERE z"),
+        ("", "DELETE FROM [", "] WHERE x"),
+        ("", "TRUNCATE [", "]"),
+        ("", 'DELETE FROM "a""', ""),
+        ("", "DELETE FROM [", "]]" * 8_000 + "] WHERE x"),
+        ("", "UPDATE /* ", "*/ " + "a" * 20_000 + " SET x WHERE"),
+    )
+
+    def setUp(self) -> None:
+        reset_guard()
+
+    @staticmethod
+    def _elapsed(text: str) -> float:
+        import time
+
+        started = time.perf_counter()
+        screen_action(text)
+        return time.perf_counter() - started
+
+    def test_crafted_sql_payloads_are_screened_in_linear_time(self) -> None:
+        baseline = min(self._elapsed("a " * (self._LENGTH // 2)) for _ in range(3))
+        for prefix, unit, suffix in self._SHAPES:
+            count = (self._LENGTH - len(prefix) - len(suffix)) // len(unit)
+            text = prefix + unit * count + suffix
+            with self.subTest(shape=(prefix, unit, suffix[:40])):
+                extra = self._elapsed(text) - baseline
+                if self._EXTRA_SECONDS <= extra < 2.0:
+                    extra = min([extra] + [self._elapsed(text) - baseline for _ in range(2)])
+                self.assertLess(extra, self._EXTRA_SECONDS)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

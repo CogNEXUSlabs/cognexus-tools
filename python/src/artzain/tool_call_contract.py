@@ -38,6 +38,8 @@ from dataclasses import dataclass, field
 from json.decoder import scanstring
 from typing import TYPE_CHECKING, Any, Collection, Deque, Dict, Iterator, List, Optional, Set, Tuple
 
+from artzain.prompt_injection import RGI_EMOJI_TAG_SEQUENCE_RE
+
 if TYPE_CHECKING:
     from artzain.destructive_action_guard import ActionScreenResult
     from artzain.prompt_injection import DetectionResult, PromptInjectionDetector
@@ -281,9 +283,10 @@ def _inspect(payload: str, contracts: Optional[Dict[str, Any]]) -> ContractRepor
 #   each decoded string on its own: a command ends where its string ends
 #   (``rm -rf /`` is followed by a quote in the serialized text), and one
 #   argument's WHERE says nothing about another argument's DELETE. And it reads
-#   each array of strings joined with spaces, the way an argv list runs
-#   (``["rm", "-rf", "/"]``). A command a tool assembles from separate fields
-#   (a ``cmd`` beside its ``args``) is not reassembled.
+#   each argv-style array (two or more strings) as the command it runs, its
+#   tokens joined with spaces the way an argv list runs (``["rm", "-rf", "/"]``),
+#   a stray number coerced in place. A command a tool assembles from separate
+#   fields (a ``cmd`` beside its ``args``) is not reassembled.
 # * The injection screen reads the payload with ``ensure_ascii``'s escapes of
 #   visible characters written out, in place of the payload as sent, so an
 #   escaped greeting is judged by its characters rather than as a run of
@@ -322,9 +325,11 @@ _SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
 _JSON_OPENING_RE = re.compile(r"[\s\ufeff]*[\[{\"]")
 
 # One backslash escape, consumed left to right so an escaped backslash is never
-# read as the start of another escape. A surrogate pair is tried first.
+# read as the start of another escape. A black flag followed by escaped tag
+# characters is tried first, then a surrogate pair.
 _ESCAPE_RE = re.compile(
-    r"\\(?:u([dD][89abAB][0-9a-fA-F]{2})\\u([dD][c-fC-F][0-9a-fA-F]{2})"
+    r"\\(?:(u[dD]83[cC]\\u[dD][fF][fF]4(?:\\u[dD][bB]40\\u[dD][cC][0-7][0-9a-fA-F])+)"
+    r"|u([dD][89abAB][0-9a-fA-F]{2})\\u([dD][c-fC-F][0-9a-fA-F]{2})"
     r"|u([0-9a-fA-F]{4})"
     r"|[\s\S])"
 )
@@ -349,8 +354,9 @@ _DEFAULT_IGNORABLE_RE = re.compile(
 class DecodedStrings:
     strings: List[str]
     too_deep: bool = False
-    #: Each JSON array of two or more strings, joined with spaces: the command an
-    #: argv list runs. Only the destructive-action screen reads these.
+    #: Each argv-style array (two or more strings) reconstructed as the command
+    #: it runs — its tokens joined with spaces, a stray scalar coerced in place.
+    #: Only the destructive-action screen reads these.
     commands: List[str] = field(default_factory=list)
 
 
@@ -404,18 +410,58 @@ def _parse_json(value: str) -> Any:
         return _UNPARSED
 
 
-def _string_lists(parsed: Any) -> Iterator[List[str]]:
-    """Every array of two or more strings inside a parsed JSON value."""
+def _coerce_token(item: Any) -> Optional[str]:
+    """One argv element as the text a tool puts on the command line, or None.
+
+    A JSON string is itself. A scalar — a number, ``true``/``false``, ``null`` —
+    is ``str()``-ed the way a tool that builds a command line from the array
+    would stringify it, so an operand typed as a number does not drop the
+    command out of screening. A nested list or object is not a token: it returns
+    None and is walked for arrays of its own instead (see :func:`_argv_commands`).
+    """
+    if isinstance(item, str):
+        return item
+    if item is None or isinstance(item, (int, float)):  # bool is an int subclass
+        return str(item)
+    return None
+
+
+def _argv_commands(parsed: Any) -> Iterator[str]:
+    """Every argv-style array inside *parsed*, reconstructed as the command it runs.
+
+    An array is reconstructed when it holds at least two strings — an ``argv``
+    list (``["rm", "-rf", "/"]``), or a command a tool assembles from strings and
+    a stray number. Its elements are joined with a single space, the way an argv
+    list runs; a scalar (number, bool, null) is ``str()``-coerced in place, so a
+    non-string operand no longer makes the whole array skip screening, and a
+    nested list or object is not a token — it is left out of the command but
+    walked for arrays of its own.
+
+    The join is always a space. An element that itself holds whitespace is a
+    multi-word *argument value* (``["git", "push", "--force", "origin main"]``),
+    not a separator between two commands, and the tool runs the array as one
+    command line; joining on anything but a space would split that one command
+    across the boundary and switch off every rule that reads across words
+    (``git push … --force``). Two strings is the floor because a destructive
+    command needs at least two tokens (``rm`` and ``-rf``), while a table row of
+    one label and a number (``["cpu", 91]``) is not a command and must not be
+    reconstructed. A command that lives in a single element is screened on its
+    own as a decoded string; this only reassembles one split across elements.
+    """
     stack: List[Any] = [parsed]
     while stack:
         node = stack.pop()
         if isinstance(node, _Members):
             stack.extend(member for _, member in node)
-        elif isinstance(node, list):
-            if len(node) > 1 and all(isinstance(item, str) for item in node):
-                yield node
-            else:
-                stack.extend(node)
+            continue
+        if not isinstance(node, list):
+            continue
+        tokens = [_coerce_token(item) for item in node]
+        # A nested list/object is not a token; walk it for arrays of its own.
+        stack.extend(item for item, token in zip(node, tokens, strict=True) if token is None)
+        if sum(isinstance(item, str) for item in node) < 2:
+            continue
+        yield " ".join(token for token in tokens if token is not None)
 
 
 def decode_strings(payload: str) -> DecodedStrings:
@@ -427,8 +473,8 @@ def decode_strings(payload: str) -> DecodedStrings:
     again for its own strings, down to :data:`MAX_NESTED_JSON` levels. When a
     strict parser accepts it, its strings stand in for it, since they are all
     the tool that parses it receives; otherwise, and past the last level, it
-    is kept as text as well. Every array of strings in what a strict parser
-    reads is also joined into :attr:`DecodedStrings.commands`. Lone surrogates
+    is kept as text as well. Every argv-style array in what a strict parser
+    reads is reconstructed into :attr:`DecodedStrings.commands`. Lone surrogates
     become U+FFFD, since the screens hash what they read.
     """
     seen: Set[str] = set()
@@ -438,8 +484,8 @@ def decode_strings(payload: str) -> DecodedStrings:
 
     def read_commands(parsed: Any) -> None:
         if parsed is not _UNPARSED:
-            for items in _string_lists(parsed):
-                commands.setdefault(_clean(" ".join(items)), None)
+            for command in _argv_commands(parsed):
+                commands.setdefault(_clean(command), None)
 
     read_commands(_parse_json(payload or ""))
     layers: Deque[Tuple[str, int]] = deque([(payload or "", 0)])
@@ -471,7 +517,15 @@ def _kept_if_invisible(char: str, escape: str) -> str:
 
 
 def _write_out(match: "re.Match[str]") -> str:
-    high, low, code = match.groups()
+    flag, high, low, code = match.groups()
+    if flag:
+        # The England, Scotland and Wales flags, which the injection screen
+        # leaves alone, are written out whole; other tag characters keep their
+        # escapes. Every character here was one surrogate pair, 12 characters.
+        decoded = json.loads('"' + match.group(0) + '"')
+        rgi = RGI_EMOJI_TAG_SEQUENCE_RE.match(decoded)
+        written = rgi.group() if rgi else decoded[0]
+        return written + match.group(0)[12 * len(written):]
     if high:
         pair = chr(0x10000 + ((int(high, 16) - 0xD800) << 10) + (int(low, 16) - 0xDC00))
         return _kept_if_invisible(pair, match.group(0))
@@ -491,8 +545,10 @@ def unescape_non_ascii(text: str) -> str:
     invisible characters (format characters such as zero-width spaces, bidi
     controls and tags, and the other default-ignorable code points such as
     variation selectors), C1 controls and lone surrogates: a run of any of
-    those still reads as an encoding attack. A lone surrogate character that
-    is not escaped becomes U+FFFD.
+    those still reads as an encoding attack. The exception is the tag
+    characters of the England, Scotland and Wales flag emoji, which are
+    written out with their flag. A lone surrogate character that is not
+    escaped becomes U+FFFD.
     """
     text = text or ""
     if "\\u" in text:
@@ -509,7 +565,7 @@ def screen_tool_call_action(
     """Destructive-action screen of a ``tool_call`` payload, as sent and decoded.
 
     The payload as sent, then each distinct decoded string and each argv-style
-    array of strings joined with spaces, one at a time (the first
+    array reconstructed as the command it runs, one at a time (the first
     :data:`MAX_SCREENED_STRINGS`), then any past that as one text. The results
     are combined by
     :func:`~artzain.destructive_action_guard.combine_screens`.
