@@ -37,7 +37,7 @@ pip install artzain
 pip install "artzain[verify]"   # offline Ed25519 signature verification
 pip install "artzain[policy]"   # policy bundle signing (keygen/sign)
 
-export COGNEXUS_API_KEY=cgnx_…
+export COGNEXUS_API_KEY=cnx_…
 artzain login
 artzain quickstart
 ```
@@ -78,10 +78,12 @@ user input ──► screen_user_input() ──► model ──► tool call ─
 
 Only `allow` runs the tool; `review` means a human decides first. `decide()`
 raises `DecisionError` on any non-2xx response or when the engine cannot be
-reached. Treat that as `deny`. The destructive-action and injection screens
-read the serialized call, and every string in it as the tool receives them:
-JSON-decoded, so an argument's text is screened as it would be on its own
-(one that is itself valid JSON, through its decoded strings). A line of only
+reached. Treat that as `deny`. The destructive-action, injection, policy and
+PII screens read the serialized call, and every string in it as the tool
+receives them: JSON-decoded, including JSON inside a string such as a
+stringified `arguments`. The destructive-action screen reads each string on
+its own; the others read the strings together, so one argument can change the
+result for another. The PII screen runs on the engine only. A line of only
 `---` or three backticks in an argument comes back `review`; inline base64 or
 escape sequences written out as text can come back `deny`. Parse arguments
 with a strict JSON parser and send the parsed call, as the examples do. The

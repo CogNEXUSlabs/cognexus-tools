@@ -52,5 +52,56 @@ class SsnSeparatorTests(unittest.TestCase):
         self.assertIn("employee_[REDACTED-SSN]", out)
 
 
+class PassportIdentifierTests(unittest.TestCase):
+    """A passport number after its label carries a digit; a word is not one."""
+
+    def test_identifier_with_a_digit_counts(self):
+        for sample in (
+            "passport no: X1234567", "passport: 123456789", "Passport number AB1234567",
+            "My passport number is X1234567", "Passport number - 123456789",
+        ):
+            with self.subTest(sample=sample):
+                self.assertEqual(scan_text(sample).get("passport"), 1)
+
+    def test_a_word_after_the_label_is_not_a_passport_number(self):
+        for sample in ("passport: pending", "passport country: France", "passportNumber"):
+            with self.subTest(sample=sample):
+                self.assertNotIn("passport", scan_text(sample))
+
+
+class OtherScriptDigitTests(unittest.TestCase):
+    """Digits of another script are checked by their value, as ASCII digits are."""
+
+    def test_checks_read_the_digit_values(self):
+        from artzain.pii_detector import luhn_ok
+
+        def fullwidth(text):
+            return "".join(chr(0xFF10 + int(char)) if char.isdigit() else char for char in text)
+
+        self.assertFalse(luhn_ok(fullwidth("1234567890123456")))
+        self.assertTrue(luhn_ok(fullwidth("4111111111111111")))
+        self.assertNotIn("ssn", scan_text("ref " + fullwidth("900-00-0000")))
+
+
+class ToolCallMemberTests(unittest.TestCase):
+    """The SDK copy of the tool-call member reading counts labelled arguments."""
+
+    def test_argument_names_label_their_values(self):
+        import json
+
+        from artzain.tool_call_contract import member_text, scan_tool_call_pii
+
+        payload = json.dumps({"tool": "create_user", "arguments": {
+            "password": "hunter2", "date_of_birth": "1990-01-01", "passport_number": "X1234567",
+        }})
+        self.assertEqual(scan_text(payload), {})
+        self.assertEqual(
+            member_text(payload),
+            "tool: create_user\n;\npassword: hunter2\n;\ndate of birth: 1990-01-01"
+            "\n;\npassport number: X1234567",
+        )
+        self.assertEqual(scan_tool_call_pii(payload), {"passport": 1, "dob": 1, "secrets": 1})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -112,7 +112,7 @@ describe("postDecision", () => {
     const capture: { url?: string; init?: { headers: Record<string, string>; body: string } } =
       {};
     const result = await postDecision({
-      apiKey: "cgnx_test",
+      apiKey: "cnx_test",
       baseUrl: "https://engine.example.com",
       action: "exec",
       target: "openclaw:tool:exec",
@@ -124,7 +124,7 @@ describe("postDecision", () => {
     expect(result.outcome).toBe("allow");
     expect(capture.url).toBe("https://engine.example.com/api/v1/decisions");
     expect(capture.url).not.toContain("envelope");
-    expect(capture.init!.headers["X-Api-Key"]).toBe("cgnx_test");
+    expect(capture.init!.headers["X-Api-Key"]).toBe("cnx_test");
     const sent = JSON.parse(capture.init!.body) as Record<string, unknown>;
     expect(sent.payload_kind).toBe("tool_call");
     expect(sent.surface).toBe("openclaw");
@@ -134,7 +134,7 @@ describe("postDecision", () => {
 
   it("returns each vote's verdict, severity and findings (§8.4)", async () => {
     const result = await postDecision({
-      apiKey: "cgnx_test",
+      apiKey: "cnx_test",
       baseUrl: "https://engine.example.com",
       action: "exec",
       target: "openclaw:tool:exec",
@@ -153,7 +153,7 @@ describe("postDecision", () => {
 
   it("wraps a non-JSON 2xx body in DecisionError (§9.85)", async () => {
     const err = await postDecision({
-      apiKey: "cgnx_test",
+      apiKey: "cnx_test",
       baseUrl: "https://engine.example.com",
       action: "exec",
       target: "openclaw:tool:exec",
@@ -171,7 +171,7 @@ describe("postDecision", () => {
       {};
     const started = performance.now();
     await postDecision({
-      apiKey: "cgnx_test",
+      apiKey: "cnx_test",
       baseUrl: `${"/".repeat(50_000)}x/`,
       action: "exec",
       target: "openclaw:tool:exec",
@@ -186,7 +186,7 @@ describe("postDecision", () => {
   it("throws DecisionError on HTTP 503", async () => {
     await expect(
       postDecision({
-        apiKey: "cgnx_test",
+        apiKey: "cnx_test",
         baseUrl: "https://engine.example.com",
         action: "exec",
         target: "openclaw:tool:exec",

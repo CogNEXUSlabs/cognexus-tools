@@ -528,13 +528,20 @@ _DECODED_INSTRUCTION_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     )
     if "\\s" in pattern.pattern and ".*" not in pattern.pattern
 )
+
+
+def _lowered(source: str) -> str:
+    """*source* with literal upper-case letters lowered, escapes (\\s, \\S, \\b) kept."""
+    return re.sub(r"\\.|[A-Z]",
+                  lambda part: part.group().lower() if len(part.group()) == 1 else part.group(),
+                  source)
+
+
 # One pattern for all of them, matched against lowercased text: case-insensitive
 # matching of the alternatives at every position is several times slower on a
 # long decoded string. Escapes such as \S keep their case.
 _DECODED_INSTRUCTION_RE: re.Pattern[str] = re.compile("|".join(
-    "(?:" + re.sub(r"\\.|[A-Z]", lambda part: part.group().lower() if len(part.group()) == 1 else part.group(),
-                   pattern.pattern) + ")"
-    for pattern in _DECODED_INSTRUCTION_PATTERNS
+    "(?:" + _lowered(pattern.pattern) + ")" for pattern in _DECODED_INSTRUCTION_PATTERNS
 ))
 
 # Base64 wrapped across lines (a PEM or MIME body) is one encoding. A line of
@@ -564,6 +571,58 @@ _C1_CONTROLS_RE: re.Pattern[str] = re.compile(r"[\x80-\x9f]")
 _NOT_TEXT_CHARACTERS = (*range(0x00, 0x09), 0x0B, 0x0C, *range(0x0E, 0x20), *range(0x7F, 0xA0), 0xFFFD)
 _DROP_NOT_TEXT = dict.fromkeys(_NOT_TEXT_CHARACTERS)
 _SPACE_FOR_NOT_TEXT = dict.fromkeys(_NOT_TEXT_CHARACTERS, " ")
+# The same characters as a regex character-class body, for the gappy search below.
+_NOT_TEXT_CLASS = "".join("\\x%02x" % cp if cp <= 0xFF else "\\u%04x" % cp for cp in _NOT_TEXT_CHARACTERS)
+
+
+def _gap_pattern(lowered: str) -> str:
+    """A lowercased phrase pattern rewritten to catch both readings' tricks at once.
+
+    Between two of a word's letters a run of non-text characters may appear (a
+    control byte put inside a word, which the spaced reading would split), and a
+    word gap (``\\s``) may be non-text as well as whitespace (bytes put between
+    words instead of spaces, which the deleted reading would glue). An instruction
+    that does both defeats each reading on its own. The inserted class is disjoint
+    from the letter that follows it, so the match stays linear; there is no ``.*``.
+    """
+    within = f"[{_NOT_TEXT_CLASS}]*"
+    out: list[str] = []
+    prev_letter = False
+    i, n = 0, len(lowered)
+    while i < n:
+        ch = lowered[i]
+        if ch == "\\" and i + 1 < n:
+            out.append(f"[\\s{_NOT_TEXT_CLASS}]" if lowered[i + 1] == "s" else lowered[i:i + 2])
+            i += 2
+            prev_letter = False
+        elif ch == "{":  # a {m,n} quantifier: copied whole, never a word gap
+            close = lowered.index("}", i)
+            out.append(lowered[i:close + 1])
+            i = close + 1
+            prev_letter = False
+        elif ch.isascii() and ch.isalpha():
+            if prev_letter:
+                out.append(within)
+            out.append(ch)
+            prev_letter = True
+            i += 1
+        else:
+            out.append(ch)
+            prev_letter = False
+            i += 1
+    return "".join(out)
+
+
+# The phrase patterns with those gaps: one combined pattern to find a match, and
+# the list to name which phrase it was. Run over the decoded bytes read as text,
+# with the non-text characters left in place.
+_GAP_INSTRUCTION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (re.compile(_gap_pattern(_lowered(pattern.pattern))), pattern.pattern)
+    for pattern in _DECODED_INSTRUCTION_PATTERNS
+)
+_GAP_INSTRUCTION_RE: re.Pattern[str] = re.compile("|".join(
+    "(?:" + _gap_pattern(_lowered(pattern.pattern)) + ")" for pattern in _DECODED_INSTRUCTION_PATTERNS
+))
 
 
 def _decode_base64(candidate: str) -> bytes | None:
@@ -672,6 +731,23 @@ def _phrase_in(readable: str) -> str | None:
     # Which phrase it is, tried only where the match starts.
     start = match.start()
     return next((pattern.pattern for pattern in _DECODED_INSTRUCTION_PATTERNS if pattern.match(lowered, start)),
+                match.group())
+
+
+def _gap_phrase_in(data: bytes) -> str | None:
+    """The instruction phrase in *data* whose words are broken by non-text runs.
+
+    *data* is read as text with its non-text characters left in place, so an
+    instruction that puts control bytes inside its words and non-text bytes
+    between its words at once is found; the deleted and spaced readings each miss
+    that, since one glues the words together and the other splits one apart.
+    """
+    lowered = data.decode("utf-8", errors="replace").lower()
+    match = _GAP_INSTRUCTION_RE.search(lowered)
+    if match is None:
+        return None
+    start = match.start()
+    return next((original for gap, original in _GAP_INSTRUCTION_PATTERNS if gap.match(lowered, start)),
                 match.group())
 
 
@@ -1355,7 +1431,9 @@ class PromptInjectionDetector:
             if found is None:
                 joined, spaced = _readings(decoded)
                 joined_readings.append(joined)
-                found = _phrase_in(joined) or (_phrase_in(spaced) if spaced is not None else None)
+                found = (_phrase_in(joined)
+                         or (_phrase_in(spaced) if spaced is not None else None)
+                         or _gap_phrase_in(decoded))
             if found:
                 payload_found = True
                 findings.append((

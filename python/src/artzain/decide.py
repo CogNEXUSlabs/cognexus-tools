@@ -177,7 +177,7 @@ def _decide_offline(
     votes: list[dict[str, Any]] = []
     votes.append(_offline_injection_vote(payload, kind, agent_did))
     votes.append(_offline_destructive_vote(payload, kind, surface="sdk"))
-    votes.append(_offline_policy_vote(payload))
+    votes.append(_offline_policy_vote(payload, kind))
 
     outcome = "allow"
     for v in votes:
@@ -288,7 +288,7 @@ def _offline_destructive_vote(payload: str, kind: str, *, surface: str) -> dict[
     return _vote("destructive-action", verdict, severity, findings=findings)
 
 
-def _offline_policy_vote(payload: str) -> dict[str, Any]:
+def _offline_policy_vote(payload: str, kind: str) -> dict[str, Any]:
     from artzain.policy_enforcement import (
         PolicyEnforcementEvaluator,
         builtin_conduct_rules,
@@ -296,7 +296,14 @@ def _offline_policy_vote(payload: str) -> dict[str, Any]:
 
     evaluator = PolicyEnforcementEvaluator()
     # Offline has no tenant rules; the always-on conduct rules still apply.
-    report = evaluator.evaluate(payload, builtin_conduct_rules())
+    rules = builtin_conduct_rules()
+    if kind == "tool_call":
+        # Read as sent and as the tool reads it: JSON-decoded.
+        from artzain.tool_call_contract import evaluate_tool_call_policy
+
+        report = evaluate_tool_call_policy(evaluator, payload, rules)
+    else:
+        report = evaluator.evaluate(payload, rules)
     if not report.has_violations:
         return _vote("policy-enforcement", "allow", "none")
     rank = {"low": 1, "medium": 2, "high": 3, "critical": 4}

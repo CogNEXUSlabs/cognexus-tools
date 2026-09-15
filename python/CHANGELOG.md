@@ -1,5 +1,91 @@
 # Changelog
 
+## 0.6.20
+
+### Fixed
+
+- Offline `decide(kind="tool_call")`: the policy-enforcement vote reads a call
+  the way its tool receives it, as the destructive-action and injection votes
+  have since 0.6.16. Besides the serialized JSON, it reads the call with the
+  escapes in its strings written out in place, once for the call's own strings
+  and once more for each level of JSON inside strings, up to three levels, so
+  the conduct rules judge the words the tool would send. Some abusive language
+  inside arguments that earlier versions allowed is now denied: language toward
+  a customer, also when the customer is named in a different argument, and
+  insults directed at a person.
+- `artzain.pii_detector.scan_text` counts a passport number only when it
+  contains a digit. Any six to nine letters after the label counted before,
+  so `passport: pending`, `passport country: France` and a bare
+  `passportNumber` each read as a passport number. A sentence with a number
+  counted the same way, through the word after the label; `passport number
+  is`, `passport details:` and `passport number -` before the number are
+  now read as such. Other words between the label and the number
+  (`passport renewed, number C01X00T47`) no longer count, and neither does a
+  number of letters only, which a German document issued before November 2023
+  can exceptionally have.
+- `scan_text`, `redact_text` and `luhn_ok` check digits of other scripts by
+  their value. The card checksum read them as if ASCII, and the never-issued
+  SSN ranges were compared as ASCII text, so a Luhn-invalid order number in
+  fullwidth digits could count as a card and `900-00-0000` in Arabic-Indic
+  digits as an SSN.
+- `artzain.pii_detector.scan_text()` counts a passport number or a date of
+  birth after more of the ways its label is written: `No.` or `Num.` with an
+  abbreviation point, the dotted initials `D.O.B.`, a parenthesised note after
+  the label such as its abbreviation or a date format (`Date of birth (DOB):`),
+  and up to two marks between the label and the value, where a hyphen, an en
+  dash or an em dash now counts as well as `:` and `#` (as in `DOB -` or
+  `:-`). Every label form that counted before still counts.
+- The `KillRecord` that `screen_agent_action()` writes when it trips the kill
+  switch can be serialized as JSON. Each entry in its `matches` held the
+  guard's `ActionSeverity` enum, so `json.dumps()` of `KillRecord.to_dict()`
+  or `recent_activations()` raised `TypeError`, which is what an `on_kill`
+  callback storing the record as JSON hit.
+- The prompt-injection screen now finds an instruction hidden in the base64 of a
+  binary file when its words are disguised with non-text bytes both inside and
+  between them at once. The screen already read such bytes two ways — with the
+  non-text characters removed, which rejoins a word split by them, and read as
+  spaces, which separates words run together by them — but an instruction that
+  used both tricks together defeated each reading on its own. A word's letters
+  may now be interrupted by non-text characters and its word gaps may be non-text
+  as well as whitespace. The search runs in linear time and adds no findings on
+  binary files (certificates, keys, images, archives, random bytes).
+
+### Changed
+
+- `artzain.tool_call_contract` adds `decoded_texts` (a call with the escapes in
+  its strings written out in place and a line break in place of the comma or
+  bracket after each string, once for the call's own strings and once more for
+  each level of JSON inside strings, none longer than the call),
+  `evaluate_tool_call_policy`, which reads a call as sent and as each of those
+  texts, and `combine_policy_reports`, which folds the policy reports of several
+  readings of one payload into one, telling rules apart by id, title, category,
+  severity and summary.
+- README "Gating tool calls": names the policy and PII screens among those that
+  read a call's strings JSON-decoded, says which screens read the strings
+  together, and that the PII screen runs on the engine only.
+- `artzain.tool_call_contract` adds `member_text`, which writes each object
+  member of a tool call as a `key: value` line, and `scan_tool_call_pii`,
+  which counts PII in a tool call as sent and in those lines. Detectors that
+  count a value only after its label, such as `dob: 1990-01-01`, see the
+  argument's name as the label: `{"dob": "1990-01-01"}`,
+  `{"date_of_birth": "1990-01-01"}` and `{"guest1_dob": "1990-01-01"}` count
+  as a date of birth. A key is read as its words only, so a key never adds an
+  identifier. Values are read decoded, so an identifier the call's JSON
+  escaping hid in a value is counted too. `null`, `true`, `false`, `NaN` and
+  numbers of fewer than four digits are not read as values; a string flag is,
+  so `{"reset_password": "email"}` counts as credential material, as `reset
+  password: email` does. A call the parser does not read (it is not JSON,
+  or it nests too deep) is read whole without labels: its strings, keys
+  included, decoded, and the text between them as it is. A string that
+  looks like JSON and does not parse is read as the tool receives it, with
+  each string in it that holds an escape also decoded. Offline `decide()`
+  runs no PII screen, so its decisions are unchanged; the engine's privacy
+  vote reads the member lines for `payload_kind="tool_call"`.
+- In a `KillRecord` from `screen_agent_action()`, each match's `severity` is
+  the string value (`"critical"`), as in `ActionScreenResult.to_dict()`, not
+  an `ActionSeverity`. Compare it with `ActionSeverity.CRITICAL.value`, not
+  `ActionSeverity.CRITICAL`.
+
 ## 0.6.19
 
 ### Fixed
