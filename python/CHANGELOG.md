@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.21
+
+### Fixed
+
+- `decode_strings` includes the decoded prefix of a JSON string that is never
+  closed at the end of the payload (a cut inside the last string). An
+  incomplete trailing escape is dropped; a bad escape in the middle still
+  stops the reading. Screens that use those strings therefore see a line
+  break JSON wrote as an escape, even when the payload was cut inside that
+  string.
+
 ## 0.6.20
 
 ### Fixed
