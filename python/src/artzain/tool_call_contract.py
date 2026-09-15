@@ -401,14 +401,86 @@ def _clean(value: str) -> str:
     return _SURROGATE_RE.sub("\ufffd", value)
 
 
+#: JSON's one-character backslash escapes (RFC 8259).
+_SIMPLE_ESCAPES = {
+    '"': '"',
+    '\\': '\\',
+    '/': '/',
+    'b': '\b',
+    'f': '\f',
+    'n': '\n',
+    'r': '\r',
+    't': '\t',
+}
+_HEXDIGITS = frozenset("0123456789abcdefABCDEF")
+
+
+def _truncated_literal(text: str, pos: int) -> Optional[str]:
+    """Decoded prefix of an unterminated JSON string starting at *pos*.
+
+    ``None`` when a complete bad escape sits in the string: nothing after it
+    can be told from string content. An incomplete escape at the end of
+    *text* (a lone backslash, or ``\\u`` with fewer than four hex digits) is
+    dropped, and the prefix before it is returned. Linear in the remainder.
+    """
+    parts: List[str] = []
+    i = pos
+    n = len(text)
+    while i < n:
+        slash = text.find("\\", i)
+        if slash < 0:
+            parts.append(text[i:])
+            break
+        if slash > i:
+            parts.append(text[i:slash])
+        if slash + 1 >= n:
+            break
+        esc = text[slash + 1]
+        if esc == "u":
+            digits_end = min(slash + 6, n)
+            digits = text[slash + 2:digits_end]
+            if len(digits) < 4:
+                if all(c in _HEXDIGITS for c in digits):
+                    break
+                return None
+            if any(c not in _HEXDIGITS for c in digits):
+                return None
+            code = int(digits, 16)
+            i = slash + 6
+            if 0xD800 <= code <= 0xDBFF and text[i:i + 2] == "\\u":
+                low_digits = text[i + 2:i + 6]
+                if len(low_digits) < 4:
+                    if all(c in _HEXDIGITS for c in low_digits):
+                        parts.append(chr(code))
+                        break
+                    return None
+                if any(c not in _HEXDIGITS for c in low_digits):
+                    return None
+                low = int(low_digits, 16)
+                if 0xDC00 <= low <= 0xDFFF:
+                    code = 0x10000 + (((code - 0xD800) << 10) | (low - 0xDC00))
+                    i += 6
+            parts.append(chr(code))
+            continue
+        mapped = _SIMPLE_ESCAPES.get(esc)
+        if mapped is None:
+            return None
+        parts.append(mapped)
+        i = slash + 2
+    return "".join(parts)
+
+
 def _literals(text: str) -> Iterator[str]:
     """Each JSON string literal in *text*, decoded, left to right.
 
     In JSON a ``"`` outside a string always opens one, so reading literal by
     literal recovers every string without parsing the structure around it:
-    nesting depth, duplicate keys and trailing text do not matter. Stops at the
-    first literal that does not decode (never closed, or a bad escape), since
-    nothing after it can be told apart from string content.
+    nesting depth, duplicate keys and trailing text do not matter. A literal
+    that is never closed at the end of *text* (a payload cut inside a string)
+    yields its decoded prefix; an incomplete trailing escape (a lone
+    backslash, or ``\\u`` with fewer than four hex digits) is dropped. A bad
+    escape in the middle still stops the reading, since nothing after it can
+    be told apart from string content.
     """
     pos = 0
     while True:
@@ -418,6 +490,9 @@ def _literals(text: str) -> Iterator[str]:
         try:
             value, pos = scanstring(text, start + 1, False)
         except ValueError:
+            value = _truncated_literal(text, start + 1)
+            if value is not None:
+                yield value
             return
         yield value
 
@@ -908,8 +983,10 @@ class _Text(str):
 def _pieces(text: str) -> Iterator[str]:
     """*text* in order: the text before each JSON string literal, then the literal decoded.
 
-    Found the way :func:`_literals` finds them. From a literal that does not
-    decode, the rest of *text* is one piece of text between strings.
+    Found the way :func:`_literals` finds complete literals. From a literal
+    ``scanstring`` does not decode, the rest of *text* is one piece of text
+    between strings (an unterminated last literal's prefix is decoded by
+    :func:`_literals` for the screens; this walk leaves it as surrounding text).
     """
     pos = 0
     while True:
