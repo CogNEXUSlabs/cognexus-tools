@@ -525,6 +525,50 @@ class HiddenCharacterTests(unittest.TestCase):
                 self.assertIn(f"token_smuggle:{family}", result.matched_patterns)
 
 
+# ---------------------------------------------------------------------------
+# Right-to-left text and the bidi controls that lay it out
+# ---------------------------------------------------------------------------
+
+_LRO, _RLO = "\u202d", "\u202e"
+
+#: Right-to-left text as people and formatters write it: marks, embeddings,
+#: isolates, and overrides around text of their own direction or around numbers.
+_RIGHT_TO_LEFT_TEXT = [
+    ("phone-number-in-hebrew", _HEBREW + " " + _LRO + "03-1234567" + _PDF + " " + _HEBREW),
+    ("arabic-indic-digits", _ARABIC + " " + _LRO + "\u0661\u0662\u0663\u0664" + _PDF + " " + _ARABIC),
+    ("persian-digits", "\u06a9\u062f: " + _LRO + "\u06f4\u06f8\u06f2\u06f9" + _PDF),
+    ("url-in-hebrew", _HEBREW + " " + _LRO + "https://example.co.il/he?id=42" + _PDF),
+    ("latin-product-name", "Product: " + _LRO + "Galaxy S24" + _PDF + " " + _HEBREW),
+    ("number-never-closed", _HEBREW + ": " + _LRO + "050-1234567"),
+    ("number-never-closed-before-a-paragraph-separator", _HEBREW + ": " + _LRO + "050-1234567\u2029" + _HEBREW),
+    ("closed-number-then-a-hebrew-line", _HEBREW + ": " + _LRO + "482913" + _PDF + "\n" + _HEBREW),
+    ("override-around-hebrew", _RLO + _HEBREW + " " + _HEBREW + _PDF),
+    ("override-around-arabic-and-punctuation", "Greeting: " + _RLO + _ARABIC + ", " + _ARABIC + "!" + _PDF),
+    ("override-around-latin", _LRO + "hello world" + _PDF),
+    ("embedding-around-mixed-text", "User " + _RLE + "iPhone " + _HEBREW + _PDF + _LRM + " commented"),
+    ("android-wrapped-value", "User " + _LRM + _RLE + _HEBREW + _PDF + _LRM + " commented"),
+    ("isolates-around-names-and-counts", _RLI + _HEBREW + _PDI + " sent you " + _LRI + "3 files" + _PDI),
+    ("first-strong-isolate-with-a-mark-after-latin", _FSI + "Jean" + _RLM + _PDI + " liked it" + _RLM),
+    ("first-strong-isolate-with-a-mark-after-an-accented-name", _FSI + "\u00c9mile" + _RLM + _PDI + " " + _HEBREW),
+    ("empty-embeddings-with-reset-marks", "Hello " + (_RLE + _PDF + _RLM) * 2 + " world"),
+]
+
+
+class RightToLeftTextTests(unittest.TestCase):
+    """Right-to-left text, with the bidi controls formatters and people write around it, is not a finding."""
+
+    def setUp(self) -> None:
+        self.det = PromptInjectionDetector(config=DetectionConfig(sensitivity="balanced"))
+        self.strict = _STRICT_DET()
+
+    def test_right_to_left_text_as_it_is_written_is_not_a_finding(self) -> None:
+        for name, text in _RIGHT_TO_LEFT_TEXT:
+            with self.subTest(case=name):
+                self.assertFalse(self.det.detect(text).is_injection)
+                found = [p for p in self.strict.detect(text).matched_patterns if p.startswith("token_smuggle:")]
+                self.assertEqual(found, [])
+
+
 class AuditLogBoundTests(unittest.TestCase):
     """The in-object audit trail is bounded (open-items §9.11)."""
 

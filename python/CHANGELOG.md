@@ -16,6 +16,17 @@
   accepts, the command is still rebuilt and screened, including when the
   current thread is already out of stack. Repeated keys still keep every
   value when the duplicate-key parser accepts the call.
+- The prompt-injection screen flags bidi controls that change the order a
+  person sees from the order a model or tool reads. An LRO or RLO around
+  letters or digits it lays out in the other direction (a file name that
+  shows `.pdf` and ends in `.exe`) is `token_smuggle:bidi_override`. An RLI,
+  an RLE, or an FSI made right to left by a mark, around text with no
+  right-to-left letter, is `token_smuggle:bidi_rtl_over_ltr`. Both are
+  `medium`, which is `review`, except under the permissive `tabular` preset,
+  which does not report them. A control left open before a line break is read
+  into the next line as well, as HTML lays it out. Right-to-left text with the
+  marks, embeddings and isolates formatters write, an LRO around a number, and
+  an override around text of its own direction are left alone.
 
 ## 0.6.20
 
