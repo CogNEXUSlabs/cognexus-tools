@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.19
+
+### Fixed
+
+- The prompt-injection screen's multi-turn-escalation check used an unbounded
+  gap in one phrase pattern, so scanning a long single line took time quadratic
+  in its length. The gap is now bounded: the scan runs in linear time and the
+  pattern joins the decoded-bytes search. It still matches the phrase across a
+  normal sentence-length gap.
+
 ## 0.6.18
 
 ### Fixed
