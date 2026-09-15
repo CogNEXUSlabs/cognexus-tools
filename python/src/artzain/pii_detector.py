@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Dict
+from typing import Dict, Iterator, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,18 @@ _CARD_CANDIDATE_RE = re.compile(r"\b(?:\d[ -]?){12,18}\d\b")
 # confirmed with the mod-97 checksum before they count.
 _IBAN_CANDIDATE_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")
 
-_EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+# ── Email ── an address is what ``\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b``
+# matches. Searched for as that one pattern, a run of address characters with
+# no address in it took time quadratic in its length: the search restarted at
+# every word boundary in the run and rescanned the rest of it.
+# _email_spans finds the same matches from each ``@``. A
+# candidate is searched for only from the start of a run of local-part
+# characters, and the address starts at the first word boundary in that run
+# that is not inside the previous address.
+_EMAIL_CANDIDATE_RE = re.compile(
+    r"(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
+)
+_EMAIL_START_RE = re.compile(r"\b[A-Za-z0-9._%+-]")
 
 # Phone-format numbers: international or US formats with enough structure
 # (separators / parens / leading +) that bare integers don't match.
@@ -116,15 +127,19 @@ _NINO_RE = re.compile(
 _NINO_INVALID_PREFIXES = {"BG", "GB", "KN", "NK", "NT", "TN", "ZZ"}
 
 # Label-gated passport number: the word "passport" within a few tokens of a
-# 6–9 char alphanumeric identifier.
+# 6–9 char alphanumeric identifier. The separator after the label is
+# ``\s*(?:[:#]\s*)?``, which matches what ``\s*[:#]?\s*`` did: with the
+# optional ``:``/``#`` between two blank runs, a label followed by n blanks and
+# no identifier was tried in n² ways.
 _PASSPORT_RE = re.compile(
-    r"\bpassport(?:\s+(?:no|num|number|#))?\s*[:#]?\s*([A-Z0-9]{6,9})\b",
+    r"\bpassport(?:\s+(?:no|num|number|#))?\s*(?:[:#]\s*)?([A-Z0-9]{6,9})\b",
     re.IGNORECASE,
 )
 
 # Label-gated date of birth: "dob" / "date of birth" / "born (on)" + a date.
+# The separator is written as in _PASSPORT_RE, for the same reason.
 _DOB_RE = re.compile(
-    r"\b(?:dob|date\s+of\s+birth|born(?:\s+on)?)\s*[:#]?\s*"
+    r"\b(?:dob|date\s+of\s+birth|born(?:\s+on)?)\s*(?:[:#]\s*)?"
     r"(\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4})\b",
     re.IGNORECASE,
 )
@@ -207,6 +222,24 @@ def _count_ibans(text: str) -> int:
     return sum(1 for m in _IBAN_CANDIDATE_RE.finditer(text) if iban_ok(m.group(0)))
 
 
+def _email_spans(text: str) -> Iterator[Tuple[int, int]]:
+    """Spans of the email addresses in *text*, in linear time.
+
+    The spans ``finditer`` returns for the address pattern in the comment
+    above _EMAIL_CANDIDATE_RE, in the same order.
+    """
+    end = 0
+    candidate = _EMAIL_CANDIDATE_RE.search(text)
+    while candidate is not None:
+        at = candidate.end(1)
+        start = _EMAIL_START_RE.search(text, max(end, candidate.start()), at)
+        if start is not None:
+            end = candidate.end()
+            yield start.start(), end
+        # The next address's local part can begin inside this domain.
+        candidate = _EMAIL_CANDIDATE_RE.search(text, at + 1)
+
+
 def scan_text(text: str) -> Dict[str, int]:
     """Scan *text* and return non-zero counts per detector.
 
@@ -240,7 +273,7 @@ def scan_text(text: str) -> Dict[str, int]:
     if n:
         counts["ip_address"] = n
 
-    emails = {m.group(0).lower() for m in _EMAIL_RE.finditer(text)}
+    emails = {text[start:end].lower() for start, end in _email_spans(text)}
     if len(emails) >= BULK_EMAIL_THRESHOLD:
         counts["email_bulk"] = len(emails)
     phones = {re.sub(r"\D", "", m.group(0)) for m in _PHONE_RE.finditer(text)}

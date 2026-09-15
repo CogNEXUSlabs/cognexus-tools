@@ -13,9 +13,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from bisect import bisect_left
 from dataclasses import dataclass, field
 from functools import cached_property
-from typing import Any, Optional, Sequence
+from itertools import accumulate
+from typing import Any, Iterator, Optional, Sequence
 
 # ---------------------------------------------------------------------------
 # Rule model
@@ -129,11 +131,12 @@ class PolicyEnforcementFinding:
     severity: str
     matched_pattern: str
     summary: str
-    #: True when an approval marker near the match suppressed this finding.
-    #: Suppressed findings live in ``PolicyEnforcementReport.suppressed`` and
-    #: never count toward ``violation_count``.
+    #: True when every match of the pattern had an approval marker near it,
+    #: which suppressed this finding. Suppressed findings live in
+    #: ``PolicyEnforcementReport.suppressed`` and never count toward
+    #: ``violation_count``.
     suppressed_by_approval_marker: bool = False
-    #: The configured marker that triggered the suppression (lower-case).
+    #: The configured marker near the pattern's first match (lower-case).
     approval_marker: str = ""
 
 
@@ -143,7 +146,9 @@ class PolicyEnforcementReport:
     findings: list[PolicyEnforcementFinding]
     rules_checked: int
     text_hash: str = ""
-    #: Matches skipped by the approval escape, kept for the audit trail.
+    #: Rule patterns the approval escape suppressed, kept for the audit trail:
+    #: one entry per pattern whose every match had a marker nearby. A pattern
+    #: with an unapproved match is a finding and is not listed here.
     suppressed: list[PolicyEnforcementFinding] = field(default_factory=list)
 
     @property
@@ -166,10 +171,16 @@ class PolicyEnforcementConfig:
         "compliance approval",
         "per policy",
     )
-    #: An approval marker only suppresses a match when it occurs within this
+    #: An approval marker only approves a match when it occurs within this
     #: many characters before or after the matched span. A marker elsewhere in
-    #: the text (e.g. a trailing "per policy") no longer switches the rule off.
+    #: the text (e.g. a trailing "per policy") no longer switches the rule off,
+    #: and a pattern is suppressed only when every one of its matches is
+    #: approved: one approved match does not approve the others.
     approval_window_chars: int = 160
+    #: At most this many matches of one pattern can be approved. A pattern with
+    #: more is a finding, whatever markers sit near them; the escape is for an
+    #: occasional approved exception.
+    approval_max_matches: int = 100
 
 
 # ---------------------------------------------------------------------------
@@ -440,6 +451,67 @@ def evaluate_conduct(text: str) -> list[PolicyEnforcementFinding]:
 # ---------------------------------------------------------------------------
 
 
+#: Small and final small sigma. ``str.lower()`` picks one of them for a capital
+#: sigma from the letters around it, so markers compare with both read as small.
+_SIGMA, _FINAL_SIGMA = chr(0x3C3), chr(0x3C2)
+
+
+class _ApprovalMarkers:
+    """Where the approval markers occur in one text, found once for every match.
+
+    Markers are compared in lower case, so they are searched for in the text
+    lower-cased with every character at its own index: a position here is a
+    position in the text. The one character whose lower case is longer, U+0130
+    (capital I with dot above, lower case ``i`` and a combining dot), would
+    move every position after it; a text holding it is lower-cased character
+    by character with that character left as it is, and no lower-case marker
+    contains it. The final sigma is read as the small sigma in the text and in
+    the markers, since which of the two a capital sigma becomes depends on the
+    letters around it. Markers that are not strings are ignored. Occurrences of
+    a marker may overlap.
+    """
+
+    def __init__(self, text: str, markers: Sequence[str]) -> None:
+        lowered = text.lower()
+        if len(lowered) != len(text):
+            lowered = "".join(ch if len(ch.lower()) != 1 else ch.lower() for ch in text)
+        lowered = lowered.replace(_FINAL_SIGMA, _SIGMA)
+        # Each distinct marker as it is searched for, with the first configured
+        # marker it stands for (lower-case).
+        searched: dict[str, str] = {}
+        for m in markers:
+            if isinstance(m, str) and m:
+                searched.setdefault(m.lower().replace(_FINAL_SIGMA, _SIGMA), m.lower())
+        #: Each distinct marker, in configured order, with its sorted starts.
+        self._by_marker: list[tuple[str, list[int]]] = []
+        spans: list[tuple[int, int]] = []
+        for key, marker in searched.items():
+            starts: list[int] = []
+            at = lowered.find(key)
+            while at >= 0:
+                starts.append(at)
+                at = lowered.find(key, at + 1)
+            self._by_marker.append((marker, starts))
+            spans.extend((start, start + len(key)) for start in starts)
+        spans.sort()
+        self._starts = [start for start, _ in spans]
+        #: ``_min_end[i]``: the earliest end among the occurrences from ``i`` on.
+        self._min_end = list(accumulate(reversed([end for _, end in spans]), min))[::-1]
+
+    def any_within(self, lo: int, hi: int) -> bool:
+        """True when some marker occurs entirely inside ``[lo, hi)``."""
+        i = bisect_left(self._starts, lo)
+        return i < len(self._starts) and self._min_end[i] <= hi
+
+    def first_within(self, lo: int, hi: int) -> Optional[str]:
+        """The first configured marker that occurs entirely inside ``[lo, hi)``."""
+        for marker, starts in self._by_marker:
+            i = bisect_left(starts, lo)
+            if i < len(starts) and starts[i] + len(marker) <= hi:
+                return marker
+        return None
+
+
 class PolicyEnforcementEvaluator:
     """Screen model or user text against client-specific policy rules."""
 
@@ -460,19 +532,22 @@ class PolicyEnforcementEvaluator:
             )
         findings: list[PolicyEnforcementFinding] = []
         suppressed: list[PolicyEnforcementFinding] = []
+        # Found on the first match of a rule the approval escape applies to.
+        markers: Optional[_ApprovalMarkers] = None
         for rule in rules:
             escapable = (
                 self.config.require_approval_escape
                 and "approval" in rule.summary.lower()
             )
             for pat in rule.compiled_patterns():
-                m = pat.search(text)
+                matches = pat.finditer(text)
+                m = next(matches, None)
                 if m:
-                    marker = (
-                        self._approval_marker_near(text, m.start(), m.end())
-                        if escapable
-                        else None
-                    )
+                    marker = None
+                    if escapable:
+                        if markers is None:
+                            markers = _ApprovalMarkers(text, self.config.approval_markers)
+                        marker = self._approval_marker(markers, m, matches)
                     finding = PolicyEnforcementFinding(
                         rule_id=rule.rule_id,
                         rule_title=rule.title,
@@ -503,22 +578,30 @@ class PolicyEnforcementEvaluator:
             suppressed=suppressed,
         )
 
-    def _approval_marker_near(
-        self, text: str, start: int, end: int
+    def _approval_marker(
+        self,
+        markers: _ApprovalMarkers,
+        first: re.Match[str],
+        rest: Iterator[re.Match[str]],
     ) -> Optional[str]:
-        """Return the approval marker found within the window around a match.
+        """The marker that approves *first*, when every match of its pattern is approved.
 
-        The window is ``approval_window_chars`` before ``start`` and after
-        ``end``; a non-positive window means the marker must overlap the match.
+        A marker approves a match when it lies within ``approval_window_chars``
+        before its start or after its end, or inside the match; a non-positive
+        window leaves only inside. *first* is a pattern's first match and
+        *rest* its later ones: the first match with no marker near it, or the
+        first past ``approval_max_matches``, makes the pattern a finding,
+        whatever markers the other matches have, and the result is ``None``.
         """
         window = max(0, int(self.config.approval_window_chars))
-        lo = max(0, start - window)
-        hi = min(len(text), end + window)
-        nearby = text[lo:hi].lower()
-        for marker in self.config.approval_markers:
-            if marker and marker.lower() in nearby:
-                return marker.lower()
-        return None
+        limit = int(self.config.approval_max_matches)
+        marker = markers.first_within(first.start() - window, first.end() + window)
+        if marker is None or limit < 1:
+            return None
+        for count, m in enumerate(rest, start=2):
+            if count > limit or not markers.any_within(m.start() - window, m.end() + window):
+                return None
+        return marker
 
     def should_block(self, report: PolicyEnforcementReport) -> bool:
         if not report.has_violations:

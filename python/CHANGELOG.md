@@ -1,5 +1,110 @@
 # Changelog
 
+## 0.6.18
+
+### Fixed
+
+- `artzain.pii_detector.scan_text()` could take time quadratic in the length
+  of crafted text aimed at its passport, date-of-birth or email detectors, so
+  a large enough input held a CPU for a long time. Those patterns now run in
+  linear time and match the same text as before. The engine runs the same
+  scan on every decision's payload. `redact_text()` and `minimize_record()`
+  use none of these patterns and were not affected.
+- Offline `decide(kind="tool_call")` reconstructs an argv-style array of a tool
+  call more completely before the destructive-action screen reads it as the
+  command it runs. An array of two or more strings is read as one command, its
+  tokens joined with spaces the way an argv list runs, and more argument shapes
+  that earlier versions did not reconstruct are now covered; a nested list or
+  object is read for arrays of its own, and a list that is not a command — such
+  as a table row of a label and a value — is left alone. Single-token argv is
+  unchanged (`["rm", "-rf", "/"]` reads as `rm -rf /`), the whole array is always
+  read as one command line, and the serialized call is still read as sent, so
+  what was caught before is still caught.
+- Destructive-action guard: the `rm` rules (`fs.rm_rf_root`,
+  `fs.rm_rf_generic`) read an `rm` command's arguments one word at a time, and
+  a command ends at a line break, a quote, a backslash, a `#` or a shell
+  separator, so a word in another field or line is not one of rm's operands.
+  Some recursive removals that 0.6.17 screened as `none` are now `critical` or
+  `high`, in `screen_action()` and in offline `decide()` votes; a batch of
+  false positives (a neighbouring JSON field, a `#` comment, a `*` that is an
+  option's value, a word merely containing r and f such as `-Force`) no longer
+  screen as a destructive `rm`. Both rules take time linear in the length of
+  the text.
+- Policy enforcement (`PolicyEnforcementEvaluator`, `screen_client_policy`):
+  the approval escape checked only the first match of each rule pattern. When
+  that match had an approval marker within `approval_window_chars`, the
+  pattern was suppressed for the whole text, including later matches with no
+  marker near them. Every match now needs its own marker, and a pattern with a
+  match that has none is a finding. `report.suppressed`, and the audit row's
+  `suppressed_rule_ids` with it, keeps one entry per suppressed pattern, with
+  the marker near its first match, and no longer lists a pattern that is also
+  a finding.
+- Policy enforcement: approval markers read the final sigma and the small
+  sigma as the same letter, in the text and in the markers, so a Greek marker
+  matches an approval written in capitals. A marker that is not a string is
+  ignored; it could raise before.
+- The prompt-injection screen no longer reads a binary file's base64 as an
+  encoded instruction. It decoded every run of base64 and searched the bytes
+  for words such as `root`, `admin` or `password` whatever they were, and it
+  decoded wrapped base64 a line at a time, so a certificate (a root CA's
+  subject says "Root"), a key, or an image or archive with a readable name
+  inside came back `high` (`deny`): as `user_input`, and since 0.6.16 in a
+  tool call's arguments. The bytes of a binary file are no longer searched
+  for those words, so a word inside it, such as a root CA's name, is not a
+  match, and base64 wrapped across lines, as in a PEM or MIME body, is
+  decoded as one blob, whatever line breaks it uses. Base64 of text is still
+  searched, now also when it is wrapped at a width that splits its
+  four-character groups, and so is a file that is mostly text, such as a ZIP
+  archive of text files stored without compression.
+- The prompt-injection screen reads variation selectors and bidi controls as
+  characters, however the text was serialized. A run of them was a finding
+  only once `json.dumps(ensure_ascii=True)` had escaped it into `\uXXXX`
+  escapes; in `user_input`, or in a tool call serialized with
+  `ensure_ascii=False`, it passed. Now variation selectors in a run, or
+  after a kind of character that does not take them, bidi controls left
+  without a partner next to other invisible characters, and strings of four
+  or more bidi marks are `token_smuggle:variation_selectors` and
+  `token_smuggle:bidi_controls`: `high` (`deny`) from four of them anywhere in
+  the input. Emoji presentation and ZWJ sequences, CJK ideographic and other
+  standardized variants, and the marks, embeddings and isolates formatters
+  write around right-to-left text, empty, adjacent or nested, are left alone.
+- Offline `decide(kind="tool_call")`: the England, Scotland and Wales flag
+  emoji in a call serialized with `ensure_ascii=True` are no longer an
+  encoding attack. The injection vote kept the escapes of their tag
+  characters, and twelve escapes in a row read as a hidden run.
+- Destructive-action guard, SQL rules: a comment between two keywords now
+  counts as the separator it is to a SQL engine, so a statement whose keywords
+  are split by a block comment, a line comment or a MySQL `/*!...*/`
+  executable comment is caught like its whitespace form. Comments are read the
+  way MySQL and MariaDB, SQLite, and PostgreSQL and SQL Server (which nest
+  block comments) read them. In `DELETE` and `UPDATE` a quoted table name
+  (`"orders"`, `` `orders` ``, `[dbo].[orders]`) is read whole, so a `WHERE`
+  inside it is not taken for a `WHERE` clause.
+- Destructive-action guard: the `DELETE` and `UPDATE` rules took time
+  quadratic in the length of some crafted text. All the SQL rules, which now
+  read comments, take time linear in it.
+
+### Changed
+
+- Destructive-action guard: `fs.rm_rf_root` rates recursive removal of `/`, a
+  glob of root (`/*`, `//`, `/*/`), `~` or `$HOME` `critical` with or without
+  force, wherever the target stands among the operands, and a bare `*` (a glob
+  of the working directory) as the last operand or when another operand that is
+  not an option follows it. Recursive and force are read across separate flags,
+  a single cluster (GNU and BSD short flags), or long options in any order; the
+  `rm` subcommand of a version-control tool (`git`/`svn`/`hg`/`bzr`) is not the
+  filesystem `rm` and is skipped. Without force, `rm` prompts for a
+  write-protected file only when its input is a terminal (a recursive removal of
+  writable files takes them either way), so force does not change what such a
+  removal takes with it. A `critical` vote denies the decision and
+  `screen_agent_action()` trips the kill switch, so model output that spells
+  such a command is rated the same whether it is a command or a description of
+  one. The generic rule (`high`, `fs.rm_rf_generic`) needs both recursive and
+  force; the excerpt of either finding is the `rm` command alone.
+- `PolicyEnforcementConfig` adds `approval_max_matches` (default 100): the
+  approval escape approves at most that many matches of one pattern in a text,
+  and a pattern with more is a finding whatever markers sit near them.
+
 ## 0.6.17
 
 ### Fixed

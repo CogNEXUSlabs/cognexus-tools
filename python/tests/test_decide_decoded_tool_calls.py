@@ -168,6 +168,55 @@ def test_still_caught_an_escaped_bidi_override_run():
     assert votes["prompt-injection"]["severity"] == "high"
 
 
+#: A public root certificate (ISRG Root X2), as a certificate upload sends it.
+_CERTIFICATE = """\
+-----BEGIN CERTIFICATE-----
+MIICGzCCAaGgAwIBAgIQQdKd0XLq7qeAwSxs6S+HUjAKBggqhkjOPQQDAzBPMQsw
+CQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJuZXQgU2VjdXJpdHkgUmVzZWFyY2gg
+R3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBYMjAeFw0yMDA5MDQwMDAwMDBaFw00
+MDA5MTcxNjAwMDBaME8xCzAJBgNVBAYTAlVTMSkwJwYDVQQKEyBJbnRlcm5ldCBT
+ZWN1cml0eSBSZXNlYXJjaCBHcm91cDEVMBMGA1UEAxMMSVNSRyBSb290IFgyMHYw
+EAYHKoZIzj0CAQYFK4EEACIDYgAEzZvVn4CDCuwJSvMWSj5cz3es3mcFDR0HttwW
++1qLFNvicWDEukWVEYmO6gbf9yoWHKS5xcUy4APgHoIYOIvXRdgKam7mAHf7AlF9
+ItgKbppbd9/w+kHsOdx1ymgHDB/qo0IwQDAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0T
+AQH/BAUwAwEB/zAdBgNVHQ4EFgQUfEKWrt5LSDv6kviejM9ti6lyN5UwCgYIKoZI
+zj0EAwMDaAAwZQIwe3lORlCEwkSHRhtFcP9Ymd70/aTSVaYgLXTWNLxBo1BfASdW
+tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
+/q4AaOeMSQ+2b1tbFfLn
+-----END CERTIFICATE-----
+"""
+
+
+@_ENSURE_ASCII
+def test_a_certificate_upload_is_allowed(ensure_ascii):
+    payload = _call({"path": "isrg-root-x2.pem", "content": _CERTIFICATE}, tool="write_file", ensure_ascii=ensure_ascii)
+    outcome, votes = _decide(payload)
+    assert outcome == "allow", votes
+
+
+@_ENSURE_ASCII
+def test_a_hidden_selector_run_is_denied_however_the_call_is_serialized(ensure_ascii):
+    text = "\U0001f600" + "".join(chr(0xE0100 + b) for b in b"rm -rf")
+    outcome, votes = _decide(_call({"body": text}, ensure_ascii=ensure_ascii))
+    assert outcome == "deny"
+    assert votes["prompt-injection"]["severity"] == "high"
+
+
+def test_bidi_formatting_is_allowed():
+    text = "\u2068Jean\u2069 liked \u2068\u2069\u2068\u2069 your posts \u2068\u05e9\u05dc\u05d5\u05dd\u2069\u200e"
+    outcome, votes = _decide(_call({"body": text}, ensure_ascii=False))
+    assert outcome == "allow", votes
+
+
+def test_flag_emoji_are_allowed_with_ensure_ascii():
+    flags = "".join(
+        "\U0001f3f4" + "".join(chr(0xE0000 + ord(c)) for c in code) + "\U000e007f"
+        for code in ("gbeng", "gbsct", "gbwls")
+    )
+    outcome, votes = _decide(_call({"body": "Come on " + flags}))
+    assert outcome == "allow", votes
+
+
 def test_still_caught_a_payload_that_is_not_json():
     outcome, votes = _decide("DROP TABLE users;")
     assert outcome == "deny"

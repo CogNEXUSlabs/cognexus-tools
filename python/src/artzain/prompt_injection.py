@@ -27,6 +27,14 @@
 #   a token-smuggling finding (HIGH from four such characters); the three RGI
 #   flag emoji, and pieces of them cut off at either end of the text, are not
 #   hidden text.
+#   The base64 check decodes base64 wrapped across lines (a PEM or MIME
+#   body) as one blob, and searches the decoded bytes for keywords only when
+#   they are text, for instruction phrases whatever they are; upstream
+#   decodes every run on its own and searches whatever comes out for
+#   keywords, so a certificate, key or image read as an encoded
+#   instruction. Variation selectors and bidi controls that hide content are
+#   a token-smuggling finding however the text was serialized (HIGH from four
+#   characters) — see _hidden_character_counts.
 #   Provenance and drift detail: docs/third-party/agent-governance-toolkit.md
 #
 """Prompt Injection Detection — OWASP LLM01 / ASI01.
@@ -63,14 +71,15 @@ Architecture:
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import logging
 import os
 import re
 import unicodedata
 import warnings
-from collections import deque
-from collections.abc import Callable, Sequence
+from collections import Counter, deque
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -508,6 +517,449 @@ _SUSPICIOUS_DECODED_KEYWORDS: list[str] = [
     "admin", "root", "exec", "eval", "import os",
 ]
 
+# What an instruction says, searched for in decoded base64 whatever the bytes
+# are: phrases of more than one word, since a readable name inside a binary
+# file is one, and none that spans with ".*", which takes time quadratic in the
+# length of a line, as a long decoded string is.
+_DECODED_INSTRUCTION_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    pattern
+    for pattern in (
+        *_DIRECT_OVERRIDE_PATTERNS, *_ROLE_PLAY_PATTERNS, *_CONTEXT_MANIPULATION_PATTERNS, *_MULTI_TURN_PATTERNS,
+    )
+    if "\\s" in pattern.pattern and ".*" not in pattern.pattern
+)
+# One pattern for all of them, matched against lowercased text: case-insensitive
+# matching of the alternatives at every position is several times slower on a
+# long decoded string. Escapes such as \S keep their case.
+_DECODED_INSTRUCTION_RE: re.Pattern[str] = re.compile("|".join(
+    "(?:" + re.sub(r"\\.|[A-Z]", lambda part: part.group().lower() if len(part.group()) == 1 else part.group(),
+                   pattern.pattern) + ")"
+    for pattern in _DECODED_INSTRUCTION_PATTERNS
+))
+
+# Base64 wrapped across lines (a PEM or MIME body) is one encoding. A line of
+# only base64, 20 characters or longer, with another line of only base64 after
+# it may start such a block (see _decoded_base64). Lines end where
+# str.splitlines() ends them: at these characters, and at a CR LF.
+_LINE_BREAKS = r"\n\r\x0b\x0c\x1c-\x1e\x85\u2028\u2029"
+_LINE_RE: re.Pattern[str] = re.compile(f"([^{_LINE_BREAKS}]*)(\\r\\n|[{_LINE_BREAKS}]|\\Z)")
+_WRAPPED_BASE64_RE: re.Pattern[str] = re.compile(
+    f"(?:^|(?<=[{_LINE_BREAKS}]))[ \\t]*[A-Za-z0-9+/]{{20,}}[ \\t]*"
+    f"(?=(?:\\r\\n|[{_LINE_BREAKS}])[ \\t]*[A-Za-z0-9+/]+={{0,2}}[ \\t]*(?:[{_LINE_BREAKS}]|\\Z))"
+)
+_BASE64_LINE_RE: re.Pattern[str] = re.compile(r"[A-Za-z0-9+/]+")
+_BASE64_LAST_LINE_RE: re.Pattern[str] = re.compile(r"[A-Za-z0-9+/]+={0,2}")
+
+# Characters text does not contain: C0 controls other than tab, line feed and
+# carriage return, DEL, C1 controls, and U+FFFD, which an invalid UTF-8 byte
+# decodes to. Decoded base64 is searched for keywords only when at most one
+# character in ten is one of these. A certificate, key, image or compressed
+# file decodes to several times that, and the readable names inside it ("Root
+# CA", a member file called "admin") are not an instruction. A file that is
+# mostly text, such as a ZIP archive of text files stored without compression,
+# reads as text.
+_CONTROL_BYTES = bytes((*range(0x00, 0x09), 0x0B, 0x0C, *range(0x0E, 0x20), 0x7F))
+_C1_CONTROLS_RE: re.Pattern[str] = re.compile(r"[\x80-\x9f]")
+# The same characters in decoded text, taken out or read as spaces.
+_NOT_TEXT_CHARACTERS = (*range(0x00, 0x09), 0x0B, 0x0C, *range(0x0E, 0x20), *range(0x7F, 0xA0), 0xFFFD)
+_DROP_NOT_TEXT = dict.fromkeys(_NOT_TEXT_CHARACTERS)
+_SPACE_FOR_NOT_TEXT = dict.fromkeys(_NOT_TEXT_CHARACTERS, " ")
+
+
+def _decode_base64(candidate: str) -> bytes | None:
+    try:
+        return base64.b64decode(candidate)
+    except ValueError:
+        # Not valid base64 (binascii.Error is a ValueError). The candidate is
+        # ASCII by construction, so nothing else can be raised here.
+        return None
+
+
+def _decoded_runs(text: str, start: int = 0, end: int | None = None) -> Iterator[bytes]:
+    for match in _BASE64_PATTERN.finditer(text, start, len(text) if end is None else end):
+        decoded = _decode_base64(match.group())
+        if decoded is not None:
+            yield decoded
+
+
+def _wrapped_base64(text: str, start: int) -> tuple[int, bytes | None]:
+    """The wrapped base64 whose first line starts at ``text[start]``: where the line after it starts, and its bytes.
+
+    A wrapped encoding is lines of one width, 20 characters or more, then a
+    last line no longer than that, which may end in padding. Decoded on its
+    own, a line is a slice of the file, or nothing when the width splits one
+    of the encoding's four-character groups. Returns ``(start, None)`` unless
+    two or more such lines start here and decode together.
+    """
+    line = _LINE_RE.match(text, start)
+    first = line.group(1).strip(" \t")
+    width = len(first)
+    if width < 20 or not _BASE64_LINE_RE.fullmatch(first):
+        return start, None
+    body = [first]
+    end = line.end()
+    while end < len(text):
+        line = _LINE_RE.match(text, end)
+        stripped = line.group(1).strip(" \t")
+        if len(stripped) != width or not _BASE64_LINE_RE.fullmatch(stripped):
+            break
+        body.append(stripped)
+        end = line.end()
+    stops = [(end, len(body))]
+    if end < len(text):
+        last = line.group(1).strip(" \t")
+        if len(last) <= width and _BASE64_LAST_LINE_RE.fullmatch(last):
+            # With the shorter last line, then without it: it may be a word
+            # of the text that follows.
+            body.append(last)
+            stops.insert(0, (line.end(), len(body)))
+    for stop, lines in stops:
+        if lines >= 2:
+            decoded = _decode_base64("".join(body[:lines]))
+            if decoded is not None:
+                return stop, decoded
+    return start, None
+
+
+def _decoded_base64(text: str) -> Iterator[bytes]:
+    """The bytes of each base64 string in *text* that decodes, in order.
+
+    A block of wrapped base64 is one string, and so is every other run of 20
+    or more base64 characters. Lines are read only where a block may start.
+    """
+    read = 0
+    for candidate in _WRAPPED_BASE64_RE.finditer(text):
+        start = candidate.start()
+        if start < read:
+            continue
+        end, decoded = _wrapped_base64(text, start)
+        if decoded is not None:
+            yield from _decoded_runs(text, read, start)
+            yield decoded
+            read = end
+    yield from _decoded_runs(text, read)
+
+
+def _is_text(data: bytes) -> bool:
+    """Whether *data* reads as UTF-8 text: at most one character in ten is not text."""
+    decoded = data.decode("utf-8", errors="replace")
+    non_text = (
+        len(data) - len(data.translate(None, _CONTROL_BYTES))
+        + len(_C1_CONTROLS_RE.findall(decoded))
+        + decoded.count("\ufffd")
+    )
+    return bool(decoded) and 10 * non_text <= len(decoded)
+
+
+def _readings(data: bytes) -> tuple[str, str | None]:
+    """*data* read as text two ways, for the phrases an instruction is made of.
+
+    What is not text is taken out, which joins a word it was put inside, and
+    read as spaces, which separates words it was put between; the second is
+    None when there is nothing to take out.
+    """
+    decoded = data.decode("utf-8", errors="replace")
+    joined = decoded.translate(_DROP_NOT_TEXT)
+    return joined, decoded.translate(_SPACE_FOR_NOT_TEXT) if len(joined) != len(decoded) else None
+
+
+def _phrase_in(readable: str) -> str | None:
+    """The instruction phrase that starts first in *readable*, if any."""
+    lowered = readable.lower()
+    match = _DECODED_INSTRUCTION_RE.search(lowered)
+    if match is None:
+        return None
+    # Which phrase it is, tried only where the match starts.
+    start = match.start()
+    return next((pattern.pattern for pattern in _DECODED_INSTRUCTION_PATTERNS if pattern.match(lowered, start)),
+                match.group())
+
+
+# Variation selectors (VS1-VS256) and bidi controls render as nothing. A
+# selector picks a variant of the character before it (emoji or text
+# presentation, an ideograph's glyph), and bidi controls and marks order
+# right-to-left text. Used any other way they carry what a reader cannot see:
+# a byte per selector ("emoji smuggling"), bits in a string of controls.
+# Escaped by json.dumps(ensure_ascii=True) such a string is a run of \uXXXX
+# escapes, which artzain.tool_call_contract keeps and _ENCODING_PATTERNS
+# flags; _hidden_character_counts reads the characters however the text
+# arrived.
+_VARIATION_SELECTORS = r"\ufe00-\ufe0f\U000e0100-\U000e01ef"
+# The left-to-right, right-to-left and Arabic letter marks.
+_BIDI_MARKS = r"\u200e\u200f\u061c"
+# Embeddings, overrides and isolates, and their terminators.
+_BIDI_CONTROLS = r"\u202a-\u202e\u2066-\u2069"
+# The other default-ignorable code points: zero-width characters, tag
+# characters, fillers.
+_OTHER_INVISIBLE = (
+    r"\u00ad\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200d\u2060-\u2065"
+    r"\u206a-\u206f\u3164\ufeff\uffa0\ufff0-\ufff8\U0001bca0-\U0001bca3\U0001d173-\U0001d17a"
+    r"\U000e0000-\U000e00ff\U000e01f0-\U000e0fff"
+)
+_INVISIBLE = _VARIATION_SELECTORS + _BIDI_MARKS + _BIDI_CONTROLS + _OTHER_INVISIBLE
+_INVISIBLE_RE: re.Pattern[str] = re.compile(f"[{_INVISIBLE}]")
+_VISIBLE_RE: re.Pattern[str] = re.compile(f"[^{_INVISIBLE}]")
+_HIDDEN_CANDIDATE_RE: re.Pattern[str] = re.compile(f"[{_VARIATION_SELECTORS}{_BIDI_MARKS}{_BIDI_CONTROLS}]")
+_SELECTOR_RE: re.Pattern[str] = re.compile(f"[{_VARIATION_SELECTORS}]")
+# A selector right after another character that renders as nothing.
+_SELECTOR_AFTER_INVISIBLE_RE: re.Pattern[str] = re.compile(f"(?<=[{_INVISIBLE}])[{_VARIATION_SELECTORS}]")
+# A selector right after a visible character, with that character (at the
+# start of the text, the selector alone), and with a repeat of the selector
+# when it is the emoji or text presentation selector.
+_SELECTOR_AFTER_VISIBLE_RE: re.Pattern[str] = re.compile(
+    f"[^{_INVISIBLE}]?(?<![{_INVISIBLE}])(?:\ufe0e\ufe0e?|\ufe0f\ufe0f?|[{_VARIATION_SELECTORS}])"
+)
+_REPEATED_PRESENTATION_RE: re.Pattern[str] = re.compile(f"(?<![{_INVISIBLE}])(?:\ufe0e\ufe0e|\ufe0f\ufe0f)")
+# Four or more bidi marks with nothing between them but characters that
+# render as nothing and are not bidi controls. Formatters put one or two marks
+# between wrapped values, and three around a number in some tables.
+_MARK_RUN_RE: re.Pattern[str] = re.compile(f"(?:[{_BIDI_MARKS}][{_VARIATION_SELECTORS}{_OTHER_INVISIBLE}]*){{4,}}")
+_DROP_MARKS = dict.fromkeys((0x200E, 0x200F, 0x061C))
+_MARKS = frozenset("\u200e\u200f\u061c")
+_BIDI_CONTROL_RE: re.Pattern[str] = re.compile(f"[{_BIDI_CONTROLS}]")
+# A bidi control next to another character that renders as nothing. In a
+# paragraph without one, no control counts.
+_CONTROL_BY_INVISIBLE_RE: re.Pattern[str] = re.compile(
+    f"[{_BIDI_CONTROLS}][{_INVISIBLE}]|[{_INVISIBLE}][{_BIDI_CONTROLS}]"
+)
+# Paragraph separators, which close every scope a bidi control opened.
+_PARAGRAPH_SEPARATORS = "\n\r\x1c\x1d\x1e\x85\u2029"
+_PARAGRAPH_SEPARATOR_RE: re.Pattern[str] = re.compile(r"[\n\r\x1c-\x1e\x85\u2029]")
+# An isolate, or an embedding or override, with no bidi control and no
+# paragraph separator inside: a pair whatever surrounds it.
+_ISOLATE_PAIR_RE: re.Pattern[str] = re.compile(
+    r"[\u2066-\u2068]([^\u202a-\u202e\u2066-\u2069\n\r\x1c-\x1e\x85\u2029]*)\u2069"
+)
+_EMBEDDING_PAIR_RE: re.Pattern[str] = re.compile(
+    r"[\u202a\u202b\u202d\u202e]([^\u202a-\u202e\u2066-\u2069\n\r\x1c-\x1e\x85\u2029]*)\u202c"
+)
+# At most this many controls stay open. The bidirectional algorithm nests
+# embedding levels 125 deep and a control opens one or two, so it stops after
+# 63 to 125 controls; a control opened inside 125 others formats nothing
+# whichever directions they take.
+_BIDI_MAX_DEPTH = 125
+# Characters that take VS15/VS16 without being a symbol: the keycap bases, and
+# the double exclamation, exclamation question, information source, wavy dash
+# and part alternation marks.
+_PRESENTATION_BASES = frozenset("#*0123456789\u203c\u2049\u2139\u3030\u303d")
+# The general categories of the characters VS1-VS14 have standardized variants
+# for: symbols, ideographs and letters of scripts without case, spacing marks
+# (Myanmar), punctuation. Cased letters take them only in the letterlike and
+# mathematical alphanumeric blocks (chancery and roundhand script capitals), and
+# digits only as the zero and the fullwidth zero.
+_STANDARDIZED_VARIANT_CATEGORIES = frozenset({"Sm", "So", "Lo", "Mc", "Po", "Ps", "Pe", "Pi", "Pf"})
+# From this many hidden characters in all (enough to carry a word) they are a
+# HIGH finding; fewer are LOW, which only the strict preset reports.
+_HIDDEN_CHARACTERS_HIGH = 4
+_BLACK_FLAG = "\U0001f3f4"
+
+
+@functools.lru_cache(maxsize=4096)
+def _selector_fits(base: str, selector: str) -> bool:
+    """Whether the character *base* takes the variation selector *selector*.
+
+    Ideographic selectors take a character of the CJK ideograph blocks. An
+    unassigned character (category Cn) in the emoji blocks may be newer than
+    this Python's Unicode data, and is given the benefit of the doubt; one
+    anywhere else is not.
+    """
+    point = ord(base)
+    if ord(selector) >= 0xE0100:
+        # An ideographic variation sequence: CJK Unified Ideographs Extension A,
+        # the Unified and Compatibility Ideographs blocks, and planes 2 and 3,
+        # which hold nothing else and where new ideographs are added.
+        return (
+            0x3400 <= point <= 0x4DBF or 0x4E00 <= point <= 0x9FFF
+            or 0xF900 <= point <= 0xFAFF or 0x20000 <= point <= 0x3FFFF
+        )
+    category = unicodedata.category(base)
+    if category == "Cn":
+        return 0x1F000 <= point <= 0x1FAFF
+    if ord(selector) >= 0xFE0E:
+        # Text or emoji presentation: an emoji, a symbol, a keycap base.
+        return category in ("So", "Sm") or base in _PRESENTATION_BASES
+    if category in ("Lu", "Ll"):
+        return 0x2100 <= point <= 0x214F or 0x1D400 <= point <= 0x1D7FF
+    if category == "Nd":
+        return base in ("0", "\uff10")
+    return category in _STANDARDIZED_VARIANT_CATEGORIES
+
+
+def _unmatched_bidi_controls(text: str) -> int:
+    """Bidi controls in *text* without a partner, next to another character that renders as nothing.
+
+    The bidirectional algorithm pairs an embedding or override with the next
+    PDF and an isolate with the next PDI, and closes whatever is still open at
+    the end of its isolate or its paragraph. Formatters write the pairs around
+    the values they wrap, so a control without a partner is text cut short,
+    next to the characters it was cut from, or a string of controls that
+    formats nothing. Only paragraphs with a control next to a hidden
+    character are read. Stops counting at four.
+    """
+    count = 0
+    done = 0
+    peeled: str | None = None
+    levels = 0
+    separators = ""
+    for match in _CONTROL_BY_INVISIBLE_RE.finditer(text):
+        if match.start() < done:
+            continue
+        if peeled is None:
+            peeled, levels = _set_pairs_aside(text)
+            separators = "".join(separator for separator in _PARAGRAPH_SEPARATORS if separator in text)
+        start = max((text.rfind(separator, done, match.start()) for separator in separators), default=-1) + 1
+        separator = _PARAGRAPH_SEPARATOR_RE.search(text, match.end())
+        done = separator.start() if separator else len(text)
+        if not _BIDI_CONTROL_RE.search(peeled, start, done):
+            continue  # every control in the paragraph has a partner
+        paragraph = peeled[start:done]
+        unpaired = _unpaired_controls(paragraph, levels)
+        if unpaired is None:
+            # Nesting came within that many levels of the limit, which the
+            # pairs set aside could have reached.
+            paragraph = text[start:done]
+            unpaired = _unpaired_controls(paragraph, 0) or []
+        count = _count_runs(paragraph, unpaired, count)
+        if count >= _HIDDEN_CHARACTERS_HIGH:
+            break
+    return count
+
+
+def _set_pairs_aside(text: str) -> tuple[str, int]:
+    """*text* with each pair that holds no control set aside, innermost out, and how many levels that took off.
+
+    Both controls of a pair are replaced with a word joiner, which renders as
+    nothing too, so a control left over has the same kind of neighbour as
+    before, at the same place. No pair crosses a paragraph separator.
+    """
+    levels = 0
+    for _ in range(4):
+        text, isolates = _ISOLATE_PAIR_RE.subn("\u2060\\1\u2060", text)
+        text, embeddings = _EMBEDDING_PAIR_RE.subn("\u2060\\1\u2060", text)
+        if not (isolates or embeddings):
+            break
+        # Each substitution takes at most one level of nesting off any pair.
+        levels += bool(isolates) + bool(embeddings)
+    return text, levels
+
+
+def _unpaired_controls(paragraph: str, levels: int) -> list[tuple[int, tuple[int, ...]]] | None:
+    """The bidi controls in *paragraph* without a partner, in order, each with the neighbours it does not count by.
+
+    A control opened inside 125 others formats nothing and is one of them.
+    With *levels* of pairs set aside, None once nesting comes within that many
+    of the limit.
+    """
+    unpaired: list[tuple[int, tuple[int, ...]]] = []
+    opened: list[tuple[int, bool]] = []  # (position, is an isolate)
+    isolates = 0
+    for match in _BIDI_CONTROL_RE.finditer(paragraph):
+        position = match.start()
+        control = match.group()
+        if control == "\u202c":
+            # PDF closes the last embedding or override, not across an isolate.
+            if opened and not opened[-1][1]:
+                opened.pop()
+            else:
+                unpaired.append((position, ()))
+        elif control == "\u2069":
+            if not isolates:
+                unpaired.append((position, ()))
+                continue
+            # PDI closes the last isolate, and with it the embeddings still open
+            # inside, which are left open as at the end of a paragraph. They
+            # count by their neighbours other than the isolate's own controls,
+            # unless the isolate holds nothing visible.
+            inside = []
+            start, isolate = opened.pop()
+            while not isolate:
+                inside.append(start)
+                start, isolate = opened.pop()
+            isolates -= 1
+            if inside:
+                ignore = (start, position) if _VISIBLE_RE.search(paragraph, start + 1, position) else ()
+                unpaired.extend((embedding, ignore) for embedding in inside)
+        elif len(opened) >= _BIDI_MAX_DEPTH - levels:
+            if levels:
+                return None
+            unpaired.append((position, ()))
+        else:
+            isolate = control >= "\u2066"
+            opened.append((position, isolate))
+            isolates += isolate
+    unpaired.extend((position, ()) for position, _ in opened)
+    unpaired.sort()
+    return unpaired
+
+
+def _count_runs(text: str, unpaired: list[tuple[int, tuple[int, ...]]], count: int) -> int:
+    """*count* plus the runs of *unpaired* controls next to a hidden character, up to four.
+
+    A run is one control repeated, with nothing or one bidi mark between the
+    repeats, as text cut inside nested isolates or embeddings leaves their
+    closers. It counts once, by the characters on either side of it.
+    """
+    index = 0
+    while index < len(unpaired) and count < _HIDDEN_CHARACTERS_HIGH:
+        first, ignore_before = unpaired[index]
+        last, ignore_after = first, ignore_before
+        index += 1
+        while index < len(unpaired):
+            position, ignore = unpaired[index]
+            gap = position - last - 1
+            if text[position] != text[first] or gap > 1 or (gap and text[last + 1] not in _MARKS):
+                break
+            last, ignore_after = position, ignore
+            index += 1
+        count += _hidden_beside(text, first, last, ignore_before, ignore_after)
+    return count
+
+
+def _hidden_beside(
+    text: str, first: int, last: int, ignore_before: tuple[int, ...], ignore_after: tuple[int, ...],
+) -> bool:
+    """Whether a character that renders as nothing, a bidi mark among them, is next to ``text[first:last + 1]``."""
+    before, after = first - 1, last + 1
+    return (
+        (before >= 0 and before not in ignore_before and _INVISIBLE_RE.match(text, before) is not None)
+        or (after < len(text) and after not in ignore_after and _INVISIBLE_RE.match(text, after) is not None)
+    )
+
+
+def _hidden_character_counts(text: str) -> tuple[int, int]:
+    """``(selectors, bidi)``: variation selectors and bidi characters in *text* that hide something.
+
+    A variation selector counts unless it is the one selector right after a
+    character that takes it (VS15 or VS16 after an emoji or symbol, an
+    ideographic selector after a CJK ideograph); an emoji presentation selector
+    repeated once does not count either. Bidi controls count when they have no
+    partner and sit next to another character that renders as nothing, a bidi
+    mark among them, one control repeated side by side once; a bidi mark counts
+    in a string of four or more marks. The tag characters of an England,
+    Scotland or Wales flag,
+    and of a piece of one cut off at either end of the text, are read as the
+    visible flag they draw.
+    """
+    if not _HIDDEN_CANDIDATE_RE.search(text):
+        return 0, 0
+    if _TAG_CHARS_RE.search(text):
+        head, body, tail = _cut_flag_ends(text)
+        body = RGI_EMOJI_TAG_SEQUENCE_RE.sub(lambda flag: _BLACK_FLAG * len(flag.group()), body)
+        text = _BLACK_FLAG * len(head) + body + _BLACK_FLAG * len(tail)
+    bidi = _unmatched_bidi_controls(text)
+    marks = "".join(_MARK_RUN_RE.findall(text))
+    bidi += len(marks) - len(marks.translate(_DROP_MARKS))
+    if not _SELECTOR_RE.search(text):
+        return 0, bidi
+    selectors = _SELECTOR_AFTER_INVISIBLE_RE.subn("", text)[1] - _REPEATED_PRESENTATION_RE.subn("", text)[1]
+    # Each character and selector that follow each other once, however often.
+    for pair, occurrences in Counter(_SELECTOR_AFTER_VISIBLE_RE.findall(text)).items():
+        base = "" if _SELECTOR_RE.match(pair) else pair[0]
+        if not (base and _selector_fits(base, pair[len(base)])):
+            # The selector, and its repeat, which the first count left out.
+            selectors += occurrences * (len(pair) - len(base))
+    return selectors, bidi
+
 
 # ---------------------------------------------------------------------------
 # Confidence thresholds per sensitivity
@@ -890,27 +1342,39 @@ class PromptInjectionDetector:
                     f"encoding:{pattern.pattern}",
                 ))
 
-        # Check for base64-encoded suspicious content
-        for match in _BASE64_PATTERN.finditer(text):
-            candidate = match.group()
-            try:
-                decoded = base64.b64decode(candidate).decode("utf-8", errors="ignore")
-                decoded_lower = decoded.lower()
-                for keyword in _SUSPICIOUS_DECODED_KEYWORDS:
-                    if keyword in decoded_lower:
-                        findings.append((
-                            InjectionType.ENCODING_ATTACK,
-                            ThreatLevel.HIGH,
-                            0.85,
-                            f"base64_payload:{keyword}",
-                        ))
-                        break
-            except ValueError:
-                # Not valid base64 (binascii.Error is a ValueError) — skip.
-                # The candidate is ASCII by construction (_BASE64_PATTERN)
-                # and decode() runs with errors="ignore", so nothing else
-                # can be raised here.
-                pass
+        # Check for base64-encoded suspicious content: keywords in bytes that
+        # read as text, and what an instruction says in any bytes. A binary
+        # file decodes to readable names that are not a payload (see _is_text).
+        joined_readings: list[str] = []
+        payload_found = False
+        for decoded in _decoded_base64(text):
+            found = None
+            if _is_text(decoded):
+                decoded_lower = decoded.decode("utf-8", errors="ignore").lower()
+                found = next((keyword for keyword in _SUSPICIOUS_DECODED_KEYWORDS if keyword in decoded_lower), None)
+            if found is None:
+                joined, spaced = _readings(decoded)
+                joined_readings.append(joined)
+                found = _phrase_in(joined) or (_phrase_in(spaced) if spaced is not None else None)
+            if found:
+                payload_found = True
+                findings.append((
+                    InjectionType.ENCODING_ATTACK,
+                    ThreatLevel.HIGH,
+                    0.85,
+                    f"base64_payload:{found}",
+                ))
+        # An instruction split across base64 strings, each decoded on its own,
+        # reads whole once they are put back together.
+        if not payload_found and len(joined_readings) > 1:
+            found = _phrase_in("".join(joined_readings))
+            if found:
+                findings.append((
+                    InjectionType.ENCODING_ATTACK,
+                    ThreatLevel.HIGH,
+                    0.85,
+                    f"base64_payload:{found}",
+                ))
 
         return findings
 
@@ -1006,14 +1470,30 @@ class PromptInjectionDetector:
     def _check_token_smuggling(
         self, text: str,
     ) -> list[tuple[InjectionType, ThreatLevel, float, str]]:
+        findings: list[tuple[InjectionType, ThreatLevel, float, str]] = []
         if _TOKEN_SMUGGLE_PATTERN.search(text):
-            return [(
+            findings.append((
                 InjectionType.TOKEN_SMUGGLING,
                 ThreatLevel.MEDIUM,
                 0.7,
                 "token_smuggle:zero_width_run",
-            )]
-        return []
+            ))
+        # Hidden variation selectors and bidi characters, counted together
+        # across the whole input.
+        selectors, bidi = _hidden_character_counts(text)
+        if selectors + bidi >= _HIDDEN_CHARACTERS_HIGH:
+            level, confidence = ThreatLevel.HIGH, 0.85
+        else:
+            level, confidence = ThreatLevel.LOW, 0.45
+        if selectors:
+            findings.append((
+                InjectionType.TOKEN_SMUGGLING, level, confidence, "token_smuggle:variation_selectors",
+            ))
+        if bidi:
+            findings.append((
+                InjectionType.TOKEN_SMUGGLING, level, confidence, "token_smuggle:bidi_controls",
+            ))
+        return findings
 
     def _check_credential_exfil(
         self, text: str,
