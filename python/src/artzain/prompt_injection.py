@@ -286,7 +286,7 @@ _CONTEXT_MANIPULATION_PATTERNS: list[re.Pattern[str]] = [
 ]
 
 _MULTI_TURN_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"as\s+I\s+mentioned\s+before.*you\s+agreed\s+to", re.IGNORECASE),
+    re.compile(r"as\s+I\s+mentioned\s+before.{0,120}?you\s+agreed\s+to", re.IGNORECASE),
     re.compile(r"you\s+already\s+said\s+yes", re.IGNORECASE),
     re.compile(r"continuing\s+from\s+where\s+you\s+unlocked", re.IGNORECASE),
     re.compile(r"you\s+previously\s+confirmed", re.IGNORECASE),
