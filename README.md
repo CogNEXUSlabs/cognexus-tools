@@ -10,9 +10,9 @@ for CI and guard-sync until those jobs move here.
 |---|---|---|
 | **`artzain`** | `pip install artzain` | Python SDK — local guards, `decide()`, CLI (`login`, `quickstart`, `audit`, `policy`, `registry`) |
 | **`@cognexuslabs/artzain`** | `npm i @cognexuslabs/artzain` | TypeScript SDK — remote-only Node client (`decide`, events, identity) |
-| **`@cognexuslabs/openclaw-artzain`** | `npm i @cognexuslabs/openclaw-artzain` (checkout until the first release) | OpenClaw `before_tool_call` plugin (deny / review / errors block; not `/approve`) |
-| **`@cognexuslabs/n8n-nodes-artzain`** | `npm i @cognexuslabs/n8n-nodes-artzain` (checkout until the first release) | n8n Decision + Envelope nodes (fail closed on HTTP 503; `review` does not Wait) |
-| **`@cognexuslabs/grokbot-artzain`** | `npm i @cognexuslabs/grokbot-artzain` (checkout until the first release) | Grok Bot cooperative Decision skill + opt-in announce (no host intercept) |
+| **`@cognexuslabs/openclaw-artzain`** | `npm i @cognexuslabs/openclaw-artzain` | OpenClaw `before_tool_call` plugin (deny / review / errors block; not `/approve`) |
+| **`@cognexuslabs/n8n-nodes-artzain`** | `npm i @cognexuslabs/n8n-nodes-artzain` | n8n Decision + Envelope nodes (fail closed on HTTP 503; `review` does not Wait) |
+| **`@cognexuslabs/grokbot-artzain`** | `npm i @cognexuslabs/grokbot-artzain` | Grok Bot cooperative Decision skill, opt-in announce, and pull enroll (no host intercept) |
 
 All five are Apache-2.0.
 
@@ -224,9 +224,8 @@ See [`typescript/README.md`](typescript/README.md).
 
 ## OpenClaw (`@cognexuslabs/openclaw-artzain`)
 
-Install from a checkout until a dest tag publishes it:
-
 ```bash
+npm i @cognexuslabs/openclaw-artzain
 openclaw plugins install ./openclaw
 ```
 
@@ -240,12 +239,28 @@ See [`openclaw/README.md`](openclaw/README.md).
 
 ## n8n (`@cognexuslabs/n8n-nodes-artzain`)
 
-Install from a checkout until a dest tag publishes it. Two nodes:
+```bash
+npm i @cognexuslabs/n8n-nodes-artzain
+```
+
+Two nodes:
 
 - **Artzain Decision** — `POST /api/v1/decisions` with Allow / Review / Deny outputs. HTTP 503 fails closed. `review` is a third output, not an n8n Wait node.
 - **Artzain Envelope** — `POST /api/v1/envelope/v1/chat/completions` with an envelope credential (`cnxe_…`). Not the Decision API.
 
 See [`n8n/README.md`](n8n/README.md).
+
+## Grok Bot (`@cognexuslabs/grokbot-artzain`)
+
+```bash
+npm i @cognexuslabs/grokbot-artzain
+```
+
+Cooperative skill (pattern C): Grok Bot has no host `before_tool_call`
+intercept. Copy [`grokbot/SKILL.md`](grokbot/SKILL.md) into the Bot's skills
+folder, or run `grokbot-artzain decide` before a side-effect. `deny`,
+`review`, and transport errors fail closed. Opt-in announce and default-on
+pull enroll are in [`grokbot/README.md`](grokbot/README.md).
 
 ## Development
 
@@ -266,11 +281,12 @@ npm run build   # tsc → dist/
 npm test        # vitest
 ```
 
-OpenClaw plugin and n8n nodes:
+OpenClaw plugin, n8n nodes, and Grok Bot skill:
 
 ```bash
 cd openclaw && npm ci && npm test && npm run build
 cd ../n8n && npm ci && npm test && npm run build
+cd ../grokbot && npm ci && npm test && npm run build
 ```
 
 ## Releases
@@ -279,7 +295,8 @@ cd ../n8n && npm ci && npm test && npm run build
 - TypeScript: push tag `sdk-ts-v<version>` (must match `typescript/package.json`). Publishes through npm **Trusted Publishing** (OIDC) — no token; npm generates the provenance itself, and `npm audit signatures` verifies it.
 - OpenClaw plugin: push tag `openclaw-v<version>` (must match `openclaw/package.json`).
 - n8n nodes: push tag `n8n-v<version>` (must match `n8n/package.json`).
-- All three npm packages publish through the same `publish-npm.yml` (npm **Trusted Publishing**, OIDC, no token) — each package's npmjs.com binding names that one workflow file. The **first** publish of a new package is an owner bootstrap, because npm only binds a trusted publisher to a package that already exists; the steps live in the engine repo's `scripts/cognexus-tools-seed/APPLY.md`. Do not publish from the engine repo, and never use a bare `v*` tag here.
+- Grok Bot skill: push tag `grokbot-v<version>` (must match `grokbot/package.json`).
+- All four npm packages publish through the same `publish-npm.yml` (npm **Trusted Publishing**, OIDC, no token) — each package's npmjs.com binding names that one workflow file. The **first** publish of a new package is an owner bootstrap, because npm only binds a trusted publisher to a package that already exists; the steps live in the engine repo's `scripts/cognexus-tools-seed/APPLY.md`. Do not publish from the engine repo, and never use a bare `v*` tag here.
 
 Nothing publishes from a developer machine (WS-8): the tag is the release, and
 the workflows here hold the only credentials involved.

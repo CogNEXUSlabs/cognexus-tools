@@ -4,6 +4,13 @@ All notable changes to `@cognexuslabs/grokbot-artzain`. Headings are the
 bare version (`## 0.1.0`): the mirror's `publish-npm.yml` cuts the GitHub
 release notes for tag `grokbot-v<version>` from the matching section.
 
+## 0.1.2
+
+Published 2026-09-18. Version-only for the first release through npm
+Trusted Publishing (OIDC, Sigstore provenance), which also exercised the
+`grokbot-v*` path of the mirror's publish workflow. `0.1.1` was the owner
+bootstrap and has no attestation. Package README now installs from npm.
+
 ## 0.1.1
 
 ### Added
