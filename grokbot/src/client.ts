@@ -1,23 +1,39 @@
 /**
- * `decide()` — gate a proposed agent action through the CogNEXUS Decision
- * API (`POST /api/v1/decisions`). Remote-only: unlike the Python SDK there
- * is no offline local-guard fallback — a missing API key throws a clear
- * `DecisionError` instead (documented divergence).
+ * Decision API client used by the Grok Bot cooperative skill.
+ *
+ * Keep the request shape in lockstep with ``sdk/typescript/src/decide.ts``
+ * (POST /api/v1/decisions, X-Api-Key, payload_kind=tool_call). Missing key
+ * and HTTP 503 throw DecisionError — callers fail closed.
+ *
+ * The skill has no runtime dependency on ``@cognexuslabs/artzain`` on
+ * purpose: it is installed from a git checkout, ships zero runtime
+ * dependencies, and is released from its own tag on the mirror with no
+ * ordering against the SDK's. So the shared pieces are copied verbatim
+ * from ``sdk/typescript/src/{errors,decide}.ts`` between the
+ * ``lockstep:begin`` / ``lockstep:end`` markers, and ``lockstep.test.ts``
+ * fails when a copy drifts from its source.
  */
 
-import { effectiveApiKey, effectiveBaseUrl } from "./config.js";
-import { DecisionError } from "./errors.js";
+export const DEFAULT_BASE_URL = "https://app.cognexuslabs.ai";
+export const DECIDE_TIMEOUT_MS = 12_000;
 
-export type PayloadKind =
-  | "user_input"
-  | "external_content"
-  | "tabular"
-  | "model_output"
-  | "tool_call";
+// lockstep:begin DecisionError
+/** Raised when the Decision API cannot return a decision. */
+export class DecisionError extends Error {
+  /** HTTP status when the server answered; undefined on transport failure. */
+  readonly status?: number;
+  /** Parsed `detail` from the server's error body, when present. */
+  readonly detail?: unknown;
 
-// The lockstep blocks below are copied verbatim into
-// sdk/openclaw/src/client.ts and sdk/grokbot/src/client.ts; lockstep.test.ts
-// in those packages fails when they drift.
+  constructor(message: string, options?: { status?: number; detail?: unknown }) {
+    super(message);
+    this.name = "DecisionError";
+    this.status = options?.status;
+    this.detail = options?.detail;
+  }
+}
+// lockstep:end DecisionError
+
 // lockstep:begin decision-types
 export type DecisionOutcome = "allow" | "deny" | "review";
 
@@ -75,74 +91,83 @@ export type FetchLike = (
 }>;
 // lockstep:end decision-types
 
-export interface DecideOptions {
-  /** The proposed action verb, e.g. `"send_email"`. */
+export interface PostDecisionOptions {
+  apiKey: string;
+  baseUrl: string;
   action: string;
-  /** What the action touches, e.g. `"crm:contact:123"`. */
   target: string;
-  /** The content to screen (≤ 256 KiB). */
   payload: string;
-  /** How the payload should be screened. Default `"user_input"`. */
-  kind?: PayloadKind;
-  /** Acting agent identity. Default `"cognexus-sdk-ts"`. */
-  agentDid?: string;
-  /** Calling surface recorded in the leaf. Default `"sdk"`. */
-  surface?: string;
-  /** Idempotency key — replays return the original sealed decision. */
+  agentDid: string;
   requestId?: string;
-  /** FR-11 product identifier (`name@version`). */
-  product?: string;
-  /** Advisory context recorded alongside the decision. */
-  context?: Record<string, unknown>;
-  /** Request timeout in milliseconds. Default 10000. */
   timeoutMs?: number;
-  /** Test seam / custom transport. Defaults to global `fetch`. */
   fetchImpl?: FetchLike;
 }
 
-export async function decide(options: DecideOptions): Promise<DecisionResponse> {
-  const apiKey = effectiveApiKey();
-  if (!apiKey) {
-    throw new DecisionError(
-      "No API key configured — decisions will not be sealed. " +
-        "Set COGNEXUS_API_KEY, call configure({ apiKey }), or run `artzain login` (~15s; " +
-        "its ~/.artzain/credentials.toml profile is read on Node 20.16+ / 22.3+). " +
-        "(The TypeScript SDK is remote-only; there is no offline guard fallback.)",
-    );
-  }
+function trimBase(url: string): string {
+  // Scanned rather than trimmed with /\/+$/, which backtracks quadratically
+  // on a value made up mostly of slashes (same loop as the SDK's config.ts).
+  let end = url.length;
+  while (end > 0 && url.charCodeAt(end - 1) === 47) end--;
+  return url.slice(0, end);
+}
+
+export function resolveApiKey(pluginKey?: string): string | undefined {
+  const explicit = (pluginKey || "").trim();
+  if (explicit) return explicit;
+  const env =
+    (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
+      ?.env;
+  return (env?.COGNEXUS_API_KEY || env?.MYAPP_API_KEY || "").trim() || undefined;
+}
+
+export function resolveBaseUrl(pluginBase?: string): string {
+  const explicit = (pluginBase || "").trim();
+  if (explicit) return trimBase(explicit);
+  const env =
+    (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
+      ?.env;
+  const fromEnv = (env?.COGNEXUS_API_BASE_URL || "").trim();
+  return trimBase(fromEnv || DEFAULT_BASE_URL);
+}
+
+export async function postDecision(
+  options: PostDecisionOptions,
+): Promise<DecisionResponse> {
   const fetchImpl: FetchLike =
     options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
   if (!fetchImpl) {
     throw new DecisionError("No fetch implementation available (Node >= 18 required).");
   }
 
-  const body = {
-    agent_did: options.agentDid ?? "cognexus-sdk-ts",
-    action: options.action,
-    target: options.target,
-    payload: options.payload,
-    payload_kind: options.kind ?? "user_input",
-    surface: options.surface ?? "sdk",
-    request_id: options.requestId ?? null,
-    product: options.product ?? null,
-    context: options.context ?? {},
-  };
-
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 10_000);
+  const timer = setTimeout(
+    () => controller.abort(),
+    options.timeoutMs ?? DECIDE_TIMEOUT_MS,
+  );
   let resp: Awaited<ReturnType<FetchLike>>;
   try {
-    resp = await fetchImpl(`${effectiveBaseUrl()}/api/v1/decisions`, {
+    resp = await fetchImpl(`${trimBase(options.baseUrl)}/api/v1/decisions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Api-Key": apiKey,
+        "X-Api-Key": options.apiKey,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        agent_did: options.agentDid,
+        action: options.action,
+        target: options.target,
+        payload: options.payload,
+        payload_kind: "tool_call",
+        surface: "grokbot",
+        request_id: options.requestId ?? null,
+        context: {},
+      }),
       signal: controller.signal,
     });
   } catch (err) {
-    throw new DecisionError(`Decision API unreachable: ${(err as Error).message}`);
+    throw new DecisionError(
+      `Decision API unreachable: ${(err as Error).message}`,
+    );
   } finally {
     clearTimeout(timer);
   }
