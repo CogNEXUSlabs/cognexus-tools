@@ -1,6 +1,6 @@
 {
   "name": "@cognexuslabs/grokbot-artzain",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Grok Bot cooperative skill: CogNEXUS Decision API gate, opt-in announce, and pull enroll (no host intercept).",
   "license": "Apache-2.0",
   "repository": {

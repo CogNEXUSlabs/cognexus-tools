@@ -18,20 +18,29 @@ for that.
 ## What this is not
 
 - Not a Connectors-panel card.
-- Not published from this repository. Dest
-  (`CogNEXUSlabs/cognexus-tools`) holds Trusted Publishing. Until that listing
-  exists, install from a git checkout.
+- Not published from the engine repository. Dest
+  (`CogNEXUSlabs/cognexus-tools`) holds Trusted Publishing.
 - Not a host plugin. There is nothing to `plugins install`.
 
-## Install (from a CogNEXUS checkout)
-
-Copy [`SKILL.md`](SKILL.md) into the Bot's skills folder, or run the CLI
-from this package:
+## Install
 
 ```bash
-cd sdk/grokbot && npm ci && npm run build
-# then, from the Bot:
-npx --prefix /path/to/sdk/grokbot grokbot-artzain decide \
+npm i @cognexuslabs/grokbot-artzain
+```
+
+Copy [`SKILL.md`](SKILL.md) into the Bot's skills folder, or run the CLI:
+
+```bash
+npx grokbot-artzain decide \
+  --action send_email --target mailbox \
+  --payload '{"tool":"send_email","arguments":{"to":"ops@example.com"}}'
+```
+
+From a checkout of dest (`grokbot/`) or the engine dual-home (`sdk/grokbot/`):
+
+```bash
+npm ci && npm run build
+npx grokbot-artzain decide \
   --action send_email --target mailbox \
   --payload '{"tool":"send_email","arguments":{"to":"ops@example.com"}}'
 ```
