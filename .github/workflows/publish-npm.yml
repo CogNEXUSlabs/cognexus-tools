@@ -9,6 +9,7 @@ name: Publish npm packages
 #   sdk-ts-v*    -> typescript/  @cognexuslabs/artzain
 #   openclaw-v*  -> openclaw/    @cognexuslabs/openclaw-artzain
 #   n8n-v*       -> n8n/         @cognexuslabs/n8n-nodes-artzain
+#   grokbot-v*   -> grokbot/     @cognexuslabs/grokbot-artzain
 #
 # One-time setup on npmjs.com PER PACKAGE (Settings → Trusted Publisher /
 # Publishing access), bound to:
@@ -37,6 +38,7 @@ on:
       - "sdk-ts-v*"
       - "openclaw-v*"
       - "n8n-v*"
+      - "grokbot-v*"
   workflow_dispatch:
     inputs:
       package:
@@ -46,6 +48,7 @@ on:
           - typescript
           - openclaw
           - n8n
+          - grokbot
         default: typescript
 
 permissions:
@@ -271,3 +274,73 @@ jobs:
             echo "npm package [@cognexuslabs/n8n-nodes-artzain](https://www.npmjs.com/package/@cognexuslabs/n8n-nodes-artzain) — published via Trusted Publishing with Sigstore provenance (\`npm audit signatures\` verifies)." > /tmp/notes.md
           fi
           gh release create "$GITHUB_REF_NAME"             --title "@cognexuslabs/n8n-nodes-artzain ${VERSION}"             --notes-file /tmp/notes.md             --verify-tag --latest=false
+
+  grokbot:
+    name: "@cognexuslabs/grokbot-artzain"
+    if: >-
+      (github.ref_type == 'tag' && startsWith(github.ref_name, 'grokbot-v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.package == 'grokbot')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: grokbot
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22 # resolves to latest 22.x (>= 22.14.0, required for OIDC)
+          registry-url: https://registry.npmjs.org
+
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Install
+        run: npm ci
+
+      - name: Verify tag matches package version
+        if: github.ref_type == 'tag'
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#grokbot-v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) != package.json version ($PKG_VERSION)" >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Publish to npm (OIDC Trusted Publishing)
+        run: npm publish
+
+  grokbot-release:
+    name: "GitHub release: @cognexuslabs/grokbot-artzain"
+    needs: grokbot
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'grokbot-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the Release object; NO id-token
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Create release from the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then exit 0; fi
+          VERSION="${GITHUB_REF_NAME#grokbot-v}"
+          if [ -f grokbot/CHANGELOG.md ]; then
+            awk -v ver="$VERSION" '$0 == "## " ver {f=1; next} /^## /{f=0} f' \
+              grokbot/CHANGELOG.md > /tmp/notes.md
+          fi
+          if ! [ -s /tmp/notes.md ]; then
+            echo "npm package [@cognexuslabs/grokbot-artzain](https://www.npmjs.com/package/@cognexuslabs/grokbot-artzain) — published via Trusted Publishing with Sigstore provenance (\`npm audit signatures\` verifies)." > /tmp/notes.md
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "@cognexuslabs/grokbot-artzain ${VERSION}" \
+            --notes-file /tmp/notes.md \
+            --verify-tag --latest=false

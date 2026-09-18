@@ -1,12 +1,12 @@
 {
-  "name": "@cognexuslabs/openclaw-artzain",
-  "version": "0.2.5",
-  "description": "OpenClaw plugin: CogNEXUS before_tool_call gate (deny/review/errors block; not /approve).",
+  "name": "@cognexuslabs/grokbot-artzain",
+  "version": "0.1.1",
+  "description": "Grok Bot cooperative skill: CogNEXUS Decision API gate, opt-in announce, and pull enroll (no host intercept).",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/CogNEXUSlabs/cognexus-tools.git",
-    "directory": "openclaw"
+    "directory": "grokbot"
   },
   "homepage": "https://cognexuslabs.ai",
   "bugs": {
@@ -18,9 +18,12 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "grokbot-artzain": "./dist/cli.js"
+  },
   "files": [
     "dist",
-    "openclaw.plugin.json",
+    "SKILL.md",
     "README.md",
     "LICENSE"
   ],
@@ -34,37 +37,13 @@
   },
   "keywords": [
     "cognexus",
-    "openclaw",
+    "grokbot",
     "artzain",
     "decision-api"
   ],
-  "peerDependencies": {
-    "openclaw": ">=2026.3.24-beta.2"
-  },
-  "peerDependenciesMeta": {
-    "openclaw": {
-      "optional": true
-    }
-  },
   "devDependencies": {
     "@types/node": "^26.2.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.0"
-  },
-  "openclaw": {
-    "extensions": [
-      "./src/index.ts"
-    ],
-    "runtimeExtensions": [
-      "./dist/index.js"
-    ],
-    "compat": {
-      "pluginApi": ">=2026.3.24-beta.2",
-      "minGatewayVersion": "2026.3.24-beta.2"
-    },
-    "build": {
-      "openclawVersion": "2026.3.24-beta.2",
-      "pluginSdkVersion": "2026.3.24-beta.2"
-    }
   }
 }

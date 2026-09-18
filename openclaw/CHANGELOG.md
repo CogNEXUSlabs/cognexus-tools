@@ -4,6 +4,17 @@ All notable changes to `@cognexuslabs/openclaw-artzain`. Headings are the
 bare version (`## 0.2.2`): the mirror's `publish-npm.yml` cuts the GitHub
 release notes for tag `openclaw-v<version>` from the matching section.
 
+## 0.2.5
+
+### Added
+
+- **Pull enroll** (default on): on the first gated call the plugin POSTs
+  identity (announce shape, names only) to `POST /api/v1/registry/enroll`
+  with the Decision API key it already holds. The reply names the adapter
+  to install and never returns a `cnxe_` unless `enrollToken` is set
+  (one-shot grant from Govern / the snippet pack). Fire-and-forget; never
+  blocks tool gating. Set `enroll: false` to skip.
+
 ## 0.2.4
 
 ### Changed

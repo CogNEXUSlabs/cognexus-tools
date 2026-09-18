@@ -1,3 +1,14 @@
+/**
+ * Cooperative Decision gate for a Grok Bot skill (pattern C).
+ *
+ * There is no documented host `before_tool_call` intercept. The operator
+ * installs this skill and the Bot description tells it to call
+ * `gateToolCall` (or the `grokbot-artzain decide` CLI) before a
+ * side-effect. Fail-closed only when the skill actually runs; a Bot that
+ * never calls it is ungoverned — which is what the catalog + Marshal
+ * already surface.
+ */
+
 import {
   DecisionError,
   DECIDE_TIMEOUT_MS,
@@ -10,22 +21,25 @@ import {
 import { announceInstance, type AnnounceConfig } from "./announce.js";
 import { enrollInstance } from "./enroll.js";
 
-export const HOOK_TIMEOUT_MS = 14_000;
-
-export interface PluginConfig extends AnnounceConfig {
+export interface SkillConfig extends AnnounceConfig {
   apiKey?: string;
   baseUrl?: string;
   agentDid?: string;
 }
 
-/** Announce fires from the first gated call — the register hook never
- * sees plugin config, the tool path does. It is fire-and-forget: gating
- * NEVER waits on it, and its failure never blocks. Delivery is
- * attempt-once per process for successes and config refusals (4xx);
- * TRANSIENT failures (network, 5xx, 429) re-arm so a later gated call
- * retries — a laptop whose first tool call happens offline still
- * announces once the network is back. Enroll is the same contract and
- * default ON (`enroll !== false`). */
+export interface GateInput {
+  toolName: string;
+  params?: Record<string, unknown>;
+  payload?: string;
+  target?: string;
+  toolCallId?: string;
+  agentDid?: string;
+}
+
+export type GateResult =
+  | { allow: true; decision: DecisionResponse }
+  | { allow: false; blockReason: string; outcome?: string };
+
 let announceStarted = false;
 let enrollStarted = false;
 
@@ -39,7 +53,7 @@ export function resetEnrollForTests(): void {
 }
 
 function maybeAnnounceOnce(
-  cfg: PluginConfig,
+  cfg: SkillConfig,
   fetchImpl?: FetchLike,
   ctxAgentId?: string,
 ): void {
@@ -59,16 +73,16 @@ function maybeAnnounceOnce(
   )
     .then((result) => {
       if (!result.ok && result.retryable) {
-        announceStarted = false; // transient — try again on a later call
+        announceStarted = false;
       }
     })
     .catch(() => {
-      /* announceInstance resolves rather than rejecting; belt-and-braces */
+      /* announceInstance resolves rather than rejecting */
     });
 }
 
 function maybeEnrollOnce(
-  cfg: PluginConfig,
+  cfg: SkillConfig,
   fetchImpl?: FetchLike,
   ctxAgentId?: string,
 ): void {
@@ -96,21 +110,6 @@ function maybeEnrollOnce(
     });
 }
 
-export interface ToolCallEvent {
-  toolName: string;
-  params?: Record<string, unknown>;
-  toolCallId?: string;
-  runId?: string;
-  context?: { pluginConfig?: PluginConfig };
-}
-
-export interface ToolCallCtx {
-  agentId?: string;
-  pluginConfig?: PluginConfig;
-}
-
-export type BlockResult = { block: true; blockReason: string };
-
 function payloadFor(toolName: string, params: unknown): string {
   try {
     return JSON.stringify({ tool: toolName, arguments: params ?? {} });
@@ -119,46 +118,33 @@ function payloadFor(toolName: string, params: unknown): string {
   }
 }
 
-function block(reason: string): BlockResult {
-  return { block: true, blockReason: reason };
-}
-
-export function pluginConfigOf(
-  event: ToolCallEvent,
-  ctx: ToolCallCtx,
-): PluginConfig {
-  return event.context?.pluginConfig || ctx.pluginConfig || {};
-}
-
-export async function handleBeforeToolCall(
-  event: ToolCallEvent,
-  ctx: ToolCallCtx,
+export async function gateToolCall(
+  cfg: SkillConfig,
+  input: GateInput,
   fetchImpl?: FetchLike,
-): Promise<BlockResult | undefined> {
-  const cfg = pluginConfigOf(event, ctx);
-  // ctx.agentId first: the announced default identity must match the did
-  // the gate stamps on decision leaves, or reconciliation flags this very
-  // instance's traffic as an unregistered agent.
-  maybeAnnounceOnce(cfg, fetchImpl, ctx.agentId);
-  maybeEnrollOnce(cfg, fetchImpl, ctx.agentId);
+): Promise<GateResult> {
+  maybeAnnounceOnce(cfg, fetchImpl, input.agentDid);
+  maybeEnrollOnce(cfg, fetchImpl, input.agentDid);
   const apiKey = resolveApiKey(cfg.apiKey);
   if (!apiKey) {
-    return block(
-      "decision unavailable (No API key configured — set COGNEXUS_API_KEY or plugin apiKey) — failing closed",
-    );
+    return {
+      allow: false,
+      blockReason:
+        "decision unavailable (No API key configured — set COGNEXUS_API_KEY) — failing closed",
+    };
   }
 
-  const toolName = event.toolName || "unknown_tool";
-  const requestId = (event.toolCallId || event.runId || "").slice(0, 64);
-  const agentDid = ctx.agentId || cfg.agentDid || "openclaw-gateway";
+  const toolName = input.toolName || "unknown_tool";
+  const requestId = (input.toolCallId || "").slice(0, 64);
+  const agentDid = input.agentDid || cfg.agentDid || "grokbot-agent";
 
   try {
     const decision: DecisionResponse = await postDecision({
       apiKey,
       baseUrl: resolveBaseUrl(cfg.baseUrl),
       action: toolName,
-      target: `openclaw:tool:${toolName}`,
-      payload: payloadFor(toolName, event.params),
+      target: input.target || `grokbot:tool:${toolName}`,
+      payload: input.payload || payloadFor(toolName, input.params),
       agentDid,
       requestId: requestId || undefined,
       timeoutMs: DECIDE_TIMEOUT_MS,
@@ -166,16 +152,22 @@ export async function handleBeforeToolCall(
     });
 
     if (decision.outcome === "allow") {
-      return;
+      return { allow: true, decision };
     }
 
     const reasons = (decision.reasons || []).join("; ") || decision.outcome;
     if (decision.outcome === "review") {
-      return block(
-        `QUEUED FOR REVIEW: ${reasons} (decision ${decision.decision_id})`,
-      );
+      return {
+        allow: false,
+        outcome: "review",
+        blockReason: `QUEUED FOR REVIEW: ${reasons} (decision ${decision.decision_id})`,
+      };
     }
-    return block(`REFUSED: ${reasons} (decision ${decision.decision_id})`);
+    return {
+      allow: false,
+      outcome: decision.outcome,
+      blockReason: `REFUSED: ${reasons} (decision ${decision.decision_id})`,
+    };
   } catch (err) {
     const detail =
       err instanceof DecisionError
@@ -183,6 +175,9 @@ export async function handleBeforeToolCall(
         : err instanceof Error
           ? err.message
           : String(err);
-    return block(`decision unavailable (${detail}) — failing closed`);
+    return {
+      allow: false,
+      blockReason: `decision unavailable (${detail}) — failing closed`,
+    };
   }
 }

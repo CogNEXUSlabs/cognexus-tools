@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.22
+
+### Added
+
+- `artzain registry list/export --source grokbot` — the Agent Wrangler
+  Grok Bot host origin.
+
 ## 0.6.21
 
 ### Fixed

@@ -12,8 +12,9 @@ for CI and guard-sync until those jobs move here.
 | **`@cognexuslabs/artzain`** | `npm i @cognexuslabs/artzain` | TypeScript SDK — remote-only Node client (`decide`, events, identity) |
 | **`@cognexuslabs/openclaw-artzain`** | `npm i @cognexuslabs/openclaw-artzain` (checkout until the first release) | OpenClaw `before_tool_call` plugin (deny / review / errors block; not `/approve`) |
 | **`@cognexuslabs/n8n-nodes-artzain`** | `npm i @cognexuslabs/n8n-nodes-artzain` (checkout until the first release) | n8n Decision + Envelope nodes (fail closed on HTTP 503; `review` does not Wait) |
+| **`@cognexuslabs/grokbot-artzain`** | `npm i @cognexuslabs/grokbot-artzain` (checkout until the first release) | Grok Bot cooperative Decision skill + opt-in announce (no host intercept) |
 
-All four are Apache-2.0.
+All five are Apache-2.0.
 
 Putting `decide()` into an agent's tool loop (OpenAI or Anthropic)? Start at
 [Gating tool calls](#gating-tool-calls).
@@ -23,10 +24,11 @@ python/       # PyPI package artzain (Hatchling src-layout)
 typescript/   # npm package @cognexuslabs/artzain
 openclaw/     # npm package @cognexuslabs/openclaw-artzain
 n8n/          # npm package @cognexuslabs/n8n-nodes-artzain
+grokbot/      # npm package @cognexuslabs/grokbot-artzain
 ```
 
 Engine dual-home paths (private repo): `pypi-package/`, `sdk/typescript/`,
-`sdk/openclaw/`, `sdk/n8n/`. Seed with `scripts/seed_cognexus_tools.sh` from
+`sdk/openclaw/`, `sdk/n8n/`, `sdk/grokbot/`. Seed with `scripts/seed_cognexus_tools.sh` from
 the engine tree.
 
 ## Python (`artzain`)

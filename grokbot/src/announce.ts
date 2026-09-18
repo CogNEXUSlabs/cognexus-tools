@@ -1,19 +1,19 @@
 /**
- * Opt-in instance announce (plugin v0.2, FR-12 v3 slice 8).
+ * Opt-in instance announce (FR-12 v6 slice 3).
  *
- * With `announce: true`, the plugin POSTs the instance's identity — agent
- * ids and skill slugs, NAMES ONLY, never content or config — to
- * `POST /api/v1/registry/announce` on the same base URL with the same
+ * With `announce: true`, the skill POSTs the instance's identity — agent
+ * ids and skill slugs, NAMES ONLY, never content or `gateway.json` — to
+ * `POST /api/v1/registry/announce` with `source: "grokbot"` and the same
  * Decision API key the gate already holds. This is how laptop/home-lab
- * instances no scanner can reach enter the estate: rows land as source
- * `openclaw` behind the standard sealed registration gate.
+ * hosts no scanner can reach enter the estate: rows land as source
+ * `grokbot` behind the standard sealed registration gate, in the
+ * `grokbot-announce:` namespace (cannot forge a gateway-probed
+ * `{url}#agent:{id}`).
  *
- * Announce is telemetry, not a gate: it fires from the FIRST GATED TOOL
- * CALL (the register hook never sees plugin config), NEVER blocks tool
- * gating, and failures are logged and swallowed — the decision gate's
- * fail-closed contract is untouched. Transient failures (network, 5xx,
- * 429) retry on a later gated call; a refusal (4xx) is a config problem
- * and is not retried until the process restarts.
+ * Announce is telemetry, not a gate: it never blocks a Decision call,
+ * and failures are logged and swallowed. Transient failures (network,
+ * 5xx, 429) retry on a later gated call; a refusal (4xx) is a config
+ * problem and is not retried until the process restarts.
  */
 
 import { resolveApiKey, resolveBaseUrl, type FetchLike } from "./client.js";
@@ -53,17 +53,10 @@ export interface AnnounceResult {
 }
 
 function asString(value: unknown): string {
-  // Runtime config is untrusted (the manifest's "type": "string" is
-  // advisory unless the host enforces it) — a numeric `instance` must
-  // resolve to a logged skip, never a TypeError.
   return typeof value === "string" ? value : "";
 }
 
 function boundName(value: string, maxLen: number): string {
-  // Code-POINT-aware truncation: String.slice cuts UTF-16 code units, and
-  // splitting a surrogate pair (emoji at the boundary) leaves a lone
-  // surrogate the server rightly 422-refuses — which would latch announce
-  // off for the whole process over one long name.
   return Array.from(value.trim()).slice(0, maxLen).join("");
 }
 
@@ -80,10 +73,9 @@ function cleanNames(values: unknown, cap: number): string[] {
   return out;
 }
 
-/** Fire one announce. Never throws — the caller is gate startup.
- * `fallbackAgentId` should be the hook context's agentId when available:
- * the announced identity must match the did stamped on decision leaves,
- * or reconciliation flags the instance's own traffic as unregistered. */
+/** Fire one announce. Never throws — the caller is a Decision gate.
+ * `fallbackAgentId` should be the Bot id when available: the announced
+ * identity must match the did stamped on decision leaves. */
 export async function announceInstance(
   cfg: AnnounceConfig,
   fetchImpl?: FetchLike,
@@ -108,7 +100,7 @@ export async function announceInstance(
     const fallback = boundName(
       asString(fallbackAgentId).trim() ||
         asString(cfg.agentDid).trim() ||
-        "openclaw-gateway",
+        "grokbot-agent",
       MAX_NAME_LEN,
     );
     agents.push(fallback);
@@ -133,7 +125,7 @@ export async function announceInstance(
           "Content-Type": "application/json",
           "X-Api-Key": apiKey,
         },
-        body: JSON.stringify({ instance, agents, skills }),
+        body: JSON.stringify({ source: "grokbot", instance, agents, skills }),
         signal: controller.signal,
       },
     );
@@ -143,12 +135,6 @@ export async function announceInstance(
         (retryable ? " (will retry on a later gated call)" : ""));
       return { ok: false, status: resp.status, reason: `http ${resp.status}`, retryable };
     }
-    // Surface the server's verdict: `deferred > 0` means capacity held rows
-    // back, and they are NOT retried until a re-announce (process restart) —
-    // a bare "ok" here would let that pass silently. `failed > 0` is the
-    // same hazard with a different cause: the catalog could not store the
-    // row, so an announce that looks accepted registered nothing. Both are
-    // counts the server reports and this line must not drop.
     let counts = "";
     try {
       const data = (await resp.json()) as Record<string, unknown>;

@@ -80,3 +80,21 @@ are held by capacity and only submitted again on a re-announce, and
 `failed` rows hit a server-side write error and were not stored at all —
 an announce can be accepted (HTTP 200) and still catalogue nothing, so
 read the counts, not the status.
+
+## Pull enroll (v0.2.5, default on)
+
+Agents that already hold a Decision API key pull their adapter:
+
+```json
+{
+  "enroll": true,
+  "instance": "jeans-laptop",
+  "enrollToken": "<one-shot token from Govern / the snippet pack>"
+}
+```
+
+`enrollToken` is optional. Without it the reply is `{ adapter, decision:
+{ already_have_key: true }, envelope: null }` — never a `cnxe_`. Set
+`enroll: false` to skip. Enroll is telemetry, not a gate: it never blocks
+or delays tool gating. Transient failures retry on a later gated call; a
+4xx means config — fix and restart.

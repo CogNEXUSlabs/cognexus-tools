@@ -38,6 +38,14 @@
         "items": { "type": "string", "maxLength": 200 },
         "maxItems": 100,
         "description": "Skill slugs to announce (names only)."
+      },
+      "enroll": {
+        "type": "boolean",
+        "description": "Pull the kind adapter from POST /api/v1/registry/enroll on the first gated call. Default on; set false to skip. Fire-and-forget; never blocks tool gating. Never returns a cnxe_ key unless enrollToken is set."
+      },
+      "enrollToken": {
+        "type": "string",
+        "description": "One-shot token from Govern / the snippet pack. The only path that returns an envelope key on enroll. Prefer grokbot-artzain enroll --enroll-token on the CLI so the key is printed once on stdout, not the gateway log."
       }
     }
   }
