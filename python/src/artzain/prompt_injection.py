@@ -34,11 +34,12 @@
 #   keywords, so a certificate, key or image read as an encoded
 #   instruction. Variation selectors and bidi controls that hide content are
 #   a token-smuggling finding however the text was serialized (HIGH from four
-#   characters) — see _hidden_character_counts. So are bidi controls that
-#   change the order a person sees (MEDIUM): an LRO or RLO around text it lays
-#   out in the other direction, and a right-to-left isolate or embedding
-#   around text with no right-to-left letter (Trojan Source) — see
-#   _bidi_reordering.
+#   characters) — see _hidden_character_counts. Bidi controls that change
+#   the order a person sees are one too (MEDIUM), in the text as given and in
+#   a tool call's decoded arguments: an LRO or RLO around text of the other
+#   direction, and a right-to-left isolate or embedding around left-to-right
+#   text or digits with no right-to-left letter or digit in it, formatted
+#   amounts and dates aside (Trojan Source) — see _bidi_reordering.
 #   CogNEXUS refuses text holding an unpaired surrogate (a code point in
 #   U+D800-U+DFFF, which json.loads makes from a lone escape): detect()
 #   returns CRITICAL `encoding:unpaired_surrogate` before any other check.
@@ -1056,21 +1057,17 @@ def _hidden_character_counts(text: str) -> tuple[int, int]:
 
 # Bidi controls that change the order a person sees. An override (LRO, RLO)
 # lays out every character in its scope in its own direction, so an RLO shows
-# Latin letters and digits backwards: "invoice", RLO, "fdp.exe" reads as a PDF
-# file and is an executable (Trojan Source, CVE-2021-42574). A right-to-left
-# embedding or isolate (RLE, RLI, or an FSI whose first strong character is a
-# right-to-left mark) lays out the runs of left-to-right text inside it from
-# right to left, so "then", RLI, "''' ;return" shows the return inside the
-# string before it. A model or a tool reads the text in the order it is
-# stored; a person approving it reads the reordered text. Formatters write
-# neither: an LRO goes around a number or other left-to-right text, and an RLE
-# or RLI around text that has right-to-left letters in it.
+# Latin letters and digits backwards and an LRO shows right-to-left words
+# backwards (Trojan Source, CVE-2021-42574). A right-to-left embedding or
+# isolate (RLE, RLI, or an FSI whose first strong character is right to left)
+# lays out the runs of left-to-right text and the groups of digits inside it
+# from right to left. A model or a tool reads the text in the order it is
+# stored; a person reads it as it is laid out. Most of what formatters write is
+# ruled out before any scope is read (see _REORDERING_CANDIDATE_RES).
 _LRO, _RLO, _RLE, _PDF = "\u202d", "\u202e", "\u202b", "\u202c"
 _RLI, _FSI, _PDI = "\u2067", "\u2068", "\u2069"
 _ISOLATE_INITIATORS = "\u2066\u2067\u2068"
-_PARAGRAPH_SEPARATORS = "\n\r\x1c\x1d\x1e\x85\u2029"
 _REORDERING_CONTROL_RE: re.Pattern[str] = re.compile(r"[\u202b\u202d\u202e\u2067]")
-_RTL_MARK_RE: re.Pattern[str] = re.compile(r"[\u200f\u061c]")
 # Where a scope opens, closes or ends. Text laid out line by line (an editor,
 # a <pre> block) makes each line a paragraph, which ends every scope. HTML lays
 # out a line feed or carriage return as a space, and a scope runs on into the
@@ -1078,12 +1075,18 @@ _RTL_MARK_RE: re.Pattern[str] = re.compile(r"[\u200f\u061c]")
 _SCOPE_EVENT_RE: re.Pattern[str] = re.compile(r"[\u202a-\u202e\u2066-\u2069\n\r\x1c-\x1e\x85\u2029]")
 _FOLDED_SCOPE_EVENT_RE: re.Pattern[str] = re.compile(r"[\u202a-\u202e\u2066-\u2069\x1c-\x1e\x85\u2029]")
 _SCOPE_OPENER_RE: re.Pattern[str] = re.compile(r"[\u202a\u202b\u202d\u202e\u2066-\u2068]")
-# The direction of a strong bidi class: left to right, right to left, or a
-# number (EN, AN), which an RLO turns around as well.
-_BIDI_DIRECTION = {"L": 0, "R": 1, "AL": 1, "EN": 2, "AN": 2}
-# The right-to-left blocks of the Basic Multilingual Plane and past it. Every
-# character of bidi class R or AL is in one of them, the RLM aside.
-_RTL_BLOCKS = ((0x0590, 0x08FF), (0xFB1D, 0xFDCF), (0xFDF0, 0xFEFF))
+# What a character is to these rules, as bits: a visible character of bidi
+# class L; a visible character of class EN or AN (a digit, or a sign or
+# separator of those classes); a visible letter or digit of class R or AL;
+# a character of class L, visible or not; one of class R or AL. The last two
+# decide an FSI's direction. Only letters and digits make text right-to-left
+# text: an LRO around a currency sign or a punctuation mark misleads nobody, and
+# a right-to-left scope around Latin text and one such sign still reorders it.
+_LTR, _DIGIT, _RTL_ALNUM, _L_STRONG, _RTL_STRONG = 1, 2, 4, 8, 16
+# The right-to-left blocks, where Unicode puts right-to-left scripts: in its
+# data (16.0 in Python 3.14) every character of class R or AL is in one of them
+# or in _ASTRAL_RTL_BLOCKS, the RLM aside.
+_RTL_BLOCKS = ((0x0590, 0x08FF), (0xFB1D, 0xFDCF), (0xFDF0, 0xFDFF), (0xFE70, 0xFEFF))
 _ASTRAL_RTL_BLOCKS = r"\U00010800-\U00010fff\U0001e800-\U0001efff"
 
 
@@ -1100,121 +1103,321 @@ def _rtl_block_ranges(keep: Callable[[str], bool]) -> str:
     return "".join(f"\\u{first:04x}-\\u{last:04x}" for first, last in ranges)
 
 
-# For the patterns below: visible right-to-left letters of the Basic
-# Multilingual Plane, and every character of the right-to-left blocks but the
-# digits (AN, EN), which an LRO leaves as they are. A class stays in the Basic
-# Multilingual Plane where it can: there it is a bitmap, while every range past
-# it is checked one by one.
-_RTL_LETTERS = _rtl_block_ranges(lambda char: unicodedata.bidirectional(char) in ("R", "AL") and char != "\u061c")
-_RTL_BUT_DIGITS = _rtl_block_ranges(lambda char: unicodedata.bidirectional(char) not in ("AN", "EN")) + _ASTRAL_RTL_BLOCKS
+# Regex classes. A class stays in the Basic Multilingual Plane where it can:
+# there it is a bitmap, while each range past it is tested in turn. A class
+# for a set with members past the plane takes the astral right-to-left blocks
+# whole, and a character matched there is looked up. A code point this
+# Python's Unicode data leaves unassigned takes its block's default class in
+# UAX #9 (DerivedBidiClass), R or AL throughout these blocks: it counts as
+# right to left, and as neither a letter nor a digit.
+_RTL_ALNUMS = _rtl_block_ranges(
+    lambda char: unicodedata.bidirectional(char) in ("R", "AL") and unicodedata.category(char)[0] in "LN"
+)
+_RTL_SIGNS = _rtl_block_ranges(
+    lambda char: unicodedata.bidirectional(char) in ("R", "AL") and unicodedata.category(char)[0] not in "LN"
+    or unicodedata.category(char) == "Cn"
+)
+_RTL_ALNUM_RE: re.Pattern[str] = re.compile(f"[{_RTL_ALNUMS}{_ASTRAL_RTL_BLOCKS}]")
+_RTL_SIGN_RE: re.Pattern[str] = re.compile(f"[{_RTL_SIGNS}{_ASTRAL_RTL_BLOCKS}\\u200f]")
+_RTL_STRONG_RE: re.Pattern[str] = re.compile(f"[{_RTL_ALNUMS}{_RTL_SIGNS}{_ASTRAL_RTL_BLOCKS}\\u200f]")
+_ASCII_LTR_OR_DIGIT_RE: re.Pattern[str] = re.compile(r"[A-Za-z0-9]")
+_ASCII_LETTER_RE: re.Pattern[str] = re.compile(r"[A-Za-z]")
 _CONTROLS = r"\u202a-\u202e\u2066-\u2069"
 _SEPARATORS = r"\x1c-\x1e\x85\u2029"
-# For each opener, where its scope might change the order a person sees: the
-# openers these patterns do not match cannot, and a text without a match is not
-# walked. Formatters close what they open around text of one direction, which
-# rules them out: an LRO closed on its line around text with no right-to-left
-# letter; an RLO closed around right-to-left letters, spaces and ASCII
-# punctuation; an RLE or RLI with a right-to-left letter before the next control
-# or line break; an FSI with a right-to-left letter, an ASCII letter or an LRM
-# before any right-to-left mark or control, or with none before the paragraph
-# ends.
+# An opener not followed by text with no bidi control and then the closer of
+# its kind. With nothing open, the openers before the first one are each closed
+# before the next control: reading them leaves nothing open in either layout,
+# and changes nothing unless one of them is in question.
+_UNCLOSED_OPENER_RE: re.Pattern[str] = re.compile(
+    rf"[\u202a\u202b\u202d\u202e](?![^{_CONTROLS}]*\u202c)|[\u2066-\u2068](?![^{_CONTROLS}]*\u2069)"
+)
+# A value that is one number with at most one short token before or after it
+# (a currency sign or code, a unit of one or two words, a GMT or UTC offset):
+# what locale formatting writes inside an RLE, RLI or FSI, with bidi marks,
+# spaces, a sign and an accounting parenthesis. Laid out right to left, the
+# token and the number trade places and a sign or parenthesis moves to the
+# number's other side, while the digits keep their order: a common separator
+# between two digits of one type joins them into one run (UAX #9, W4), and
+# letters glued to the digits (a compact 1.2M) stay beside them. A run of
+# digits and a word are each taken whole, and every part is bounded, so
+# matching after an opener takes a small, bounded number of steps.
+_MARKS_RUN = r"[\u200e\u200f\u061c]{0,2}"
+_SPACE = r"[ \u00a0\u202f]"
+_SIGN = r"[+\-\u2212]"
+_EUROPEAN_DIGITS = r"0-9\u06f0-\u06f9"
+_ARABIC_DIGITS = r"\u0660-\u0669\u066b\u066c"
+_COMMON_SEPARATORS = r".,:/\u00a0\u202f\u060c"
+_DIGIT_RUN = rf"[{_EUROPEAN_DIGITS}{_ARABIC_DIGITS}]{{1,48}}(?![{_EUROPEAN_DIGITS}{_ARABIC_DIGITS}])"
+_NUMBER = (
+    rf"(?:{_SIGN}{_MARKS_RUN})?{_DIGIT_RUN}"
+    rf"(?:(?:(?<=[{_EUROPEAN_DIGITS}])[{_COMMON_SEPARATORS}](?=[{_EUROPEAN_DIGITS}])"
+    rf"|(?<=[{_ARABIC_DIGITS}])[{_COMMON_SEPARATORS}](?=[{_ARABIC_DIGITS}])){_DIGIT_RUN}){{0,16}}"
+    rf"(?:[A-Za-z]{{1,3}}(?![A-Za-z]))?"
+)
+_WORD_CHARS = rf"^\s\d\u066b\u066c(){_CONTROLS}\u200e\u200f\u061c"
+_WORD = rf"[{_WORD_CHARS}]{{1,4}}(?![{_WORD_CHARS}])"
+_TOKEN = rf"(?:{_WORD}(?:{_SPACE}{_WORD})?|(?:GMT|UTC){_SIGN}[0-9]{{1,2}}(?::[0-9]{{2}})?)"
+_AMOUNT = (
+    rf"(?:{_MARKS_RUN}\()?{_MARKS_RUN}(?:(?:{_SIGN}{_MARKS_RUN})?{_TOKEN}{_SPACE}?{_MARKS_RUN}{_NUMBER}"
+    rf"|{_NUMBER}(?:{_MARKS_RUN}(?:{_SPACE}{_MARKS_RUN})?{_TOKEN})?){_MARKS_RUN}(?:\){_MARKS_RUN})?"
+)
+# A date as date formatting writes it for right-to-left locales, its groups
+# joined by a right-to-left mark and a separator: day and month, month and
+# year, or day, month and a two- or four-digit year, with a time after it or
+# not ("d\u200f/M\u200f/y\u060c h:mm"). Laid out right to left, the
+# groups come out in the other order, and the date and the time trade places.
+_DATE_DIGITS = r"0-9\u0660-\u0669\u06f0-\u06f9"
+_DATE_SEPARATOR = r"(?:[\u200f\u061c][/.\-]|[/.\-][\u200f\u061c])"
+_DATE = (
+    rf"{_MARKS_RUN}[{_DATE_DIGITS}]{{1,2}}{_DATE_SEPARATOR}"
+    rf"(?:[{_DATE_DIGITS}]{{1,2}}(?:{_DATE_SEPARATOR}(?:[{_DATE_DIGITS}]{{4}}|[{_DATE_DIGITS}]{{2}}))?|[{_DATE_DIGITS}]{{4}})"
+    rf"(?![{_DATE_DIGITS}])(?:[\u060c,]?{_SPACE}{_MARKS_RUN}[{_DATE_DIGITS}]{{1,2}}:[{_DATE_DIGITS}]{{2}}(?::[{_DATE_DIGITS}]{{2}})?)?"
+    rf"{_MARKS_RUN}"
+)
+# For each opener, whether a rule could match its scope: the openers these
+# patterns do not match cannot. The patterns rule out less than the rules
+# would: they give up at other bidi controls and at line breaks, and know only
+# the Basic Multilingual Plane's letters and digits. Ruled out:
+# - an LRO closed on its line around text with no right-to-left letter or digit;
+# - an RLO closed around right-to-left characters, spaces and ASCII punctuation;
+# - an RLE, RLI or FSI with a right-to-left letter or digit before the next
+#   control or line break, or closed around one formatted amount or date
+#   (_AMOUNT, _DATE);
+# - an FSI whose first strong character, as far as these classes tell, is not
+#   right to left: an ASCII letter, an LRM or a right-to-left letter or digit
+#   before any other right-to-left character and any isolate, or none of those
+#   before its PDI, a paragraph separator other than a line break, or the end
+#   of the text.
 _REORDERING_CANDIDATE_RES: dict[str, re.Pattern[str]] = {
-    _LRO: re.compile(rf"\u202d(?![^{_CONTROLS}\n\r{_SEPARATORS}{_RTL_BUT_DIGITS}]*\u202c)"),
-    _RLO: re.compile(rf"\u202e(?![{_RTL_LETTERS} \t!-/:-@\[-`{{-~]*\u202c)"),
-    _RLE: re.compile(rf"\u202b(?=[^{_CONTROLS}\n\r{_SEPARATORS}{_RTL_LETTERS}]*(?:[{_CONTROLS}\n\r{_SEPARATORS}]|\Z))"),
-    _RLI: re.compile(rf"\u2067(?=[^{_CONTROLS}\n\r{_SEPARATORS}{_RTL_LETTERS}]*(?:[{_CONTROLS}\n\r{_SEPARATORS}]|\Z))"),
-    _FSI: re.compile(rf"\u2068(?=[^{_CONTROLS}{_SEPARATORS}{_RTL_LETTERS}A-Za-z\u200e\u200f\u061c]*[{_CONTROLS}\u200f\u061c])"),
+    _LRO: re.compile(rf"\u202d(?![^{_CONTROLS}\n\r{_SEPARATORS}{_RTL_ALNUMS}{_ASTRAL_RTL_BLOCKS}]*\u202c)"),
+    _RLO: re.compile(rf"\u202e(?![{_RTL_ALNUMS}{_RTL_SIGNS} \t!-/:-@\[-`{{-~]*\u202c)"),
+    _RLE: re.compile(
+        rf"\u202b(?=[^{_CONTROLS}\n\r{_SEPARATORS}{_RTL_ALNUMS}]*(?:[{_CONTROLS}\n\r{_SEPARATORS}]|\Z))"
+        rf"(?!(?:{_AMOUNT}|{_DATE})\u202c)"
+    ),
+    _RLI: re.compile(
+        rf"\u2067(?=[^{_CONTROLS}\n\r{_SEPARATORS}{_RTL_ALNUMS}]*(?:[{_CONTROLS}\n\r{_SEPARATORS}]|\Z))"
+        rf"(?!(?:{_AMOUNT}|{_DATE})\u2069)"
+    ),
+    _FSI: re.compile(
+        rf"\u2068(?=[^{_CONTROLS}\n\r{_SEPARATORS}{_RTL_ALNUMS}]*(?:[{_CONTROLS}\n\r{_SEPARATORS}]|\Z))"
+        rf"(?=[^\u2066-\u2069{_SEPARATORS}{_RTL_ALNUMS}{_RTL_SIGNS}{_ASTRAL_RTL_BLOCKS}A-Za-z\u200e\u200f]*"
+        rf"[{_RTL_SIGNS}{_ASTRAL_RTL_BLOCKS}\u200f\u2066-\u2068])"
+        rf"(?!(?:{_AMOUNT}|{_DATE})\u2069)"
+    ),
 }
-# The most bidi controls and line breaks read inside open scopes in one text,
-# about 50 ms of reading. Past it, each rule with an opener still in question
-# is taken to have matched.
-_BIDI_SCOPE_EVENTS = 20_000
+# The most work spent reading scopes in one text: each bidi control and line
+# break read costs 2, each character looked up 1, which take about as long.
+# Past it, every rule with an opener in question where reading stopped, still
+# open there or further on, is taken to have matched; and if a line break had
+# closed an open scope before reading stopped, every opener in question
+# anywhere in the text counts, since the other layout was not read.
+_BIDI_SCOPE_WORK = 50_000
+_EVENT_WORK = 2
 
 
-def _directions(segment: str, known: dict[str, int]) -> tuple[bool, bool, bool]:
-    """``(ltr, rtl, number)``: whether *segment* has a visible character of bidi class L, of R or AL, of EN or AN.
+def _bidi_bits(char: str) -> int:
+    """What *char* is to the bidi reordering rules, as _LTR, _DIGIT, _RTL_ALNUM, _L_STRONG and _RTL_STRONG bits."""
+    kind = unicodedata.bidirectional(char)
+    if kind == "L":
+        bits = _L_STRONG
+    elif kind in ("R", "AL"):
+        bits = _RTL_STRONG
+    elif kind not in ("EN", "AN"):
+        # Unassigned: right to left in a right-to-left block (see _RTL_SIGNS).
+        return _RTL_STRONG if not kind and _RTL_STRONG_RE.match(char) else 0
+    else:
+        bits = 0
+    if _INVISIBLE_RE.match(char):
+        return bits
+    if kind == "L":
+        return bits | _LTR
+    if not bits:
+        return _DIGIT
+    return bits | _RTL_ALNUM if unicodedata.category(char)[0] in "LN" else bits
 
-    *known* keeps each character's direction (-1 for none) for the next segment.
+
+def _any_bits(text: str, start: int, end: int, wanted: int, known: dict[str, int], limit: int) -> tuple[bool, int]:
+    """Whether a character of ``text[start:end]`` has one of the *wanted* bits, and how many characters were looked up.
+
+    The text is read in blocks of 4,096 characters, each as the set of its
+    characters. Past *limit* lookups it stops, with ``(False, limit + 1)``.
     """
-    ltr = rtl = number = False
-    for char in set(segment) if len(segment) > 16 else segment:
-        direction = known.get(char)
-        if direction is None:
-            direction = _BIDI_DIRECTION.get(unicodedata.bidirectional(char), -1)
-            if direction >= 0 and _INVISIBLE_RE.match(char):
-                direction = -1
-            known[char] = direction
-        if direction == 0:
-            ltr = True
-        elif direction == 1:
-            rtl = True
-        elif direction == 2:
-            number = True
-    return ltr, rtl, number
+    looked = 0
+    for block in range(start, end, 4096):
+        chunk = text[block:min(end, block + 4096)]
+        for char in set(chunk) if len(chunk) > 16 else chunk:
+            looked += 1
+            if looked > limit:
+                return False, looked
+            bits = known.get(char)
+            if bits is None:
+                bits = known[char] = _bidi_bits(char)
+            if bits & wanted:
+                return True, looked
+    return False, looked
 
 
-def _starts_right_to_left(segment: str) -> bool | None:
-    """Whether a first-strong isolate whose first text with a strong character is *segment* is right to left.
+def _has_rtl_alnum(text: str, start: int, end: int, known: dict[str, int], limit: int) -> tuple[bool, int]:
+    """Whether ``text[start:end]`` has a visible right-to-left letter or digit, and how many characters were looked up (see _any_bits)."""
+    looked = 0
+    for match in _RTL_ALNUM_RE.finditer(text, start, end):
+        char = match.group()
+        if char < "\U00010000":
+            return True, looked
+        looked += 1
+        if looked > limit:
+            return False, looked
+        bits = known.get(char)
+        if bits is None:
+            bits = known[char] = _bidi_bits(char)
+        if bits & _RTL_ALNUM:
+            return True, looked
+    return False, looked
 
-    True when a right-to-left mark (RLM, ALM) comes before every character of
-    bidi class L, False when one of those comes first, None when *segment* has
-    neither. Only called for text without a visible right-to-left letter.
+
+def _first_strong_is_rtl(
+    text: str, start: int, end: int, known: dict[str, int], limit: int,
+) -> tuple[bool | None, int]:
+    """Whether the first character of class L, R or AL in ``text[start:end]`` is right to left, and how many characters were looked up (see _any_bits).
+
+    None when there is no such character.
     """
-    mark = _RTL_MARK_RE.search(segment)
-    before = segment[:mark.start()] if mark else segment
-    if any(unicodedata.bidirectional(char) == "L" for char in set(before)):
-        return False
-    return True if mark else None
+    looked = 0
+    stop = end
+    for match in _RTL_STRONG_RE.finditer(text, start, end):
+        char = match.group()
+        if char >= "\U00010000":
+            looked += 1
+            if looked > limit:
+                return None, looked
+            bits = known.get(char)
+            if bits is None:
+                bits = known[char] = _bidi_bits(char)
+            if not bits & _RTL_STRONG:
+                continue
+        stop = match.start()
+        break
+    if _ASCII_LETTER_RE.search(text, start, stop):
+        return False, looked
+    found, more = _any_bits(text, start, stop, _L_STRONG, known, limit - looked)
+    if found:
+        return False, looked + more
+    return (True if stop < end else None), looked + more
 
 
-def _reordered_scopes(text: str, events: re.Pattern[str], fsi: bool, budget: int) -> tuple[bool, bool, bool, int]:
-    """``(override, rtl_over_ltr, cut, read)`` for *text*, with scopes opening, closing and ending where *events* matches.
+class _Candidates:
+    """The openers in question in *text* (see _REORDERING_CANDIDATE_RES), found in order: each pattern searches each stretch of text once."""
+
+    def __init__(self, text: str, fsi: bool) -> None:
+        self.text = text
+        # For each opener still looked for, the next one in question found.
+        self.found = {control: -1 for control in _REORDERING_CANDIDATE_RES if fsi or control != _FSI}
+
+    def _next(self, control: str, position: int) -> int:
+        found = self.found[control]
+        if found < position:
+            match = _REORDERING_CANDIDATE_RES[control].search(self.text, position)
+            found = self.found[control] = match.start() if match else len(self.text)
+        return found
+
+    def at(self, control: str, position: int) -> bool:
+        """Whether the opener *control* at *position* is in question."""
+        return control in self.found and self._next(control, position) == position
+
+    def next_from(self, position: int) -> int:
+        """Where the first opener in question at or after *position* is, or the length of the text."""
+        nearest = len(self.text)
+        for control in self.found:
+            nearest = min(nearest, self._next(control, position))
+        return nearest
+
+    def settle(self, override: bool, rtl_over_ltr: bool) -> None:
+        """Stop looking for the openers of the rules that have matched."""
+        for control in (_LRO, _RLO) if override else ():
+            self.found.pop(control, None)
+        for control in (_RLE, _RLI, _FSI) if rtl_over_ltr else ():
+            self.found.pop(control, None)
+
+
+def _reordered_scopes(
+    text: str, events: re.Pattern[str], candidates: _Candidates, budget: int, known: dict[str, int],
+) -> tuple[bool, bool, bool, int, int | None, set[str]]:
+    """``(override, rtl_over_ltr, cut, work, stopped, open_kinds)`` for *text*, with scopes opening, closing and ending where *events* matches.
 
     Scopes pair as the bidirectional algorithm pairs them (UAX #9, X1-X8): a
     PDF closes the last embedding or override inside the current isolate, a
     PDI closes the last isolate and whatever is still open inside it, and a
     paragraph separator closes everything. A scope holds all the text up to its
     end, nested isolates and embeddings included: an RLO around isolated words
-    still lays the words out from right to left. Only openers that
-    _REORDERING_CANDIDATE_RES matches are checked (an FSI only when *fsi*), and
-    the text between two events is read once, while one of them is open.
-    *cut*: a line break closed an open scope. *read*: the events read, which
-    stops past *budget*.
+    still lays the words out from right to left. A scope opened inside 125
+    others formats nothing and is not checked; below that the algorithm's
+    embedding levels may already have run out (after 62 left-to-right or 63
+    right-to-left openers), and the scope is checked anyway. Only openers in question
+    (*candidates*) are checked, and only for a rule that has not matched yet;
+    with nothing open, reading skips openers each closed before the next
+    control, and stops once none in question is left. The text between two events
+    is read once, while a checked scope is open. *cut*: a line break closed an
+    open scope. *work*: what reading cost (see _BIDI_SCOPE_WORK). Past
+    *budget*, *stopped* is where reading stopped and *open_kinds* the checked
+    openers still open there that could still match.
     """
     override = rtl_over_ltr = cut = False
-    known: dict[str, int] = {}
     # Open scopes, innermost last, as (control, checked, the segments with
-    # left-to-right and with right-to-left letters read before it opened). A
-    # scope past the deepest nesting formats nothing and is not checked. For
-    # each open isolate, its state: 1 for a checked RLI; for a checked FSI, 0
-    # until its first strong character is read, then 1 when that is a
-    # right-to-left mark; None when there is nothing to check.
+    # left-to-right letters or digits, and with right-to-left letters or
+    # digits, read before it opened). For each open isolate, its state: 1 for a
+    # checked RLI; for a checked FSI, 0 until its first strong character is
+    # read, then 1 when that is right to left; None when there is nothing to
+    # check.
     stack: list[tuple[str, bool, int, int]] = []
     isolate_states: list[int | None] = []
-    rlo = lro = watched = ltr_segments = rtl_segments = read = 0
+    rlo = lro = watched = ltr_segments = rtl_segments = work = 0
     search, find_opener = events.search, _SCOPE_OPENER_RE.search
     position = 0
     while not (override and rtl_over_ltr):
-        # With nothing open, closers and separators change nothing.
-        match = search(text, position) if stack else find_opener(text, position)
+        if stack:
+            match = search(text, position)
+        else:
+            # With nothing open, closers and separators change nothing, and
+            # neither do openers each closed before the next control.
+            nearest = candidates.next_from(position)
+            if nearest == len(text):
+                break
+            unclosed = _UNCLOSED_OPENER_RE.search(text, position, nearest)
+            match = find_opener(text, unclosed.start() if unclosed else nearest)
         end = match.start() if match else len(text)
         if (rlo or lro or watched) and end > position:
-            segment = text[position:end]
-            ltr, rtl, number = _directions(segment, known)
-            if rlo and (ltr or number) or lro and rtl:
+            ltr = rtl = False
+            if rlo and not override or watched:
+                ltr = _ASCII_LTR_OR_DIGIT_RE.search(text, position, end) is not None
+                if not ltr:
+                    ltr, looked = _any_bits(text, position, end, _LTR | _DIGIT, known, budget - work)
+                    work += looked
+            if lro and not override or watched:
+                rtl, looked = _has_rtl_alnum(text, position, end, known, budget - work)
+                work += looked
+            if (rlo and ltr or lro and rtl) and not override:
                 override = True
+                candidates.settle(override, rtl_over_ltr)
             ltr_segments += ltr
             rtl_segments += rtl
-            if isolate_states and isolate_states[-1] == 0:
-                starts = False if rtl else _starts_right_to_left(segment)
+            if isolate_states and isolate_states[-1] == 0 and work <= budget:
+                if rtl:
+                    starts = False
+                else:
+                    starts, looked = _first_strong_is_rtl(text, position, end, known, budget - work)
+                    work += looked
                 if starts is not None:
                     isolate_states[-1] = 1 if starts else None
                     watched -= not starts
+            if work > budget:
+                # Stopped inside the text between two events.
+                return override, rtl_over_ltr, cut, work, position, _open_kinds(stack, isolate_states, rtl_segments)
         if match is None:
             break
-        read += 1
-        if read > budget:
-            break
+        work += _EVENT_WORK
+        if work > budget:
+            return override, rtl_over_ltr, cut, work, end, _open_kinds(stack, isolate_states, rtl_segments)
         control = match.group()
         position = end + 1
         if control in _PARAGRAPH_SEPARATORS or control == _PDI or control == _PDF:
@@ -1241,14 +1444,11 @@ def _reordered_scopes(text: str, events: re.Pattern[str], fsi: bool, budget: int
                     lro -= 1
                 elif state is not None:
                     watched -= 1
-                    if state == 1 and ltr_segments > ltr_before and rtl_segments == rtl_before:
+                    if state == 1 and ltr_segments > ltr_before and rtl_segments == rtl_before and not rtl_over_ltr:
                         rtl_over_ltr = True
+                        candidates.settle(override, rtl_over_ltr)
         else:
-            candidate = _REORDERING_CANDIDATE_RES.get(control)
-            checked = (
-                candidate is not None and len(stack) < _BIDI_MAX_DEPTH and (fsi or control != _FSI)
-                and candidate.match(text, end) is not None
-            )
+            checked = len(stack) < _BIDI_MAX_DEPTH and candidates.at(control, end)
             stack.append((control, checked, ltr_segments, rtl_segments))
             if checked:
                 rlo += control == _RLO
@@ -1262,34 +1462,57 @@ def _reordered_scopes(text: str, events: re.Pattern[str], fsi: bool, budget: int
         if checked and opener not in (_RLO, _LRO) and state == 1:
             if ltr_segments > ltr_before and rtl_segments == rtl_before:
                 rtl_over_ltr = True
-    return override, rtl_over_ltr, cut, read
+    return override, rtl_over_ltr, cut, work, None, set()
+
+
+def _open_kinds(stack: list[tuple[str, bool, int, int]], isolate_states: list[int | None], rtl_segments: int) -> set[str]:
+    """The checked openers in *stack* that could still match: an override, or a scope with no right-to-left letter or digit read yet."""
+    kinds: set[str] = set()
+    states = iter(isolate_states)
+    for opener, checked, _, rtl_before in stack:
+        state = next(states) if opener in _ISOLATE_INITIATORS else 1
+        if checked and (opener in (_RLO, _LRO) or state is not None and rtl_segments == rtl_before):
+            kinds.add(opener)
+    return kinds
 
 
 def _bidi_reordering(text: str) -> tuple[bool, bool]:
     """``(override, rtl_over_ltr)``: whether bidi controls in *text* change the order a person sees.
 
-    *override*: an LRO or RLO whose scope holds a visible character it turns
-    around, of bidi class L, EN or AN for an RLO and R or AL for an LRO.
-    *rtl_over_ltr*: an RLE, an RLI, or an FSI made right to left by a mark,
-    whose scope holds a visible character of class L and none of class R or AL.
-    Scopes are read with each line a paragraph and, when a line break closed an
-    open scope, again with line breaks laid out as spaces (see _SCOPE_EVENT_RE).
+    *override*: an LRO or RLO whose scope holds a visible character of the
+    other direction: of bidi class L, EN or AN under an RLO, a letter or digit
+    of class R or AL under an LRO. *rtl_over_ltr*: an RLE, an RLI, or an FSI
+    whose first strong character is right to left, whose scope holds a visible
+    character of class L, EN or AN and no letter or digit of class R or AL,
+    and is not one formatted amount or date. Scopes are read with each
+    line a paragraph and, when a line break closed an open scope, again with
+    line breaks laid out as spaces (see _SCOPE_EVENT_RE).
     """
-    fsi = _FSI in text and _RTL_MARK_RE.search(text) is not None
+    fsi = _FSI in text and _RTL_SIGN_RE.search(text) is not None
     if not (fsi or _REORDERING_CONTROL_RE.search(text)):
         return False, False
-    in_question = {
-        control for control, candidate in _REORDERING_CANDIDATE_RES.items()
-        if (fsi or control != _FSI) and control in text and candidate.search(text)
-    }
-    if not in_question:
+    candidates = _Candidates(text, fsi)
+    if candidates.next_from(0) == len(text):
         return False, False
-    override, rtl_over_ltr, cut, read = _reordered_scopes(text, _SCOPE_EVENT_RE, fsi, _BIDI_SCOPE_EVENTS)
-    if cut and read <= _BIDI_SCOPE_EVENTS and not (override and rtl_over_ltr):
-        folded = _reordered_scopes(text, _FOLDED_SCOPE_EVENT_RE, fsi, _BIDI_SCOPE_EVENTS - read)
-        override, rtl_over_ltr, read = override or folded[0], rtl_over_ltr or folded[1], read + folded[3]
-    if read > _BIDI_SCOPE_EVENTS:
-        # Too many controls to read every scope.
+    known: dict[str, int] = {}
+    override, rtl_over_ltr, cut, work, stopped, open_kinds = _reordered_scopes(
+        text, _SCOPE_EVENT_RE, candidates, _BIDI_SCOPE_WORK, known,
+    )
+    if stopped is None and cut and not (override and rtl_over_ltr):
+        candidates = _Candidates(text, fsi)
+        candidates.settle(override, rtl_over_ltr)
+        folded = _reordered_scopes(text, _FOLDED_SCOPE_EVENT_RE, candidates, _BIDI_SCOPE_WORK - work, known)
+        override, rtl_over_ltr = override or folded[0], rtl_over_ltr or folded[1]
+        stopped, open_kinds = folded[4], folded[5]
+    elif stopped is not None and cut:
+        # A line break had closed an open scope, and the other layout was not
+        # read at all.
+        stopped, open_kinds = 0, set()
+    if stopped is not None:
+        in_question = set(open_kinds)
+        for control, candidate in _REORDERING_CANDIDATE_RES.items():
+            if (fsi or control != _FSI) and candidate.search(text, stopped):
+                in_question.add(control)
         override = override or bool(in_question & {_LRO, _RLO})
         rtl_over_ltr = rtl_over_ltr or bool(in_question - {_LRO, _RLO})
     return override, rtl_over_ltr

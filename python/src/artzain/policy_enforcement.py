@@ -428,13 +428,28 @@ def builtin_conduct_rules() -> list[ClientPolicyRule]:
     ]
 
 
-def evaluate_conduct(text: str) -> list[PolicyEnforcementFinding]:
-    """Detect profanity / abuse directed at clients (policy infraction)."""
+def evaluate_conduct(
+    text: str,
+    *,
+    client_context: Optional[bool] = None,
+) -> list[PolicyEnforcementFinding]:
+    """Detect profanity / abuse directed at clients (policy infraction).
+
+    Profanity is a client finding when the text names a client (a word such as
+    customer, client or account) or aims the abuse at the reader. A caller
+    that knows the client words in *text* name no client passes
+    ``client_context=False``, and the text then names none: a tool call's
+    argument names and tool name are part of its serialized text, and
+    :func:`artzain.tool_call_contract.conduct_client_context` is False when
+    they hold its only client words. ``None`` or ``True`` leave the text's own
+    client words to decide; the argument never adds a client the text does
+    not name.
+    """
     if not text or not text.strip():
         return []
     findings: list[PolicyEnforcementFinding] = []
     profane = bool(_CONDUCT_PROFANITY.search(text))
-    client_ctx = bool(_CLIENT_CONTEXT.search(text))
+    client_ctx = client_context is not False and bool(_CLIENT_CONTEXT.search(text))
     directed = bool(_DIRECTED_ABUSE.search(text))
     if profane and (client_ctx or directed):
         findings.append(
@@ -537,7 +552,14 @@ class PolicyEnforcementEvaluator:
         self,
         text: str,
         rules: Sequence[ClientPolicyRule],
+        *,
+        client_context: Optional[bool] = None,
     ) -> PolicyEnforcementReport:
+        """Screen *text* against *rules*, and against the conduct rules unless *rules* is empty.
+
+        *client_context* is passed to :func:`evaluate_conduct`: ``False`` says
+        the client words in *text* name no client.
+        """
         if not text or not rules:
             return PolicyEnforcementReport(
                 violation_count=0,
@@ -578,7 +600,7 @@ class PolicyEnforcementEvaluator:
                         continue
                     findings.append(finding)
                     break
-        conduct = evaluate_conduct(text)
+        conduct = evaluate_conduct(text, client_context=client_context)
         if conduct:
             seen_ids = {f.rule_id for f in findings}
             for f in conduct:

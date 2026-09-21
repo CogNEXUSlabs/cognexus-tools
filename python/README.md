@@ -64,10 +64,12 @@ PII screens read the serialized call, and every string in it as the tool
 receives them: JSON-decoded, including JSON inside a string such as a
 stringified `arguments`. The destructive-action screen reads each string on
 its own; the others read the strings together, so one argument can change the
-result for another. The PII screen runs on the engine only. A line of only
-`---` or three backticks in an argument comes back `review`; inline base64 or
-escape sequences written out as text can come back `deny`. Parse arguments
-with a strict JSON parser and send the parsed call, as the examples do. The
+result for another. The conduct rules count a client word in any value of the
+call; an argument or tool name counts only when it holds the profanity as
+well. The PII screen runs on the engine only. A line of only `---` or three
+backticks in an argument comes back `review`; inline base64 or escape
+sequences written out as text can come back `deny`. Parse arguments with a
+strict JSON parser and send the parsed call, as the examples do. The
 destructive-action screen also reads a list of strings joined, as an argv list
 runs, but a command a tool assembles from separate fields (a `cmd` beside its
 `args`) is not seen whole: screen that command inside the step as well
