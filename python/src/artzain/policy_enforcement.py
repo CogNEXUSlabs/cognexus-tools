@@ -35,6 +35,21 @@ _POLICY_SIGNAL = re.compile(
     re.IGNORECASE,
 )
 
+# Half of a UTF-16 surrogate pair (U+D800-U+DFFF), which ``json.loads`` makes
+# from a lone escape. No UTF-8 encoder accepts one: whoever reads the text next
+# drops it, replaces it or rejects the text, so a rule match on the text as
+# given cannot say what they read.
+_UNPAIRED_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
+
+#: Rule id of the critical finding for text that is not valid Unicode.
+UNPAIRED_SURROGATE_RULE_ID = "INPUT-UNPAIRED-SURROGATE"
+
+
+def _text_hash(text: str) -> str:
+    """First 16 hex digits of SHA-256 over *text*, ``surrogatepass`` so it cannot raise."""
+    return hashlib.sha256((text or "").encode("utf-8", "surrogatepass")).hexdigest()[:16]
+
+
 _STOPWORDS = frozenset({
     "that", "this", "with", "from", "have", "been", "were", "will", "your",
     "their", "when", "unless", "only", "such", "into", "about", "should",
@@ -302,7 +317,7 @@ def extract_rules_from_document(
         title = " ".join(title_words[:10])
         if len(title) > 72:
             title = title[:69] + "…"
-        rid = hashlib.sha256(f"{ref}:{sent}".encode()).hexdigest()[:16]
+        rid = hashlib.sha256(f"{ref}:{sent}".encode("utf-8", "surrogatepass")).hexdigest()[:16]
         sev = "high" if re.search(
             r"\b(critical|pii|phi|personal data|indemnity|uncapped)\b", sent, re.I
         ) else "medium"
@@ -528,7 +543,7 @@ class PolicyEnforcementEvaluator:
                 violation_count=0,
                 findings=[],
                 rules_checked=len(rules) if rules else 0,
-                text_hash=hashlib.sha256((text or "").encode()).hexdigest()[:16],
+                text_hash=_text_hash(text),
             )
         findings: list[PolicyEnforcementFinding] = []
         suppressed: list[PolicyEnforcementFinding] = []
@@ -570,11 +585,26 @@ class PolicyEnforcementEvaluator:
                 if f.rule_id not in seen_ids:
                     findings.append(f)
                     seen_ids.add(f.rule_id)
+        surrogate = _UNPAIRED_SURROGATE_RE.search(text)
+        if surrogate:
+            # Reported first, whatever a rule with the same id matched.
+            findings.insert(0, PolicyEnforcementFinding(
+                rule_id=UNPAIRED_SURROGATE_RULE_ID,
+                rule_title="Text is not valid Unicode",
+                category="input_validation",
+                severity="critical",
+                matched_pattern="unpaired_surrogate",
+                summary=(
+                    f"The text holds an unpaired surrogate (U+{ord(surrogate.group()):04X}). "
+                    "Whoever reads it next drops, replaces or rejects that character, "
+                    "so the rules cannot say what they read; the text is blocked."
+                ),
+            ))
         return PolicyEnforcementReport(
             violation_count=len(findings),
             findings=findings,
             rules_checked=len(rules) + len(builtin_conduct_rules()),
-            text_hash=hashlib.sha256(text.encode()).hexdigest()[:16],
+            text_hash=_text_hash(text),
             suppressed=suppressed,
         )
 

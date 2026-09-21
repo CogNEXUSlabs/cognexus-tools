@@ -353,8 +353,6 @@ NESTED_TOO_DEEP_RULE_ID = "input.nested_too_deep"
 #: (DELETE without WHERE) stops at the string's end.
 _JOIN = "\n;\n"
 
-_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
-
 #: Opens like a JSON object, array or string, after any whitespace or BOM.
 _JSON_OPENING_RE = re.compile(r"[\s\ufeff]*[\[{\"]")
 
@@ -397,11 +395,6 @@ class DecodedStrings:
 _UNPARSED = object()
 
 
-def _clean(value: str) -> str:
-    """Lone surrogates become U+FFFD, since the screens hash what they read."""
-    return _SURROGATE_RE.sub("\ufffd", value)
-
-
 #: JSON's one-character backslash escapes (RFC 8259).
 _SIMPLE_ESCAPES = {
     '"': '"',
@@ -416,13 +409,27 @@ _SIMPLE_ESCAPES = {
 _HEXDIGITS = frozenset("0123456789abcdefABCDEF")
 
 
+def _cut_short(text: str, pos: int) -> bool:
+    """Whether ``text[pos:]`` is nothing, or the start of a ``\\uXXXX`` escape cut short."""
+    rest = text[pos:pos + 6]
+    if len(rest) == 6:
+        return False
+    if not rest:
+        return True
+    return rest[0] == "\\" and (
+        len(rest) == 1 or (rest[1] == "u" and all(c in _HEXDIGITS for c in rest[2:]))
+    )
+
+
 def _truncated_literal(text: str, pos: int) -> Optional[str]:
     """Decoded prefix of an unterminated JSON string starting at *pos*.
 
     ``None`` when a complete bad escape sits in the string: nothing after it
     can be told from string content. An incomplete escape at the end of
     *text* (a lone backslash, or ``\\u`` with fewer than four hex digits) is
-    dropped, and the prefix before it is returned. Linear in the remainder.
+    dropped, and the prefix before it is returned; so is a high surrogate
+    whose low half the end cut off, which would otherwise leave half a
+    character the tool never receives. Linear in the remainder.
     """
     parts: List[str] = []
     i = pos
@@ -448,19 +455,18 @@ def _truncated_literal(text: str, pos: int) -> Optional[str]:
                 return None
             code = int(digits, 16)
             i = slash + 6
-            if 0xD800 <= code <= 0xDBFF and text[i:i + 2] == "\\u":
-                low_digits = text[i + 2:i + 6]
-                if len(low_digits) < 4:
-                    if all(c in _HEXDIGITS for c in low_digits):
-                        parts.append(chr(code))
-                        break
-                    return None
-                if any(c not in _HEXDIGITS for c in low_digits):
-                    return None
-                low = int(low_digits, 16)
-                if 0xDC00 <= low <= 0xDFFF:
-                    code = 0x10000 + (((code - 0xD800) << 10) | (low - 0xDC00))
-                    i += 6
+            if 0xD800 <= code <= 0xDBFF:
+                if _cut_short(text, i):
+                    # The end cut off the low half: drop the high half with it.
+                    break
+                if text[i:i + 2] == "\\u":
+                    low_digits = text[i + 2:i + 6]
+                    if any(c not in _HEXDIGITS for c in low_digits):
+                        return None
+                    low = int(low_digits, 16)
+                    if 0xDC00 <= low <= 0xDFFF:
+                        code = 0x10000 + (((code - 0xD800) << 10) | (low - 0xDC00))
+                        i += 6
             parts.append(chr(code))
             continue
         mapped = _SIMPLE_ESCAPES.get(esc)
@@ -613,8 +619,9 @@ def decode_strings(payload: str) -> DecodedStrings:
     strict parser accepts it, its strings stand in for it, since they are all
     the tool that parses it receives; otherwise, and past the last level, it
     is kept as text as well. Every argv-style array in what a strict parser
-    reads is reconstructed into :attr:`DecodedStrings.commands`. Lone surrogates
-    become U+FFFD, since the screens hash what they read.
+    reads is reconstructed into :attr:`DecodedStrings.commands`. A lone
+    surrogate stays as decoded: the screens refuse text that holds one, since
+    the tool may drop or replace it.
     """
     seen: Set[str] = set()
     strings: List[str] = []
@@ -624,14 +631,13 @@ def decode_strings(payload: str) -> DecodedStrings:
     def read_commands(parsed: Any) -> None:
         if parsed is not _UNPARSED:
             for command in _argv_commands(parsed):
-                commands.setdefault(_clean(command), None)
+                commands.setdefault(command, None)
 
     read_commands(_parse_json(payload or ""))
     layers: Deque[Tuple[str, int]] = deque([(payload or "", 0)])
     while layers:
         text, level = layers.popleft()
         for value in _literals(text):
-            value = _clean(value)
             if not value or value in seen:
                 continue
             seen.add(value)
@@ -669,15 +675,15 @@ def decoded_texts(payload: str) -> List[str]:
     the one before it is left out. Decoding only shortens text: no text is
     longer than *payload*, and two positions are never further apart in a text
     than in the one before it. Reading a text stops at the first string that
-    does not decode, and the rest of that text stays as it is. Lone surrogates
-    become U+FFFD, since the screens hash what they read.
+    does not decode, and the rest of that text stays as it is. A lone surrogate
+    stays as decoded, for the screens to refuse.
     """
     payload = payload or ""
     if "\\" not in payload:
         return []
     texts: List[str] = []
     for depth in range(1, MAX_NESTED_JSON + 2):
-        text = _clean(_write_out_strings(payload, 0, depth))
+        text = _write_out_strings(payload, 0, depth)
         if not texts or text != texts[-1]:
             texts.append(text)
     return texts
@@ -751,12 +757,12 @@ def unescape_non_ascii(text: str) -> str:
     those still reads as an encoding attack. The exception is the tag
     characters of the England, Scotland and Wales flag emoji, which are
     written out with their flag. A lone surrogate character that is not
-    escaped becomes U+FFFD.
+    escaped stays too, for the screens to refuse.
     """
     text = text or ""
     if "\\u" in text:
         text = _ESCAPE_RE.sub(_write_out, text)
-    return _clean(text)
+    return text
 
 
 def screen_tool_call_action(

@@ -22,7 +22,7 @@ import sys
 import urllib.error
 import urllib.request
 import uuid
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from artzain.cloud import (
     _api_request_headers,
@@ -89,10 +89,17 @@ def decide(
         A dict with ``outcome`` (``allow`` / ``deny`` / ``review``),
         ``decision_id``, ``audit_block_id`` (``None`` offline),
         ``contributing_agents``, ``reasons``, and (offline) ``offline=True``.
+        Offline, a payload holding an unpaired surrogate is ``deny``, and a
+        guard that raises becomes a ``deny`` vote carrying the error: the
+        offline path returns a decision instead of raising.
 
     Raises:
         ValueError: If *kind* is not a valid payload kind.
-        DecisionError: If the online call fails (non-2xx or transport error).
+        DecisionError: If the online call fails (non-2xx or transport error),
+            or the request cannot be sent: a field holds an unpaired
+            surrogate (half of a UTF-16 pair, which ``json.loads`` makes from
+            a lone escape and which is not valid Unicode), or *context* does
+            not serialize to JSON. Nothing is sent in either case.
     """
     if kind not in _VALID_KINDS:
         raise ValueError(f"kind must be one of {_VALID_KINDS}, got {kind!r}")
@@ -119,7 +126,19 @@ def decide(
         "context": context or {},
     }
     url = _effective_base() + "/api/v1/decisions"
-    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    try:
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        # json.loads accepts a lone surrogate escape, so a payload built from
+        # parsed model output can hold one, and UTF-8 cannot carry it.
+        raise DecisionError(
+            "decision request not sent: it holds an unpaired surrogate "
+            f"(U+{ord(exc.object[exc.start]):04X}), which is not valid Unicode"
+        ) from exc
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise DecisionError(
+            f"decision request not sent: it does not serialize to JSON: {exc}"
+        ) from exc
     headers = _api_request_headers(_effective_key())
     headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, method="POST", headers=headers)
@@ -174,10 +193,11 @@ def _decide_offline(
     request_id: Optional[str],
 ) -> dict[str, Any]:
     _warn_offline_once()
-    votes: list[dict[str, Any]] = []
-    votes.append(_offline_injection_vote(payload, kind, agent_did))
-    votes.append(_offline_destructive_vote(payload, kind, surface="sdk"))
-    votes.append(_offline_policy_vote(payload, kind))
+    votes: list[dict[str, Any]] = [
+        _guarded_vote("prompt-injection", _offline_injection_vote, payload, kind, agent_did),
+        _guarded_vote("destructive-action", _offline_destructive_vote, payload, kind, surface="sdk"),
+        _guarded_vote("policy-enforcement", _offline_policy_vote, payload, kind),
+    ]
 
     outcome = "allow"
     for v in votes:
@@ -338,6 +358,26 @@ def _vote(
         "findings": findings or [],
         "error": error,
     }
+
+
+def _guarded_vote(
+    name: str, vote: Callable[..., dict[str, Any]], *args: Any, **kwargs: Any,
+) -> dict[str, Any]:
+    """*vote*'s result, or a ``deny`` vote carrying the error if the guard raised.
+
+    The guards turn their own failures into fail-closed verdicts; this keeps
+    an offline decision a decision if one ever does not.
+    """
+    try:
+        return vote(*args, **kwargs)
+    except Exception as exc:
+        _log.error("offline %s vote raised; failing closed", name, exc_info=True)
+        # backslashreplace: the message may quote text holding a lone surrogate.
+        error = f"{type(exc).__name__}: {exc}".encode("utf-8", "backslashreplace").decode("utf-8")
+        return _vote(
+            name, "deny", "critical",
+            findings=[f"{name} raised {type(exc).__name__}"], error=error,
+        )
 
 
 __all__ = ["DecisionError", "decide"]
