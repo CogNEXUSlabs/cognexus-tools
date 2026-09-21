@@ -36,6 +36,8 @@ import urllib.parse
 import urllib.request
 from typing import Any, NamedTuple, Optional
 
+from artzain._surrogates import replace_unpaired_surrogates, without_unpaired_surrogates
+
 _log = logging.getLogger("artzain.cloud")
 
 _override_key: Optional[str] = None
@@ -69,7 +71,9 @@ def has_api_key() -> bool:
 def note_session_user_prompt(text: str) -> None:
     """Remember the latest end-user prompt for subsequent cloud event rows."""
     global _session_user_prompt
-    cleaned = " ".join((text or "").split())
+    # A lone surrogate cannot be encoded into the event body, and the prompt
+    # rides on every later event, so one would drop them all.
+    cleaned = replace_unpaired_surrogates(" ".join((text or "").split()))
     if cleaned:
         with _session_lock:
             _session_user_prompt = cleaned
@@ -83,6 +87,7 @@ def session_user_prompt() -> Optional[str]:
 
 def _redact_prompt_preview(text: str, max_len: int = 96) -> str:
     one_line = " ".join((text or "").split())[:max_len]
+    one_line = replace_unpaired_surrogates(one_line)
     return one_line + ("\u2026" if len((text or "")) > max_len else "")
 
 
@@ -276,7 +281,7 @@ def _probe_api_key_via_events(*, timeout_sec: float = 8.0) -> dict[str, Any]:
         "payload": {"probe": True},
     }
     url = base + "/api/events"
-    data = json.dumps(body_obj, ensure_ascii=False).encode("utf-8")
+    data = json.dumps(without_unpaired_surrogates(body_obj), ensure_ascii=False).encode("utf-8")
     headers = _api_request_headers(key)
     headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, method="POST", headers=headers)
@@ -864,7 +869,7 @@ def post_sdk_event(
                 op="event POST",
                 label=event_type,
                 url=_effective_base() + "/api/events",
-                body=json.dumps(body_obj, ensure_ascii=False).encode("utf-8"),
+                body=json.dumps(without_unpaired_surrogates(body_obj), ensure_ascii=False).encode("utf-8"),
                 headers=headers,
                 timeout_sec=float(timeout_sec),
             )
@@ -909,7 +914,7 @@ def post_policy_human_decision(
                 op="policy decision POST",
                 label=v,
                 url=_effective_base() + "/api/policy-decisions",
-                body=json.dumps(body_obj, ensure_ascii=False).encode("utf-8"),
+                body=json.dumps(without_unpaired_surrogates(body_obj), ensure_ascii=False).encode("utf-8"),
                 headers=headers,
                 timeout_sec=float(timeout_sec),
             )

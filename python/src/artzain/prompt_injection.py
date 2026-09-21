@@ -39,6 +39,12 @@
 #   out in the other direction, and a right-to-left isolate or embedding
 #   around text with no right-to-left letter (Trojan Source) — see
 #   _bidi_reordering.
+#   CogNEXUS refuses text holding an unpaired surrogate (a code point in
+#   U+D800-U+DFFF, which json.loads makes from a lone escape): detect()
+#   returns CRITICAL `encoding:unpaired_surrogate` before any other check.
+#   The audit hash encodes with surrogatepass, and the fail-closed handler
+#   in detect() cannot re-raise. The strict UTF-8 audit hash used to raise
+#   UnicodeEncodeError on such text, from inside that handler as well.
 #   Provenance and drift detail: docs/third-party/agent-governance-toolkit.md
 #
 """Prompt Injection Detection — OWASP LLM01 / ASI01.
@@ -353,6 +359,13 @@ _TOKEN_SMUGGLE_PATTERN: re.Pattern[str] = re.compile(
 _INVISIBLE_CHARS_RE: re.Pattern[str] = re.compile(
     r"[\u200b\u200c\u200d\u2060\ufeff\u00ad]",
 )
+
+# Half of a UTF-16 surrogate pair (U+D800-U+DFFF) is not a character, and no
+# UTF-8 encoder accepts one. ``json.loads`` makes one from a lone escape, which
+# is what re-serializing a JavaScript string cut mid-emoji leaves. Whoever reads
+# the text next drops it, replaces it or rejects the text, so a scan of the text
+# as given cannot say what they read; detect() refuses it (see _detect_impl).
+_UNPAIRED_SURROGATE_RE: re.Pattern[str] = re.compile(r"[\ud800-\udfff]")
 
 
 # Unicode tag characters (U+E0000-E007F) render as nothing too, and
@@ -1418,7 +1431,9 @@ class PromptInjectionDetector:
             canary_tokens: Optional canary strings planted in system prompts.
 
         Returns:
-            A ``DetectionResult`` with threat assessment.
+            A ``DetectionResult`` with threat assessment. Text holding an
+            unpaired surrogate is CRITICAL (``encoding:unpaired_surrogate``).
+            Never raises: an internal error is a CRITICAL result as well.
         """
         try:
             return self._detect_impl(text, source, canary_tokens)
@@ -1436,7 +1451,15 @@ class PromptInjectionDetector:
                 matched_patterns=["detection_error"],
                 explanation="Detection error — input blocked (fail closed)",
             )
-            self._record_audit(text, source, result)
+            try:
+                self._record_audit(text, source, result)
+            except Exception:
+                # The input that broke the scan can break its audit record
+                # too; the verdict reaches the caller either way.
+                logger.error(
+                    "Prompt injection audit record failed — verdict stands | source=%s",
+                    source, exc_info=True,
+                )
             return result
 
     def detect_batch(
@@ -1472,6 +1495,20 @@ class PromptInjectionDetector:
         canary_tokens: list[str] | None,
     ) -> DetectionResult:
         """Core detection logic — runs all check methods and aggregates."""
+        # Text that is not valid Unicode is refused before any other check,
+        # the allowlist included: see _UNPAIRED_SURROGATE_RE.
+        if _UNPAIRED_SURROGATE_RE.search(text):
+            result = DetectionResult(
+                is_injection=True,
+                threat_level=ThreatLevel.CRITICAL,
+                injection_type=InjectionType.ENCODING_ATTACK,
+                confidence=1.0,
+                matched_patterns=["encoding:unpaired_surrogate"],
+                explanation="Input is not valid Unicode (unpaired surrogate) — blocked (fail closed)",
+            )
+            self._record_audit(text, source, result)
+            return result
+
         # Every literal check below runs over each reading of the normalised
         # text (one reading unless tag characters hide text); the raw text is
         # kept for the audit hash, the canary check (run on it and on every
@@ -1850,7 +1887,9 @@ class PromptInjectionDetector:
     ) -> None:
         record = AuditRecord(
             timestamp=datetime.now(timezone.utc),
-            input_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            # surrogatepass: strict UTF-8's bytes for valid text, and no
+            # UnicodeEncodeError on the unpaired surrogates detect() refuses.
+            input_hash=hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest(),
             source=source,
             result=result,
         )

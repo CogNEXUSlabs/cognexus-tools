@@ -1167,6 +1167,15 @@ MAX_SCAN_BYTES = 256 * 1024
 #: scan window.
 TRUNCATION_RULE_ID = "input.truncated"
 
+#: Rule id of the synthetic CRITICAL finding for a payload that is not valid
+#: Unicode. It holds half of a UTF-16 surrogate pair (U+D800-U+DFFF), which
+#: ``json.loads`` makes from a lone escape. No UTF-8 encoder accepts one, so a
+#: tool drops it, replaces it or rejects the payload, and the rules, which read
+#: the payload as given, cannot say what the tool runs.
+UNPAIRED_SURROGATE_RULE_ID = "input.unpaired_surrogate"
+
+_UNPAIRED_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
+
 
 @dataclass
 class DestructiveActionGuardConfig:
@@ -1202,7 +1211,8 @@ class DestructiveActionGuard:
         """Inspect *payload* (model output / generated tool call) for destructive intent.
 
         Never raises — failures are converted to a CRITICAL verdict so the caller
-        always gets a definitive answer.
+        always gets a definitive answer. A payload holding an unpaired surrogate
+        is CRITICAL too (:data:`UNPAIRED_SURROGATE_RULE_ID`).
         """
         if not payload:
             return ActionScreenResult(
@@ -1220,7 +1230,10 @@ class DestructiveActionGuard:
                 "destructive_action_guard internal failure — failing closed: %s",
                 exc, exc_info=True,
             )
-            payload_hash = hashlib.sha256(payload.encode("utf-8", "ignore")).hexdigest()
+            payload_hash = (
+                hashlib.sha256(payload.encode("utf-8", "surrogatepass")).hexdigest()
+                if isinstance(payload, str) else ""
+            )
             return ActionScreenResult(
                 is_destructive=True,
                 severity=ActionSeverity.CRITICAL,
@@ -1233,7 +1246,10 @@ class DestructiveActionGuard:
     # -- internals ----------------------------------------------------------
 
     def _screen_impl(self, payload: str, *, surface: str) -> ActionScreenResult:
-        encoded = payload.encode("utf-8", "ignore")
+        # surrogatepass: strict UTF-8's bytes for valid text, and distinct bytes
+        # (so a distinct hash) for each unpaired surrogate, where "ignore" dropped
+        # them. The truncated windows below still decode those bytes away.
+        encoded = payload.encode("utf-8", "surrogatepass")
         payload_hash = hashlib.sha256(encoded).hexdigest()
         total_bytes = len(encoded)
         truncated = total_bytes > MAX_SCAN_BYTES
@@ -1308,6 +1324,21 @@ class DestructiveActionGuard:
                 )
             )
 
+        surrogate = _UNPAIRED_SURROGATE_RE.search(payload)
+        if surrogate:
+            matches.append(
+                ActionMatch(
+                    rule_id=UNPAIRED_SURROGATE_RULE_ID,
+                    name="payload is not valid Unicode (unpaired surrogate)",
+                    severity=ActionSeverity.CRITICAL,
+                    owasp="LLM06",
+                    excerpt=(
+                        f"U+{ord(surrogate.group()):04X} at character {surrogate.start()}; "
+                        "a tool may drop or replace it, so the rules cannot say what runs"
+                    ),
+                )
+            )
+
         if not matches:
             return ActionScreenResult(
                 is_destructive=False,
@@ -1375,6 +1406,8 @@ def _excerpt(text: str, start: int, end: int, *, window: int = 32) -> str:
     e = min(len(text), end + window)
     snippet = text[s:e].replace("\n", " ⏎ ").strip()
     snippet = _SECRET_REDACT_RE.sub(r"\1[REDACTED]", snippet)
+    # An excerpt goes into results, events and audit leaves as UTF-8.
+    snippet = _UNPAIRED_SURROGATE_RE.sub("\ufffd", snippet)
     if len(snippet) > 120:
         snippet = snippet[:117] + "…"
     return snippet
@@ -1501,4 +1534,5 @@ __all__ = [
     "MAX_SCAN_BYTES",
     "TRUNCATION_RULE_ID",
     "GUARD_ERROR_RULE_ID",
+    "UNPAIRED_SURROGATE_RULE_ID",
 ]

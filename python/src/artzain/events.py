@@ -52,6 +52,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from artzain._surrogates import replace_unpaired_surrogates, without_unpaired_surrogates
 from artzain.audit_chain import get_chain
 from artzain.prompt_injection import DetectionResult
 
@@ -71,6 +72,7 @@ def _events_path() -> Path:
 
 def _redact_preview(text: str, max_len: int = 96) -> str:
     one_line = " ".join((text or "").split())[:max_len]
+    one_line = replace_unpaired_surrogates(one_line)
     return one_line + ("\u2026" if len((text or "")) > max_len else "")
 
 
@@ -147,7 +149,7 @@ def record_prompt_defense_event(
             return
 
     rid = (request_id or uuid.uuid4().hex).lower()
-    payload_hash = hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+    payload_hash = hashlib.sha256((text or "").encode("utf-8", "surrogatepass")).hexdigest()
     lat = None if latency_ms is None else max(0.0, float(latency_ms))
 
     if is_clean:
@@ -188,6 +190,9 @@ def record_prompt_defense_event(
         "policy": pol,
     }
 
+    # One lone surrogate in source, user_id or another field would break the
+    # JSONL line and the on_event record alike.
+    record = without_unpaired_surrogates(record)
     write_jsonl = (not is_clean) or _jsonl_include_passes()
     if write_jsonl:
         get_chain(_events_path()).append(record)
@@ -366,7 +371,7 @@ def record_policy_enforcement_event(
             return
 
     rid = (request_id or uuid.uuid4().hex).lower()
-    payload_hash = hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+    payload_hash = hashlib.sha256((text or "").encode("utf-8", "surrogatepass")).hexdigest()
     lat = None if latency_ms is None else max(0.0, float(latency_ms))
 
     findings = report.findings[:12]
@@ -402,6 +407,9 @@ def record_policy_enforcement_event(
         "policy": "ClientPolicy-DocumentDerived",
     }
 
+    # One lone surrogate in source, user_id or another field would break the
+    # JSONL line and the on_event record alike.
+    record = without_unpaired_surrogates(record)
     write_jsonl = (not is_clean) or _jsonl_include_passes()
     if write_jsonl:
         get_chain(_events_path()).append(record)

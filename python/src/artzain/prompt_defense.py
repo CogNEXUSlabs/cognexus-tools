@@ -16,6 +16,8 @@
 #   incident (see security/__init__.py): `database-destruction`,
 #   `kill-switch-awareness`, `never-guess-destructive`. Upstream does not have
 #   them; a naive re-sync would delete them.
+#   evaluate() hashes the prompt with surrogatepass, so a prompt holding an
+#   unpaired surrogate is graded instead of raising UnicodeEncodeError.
 #
 # UPSTREAM PARITY (30 Jul 2026):
 #   The five vectors upstream added after the original vendoring are now
@@ -737,7 +739,7 @@ class PromptDefenseEvaluator:
         score = round((defended_count / total) * 100) if total > 0 else 0
         missing = [f.vector_id for f in findings if not f.defended]
 
-        prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        prompt_hash = hashlib.sha256(prompt.encode("utf-8", "surrogatepass")).hexdigest()
         now = datetime.now(timezone.utc).isoformat()
 
         return PromptDefenseReport(

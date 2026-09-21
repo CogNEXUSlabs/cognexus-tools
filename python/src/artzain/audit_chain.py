@@ -40,6 +40,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from artzain._surrogates import without_unpaired_surrogates
+
 _log = logging.getLogger("artzain.audit_chain")
 
 _GENESIS_HASH = "0" * 64
@@ -48,6 +50,7 @@ _GENESIS_HASH = "0" * 64
 # ---------------------------------------------------------------------------
 # Exception
 # ---------------------------------------------------------------------------
+
 
 
 class AuditLogWriteError(OSError):
@@ -173,6 +176,8 @@ class MerkleAuditChain:
 
         Raises :exc:`AuditLogWriteError` if the file cannot be written.
         """
+        # A lone surrogate in any field has no UTF-8 encoding and made this raise.
+        record = without_unpaired_surrogates(record)
         with self._lock:
             if self._state is None:
                 self._state = self._load_state()

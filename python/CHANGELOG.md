@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.6.23
+
+### Fixed
+
+- `decide()` raised `UnicodeEncodeError` instead of failing closed when the
+  payload held an unpaired surrogate (half of a UTF-16 pair, which
+  `json.loads` makes from a lone escape and `json.dumps(..., ensure_ascii=False)`
+  keeps). Offline it came from the prompt-injection detector's audit hash,
+  which raised again inside the detector's own fail-closed handler; online
+  from encoding the request body, outside the handling that turns failures
+  into `DecisionError`. A caller that treats `DecisionError` as deny got an
+  uncaught exception. Offline `decide()` now returns `deny`, and online it
+  raises `DecisionError` without sending anything. A `context` that does not
+  serialize to JSON, because of a type `json` cannot write or nesting too
+  deep for it, also raises `DecisionError` before sending, and an offline
+  guard that raises becomes a `deny` vote carrying the error.
+- `PromptInjectionDetector.detect()`, `screen_user_input()`,
+  `screen_external_content()`, `screen_tabular_payload()`,
+  `screen_client_policy()` and `evaluate_system_prompt()` raised
+  `UnicodeEncodeError` on text holding an unpaired surrogate, and the
+  helpers also raised when one was in `source`, `user_id` or another field of
+  the event they write. They return a result now. A surrogate in any field of
+  an event becomes U+FFFD in every copy of it: the JSONL line, the `on_event`
+  record and the cloud event, which one surrogate in `agent_id`, `source` or
+  `user_id` used to keep from being sent.
+- A surrogate in the prompt a screening helper notes for cloud events made
+  every later cloud event from the process fail to send, `agent_kill_switch`
+  included, with only a warning in the log. The noted prompt is stored with
+  the surrogate replaced.
+
+### Changed
+
+- The prompt-injection detector, the destructive-action guard and the policy
+  evaluator refuse text holding an unpaired surrogate, because no screen can
+  say what a tool that drops, replaces or rejects the character will read.
+  The detector returns CRITICAL `encoding:unpaired_surrogate`, the guard adds
+  a CRITICAL `input.unpaired_surrogate` match (`screen_agent_action()` trips
+  the kill switch on it), and the evaluator, given at least one rule, adds a
+  critical `INPUT-UNPAIRED-SURROGATE` finding (`screen_client_policy()`
+  always adds the conduct rules). Text a JavaScript client cut in the middle
+  of an emoji holds one, so cut strings by code point before screening them.
+- The tool-call screens read a surrogate in a decoded argument as it is.
+  0.6.16 to 0.6.22 replaced it with U+FFFD first, so a tool call that carried
+  one as a JSON escape, the way `json.dumps` writes it by default, was allowed;
+  it is refused now, like the same call serialized with `ensure_ascii=False`.
+  When a payload ends inside a string, as a cut payload does, a high surrogate
+  escape whose low half the end cut off is dropped with it, as an incomplete
+  trailing escape already was, rather than read as a lone surrogate.
+- Hashes of screened text (`input_sha256`, `payload_sha256`, `text_hash`,
+  `prompt_hash`) encode with `surrogatepass`: the digest of valid text is
+  unchanged, and each text holding a surrogate gets its own.
+- `artzain.audit_chain.MerkleAuditChain.append` writes a record holding an
+  unpaired surrogate, in a value or a key at any depth, with the surrogate
+  replaced by U+FFFD, where it raised `UnicodeEncodeError`. A key cleaned into
+  one the record already has takes a `#2` suffix, so no value is lost. A record
+  without one is written byte for byte as before.
+
 ## 0.6.22
 
 ### Added

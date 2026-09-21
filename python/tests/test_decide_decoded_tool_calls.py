@@ -231,11 +231,18 @@ def test_padding_past_the_string_cap_holds_the_call():
     assert any(f.startswith("input.too_many_strings:") for f in votes["destructive-action"]["findings"])
 
 
-def test_a_lone_surrogate_does_not_break_the_decoding_votes():
-    # The two votes this change touches. (The policy vote still hashes the raw
-    # payload and raises UnicodeEncodeError on it, before and after.)
+@pytest.mark.parametrize(
+    "payload",
+    [
+        json.dumps({"tool": "run", "arguments": {"a": "\ud800 x"}}, ensure_ascii=False),
+        '{"tool": "run", "arguments": {"a": "\\ud800 x"}}',
+    ],
+    ids=["raw", "escaped"],
+)
+def test_a_lone_surrogate_fails_the_decoding_votes_closed(payload):
+    # Raw or escaped, the decoded argument holds a lone surrogate, which the
+    # screens refuse; neither vote raises.
     from artzain.decide import _offline_destructive_vote, _offline_injection_vote
 
-    payload = json.dumps({"tool": "run", "arguments": {"a": "\ud800 x"}}, ensure_ascii=False)
-    assert _offline_injection_vote(payload, "tool_call", "artzain-sdk")["verdict"] == "allow"
-    assert _offline_destructive_vote(payload, "tool_call", surface="sdk")["verdict"] == "allow"
+    assert _offline_injection_vote(payload, "tool_call", "artzain-sdk")["verdict"] == "deny"
+    assert _offline_destructive_vote(payload, "tool_call", surface="sdk")["verdict"] == "deny"
