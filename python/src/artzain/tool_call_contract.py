@@ -30,7 +30,9 @@ read as escape-sequence smuggling. The tool decodes the JSON and sees neither.
 
 A tool call also names its values: an argument's name is the label that PII
 detectors look for in prose, as in ``dob: 1990-01-01``. :func:`member_text`
-writes each object member as such a line for :func:`scan_tool_call_pii`.
+writes each object member as such a line for :func:`scan_tool_call_pii`. A
+name is not a message, though: :func:`conduct_client_context` tells the
+conduct rules whether a call names a client in its values.
 """
 
 from __future__ import annotations
@@ -64,6 +66,7 @@ __all__ = [
     "NESTED_TOO_DEEP_RULE_ID",
     "TOO_MANY_STRINGS_RULE_ID",
     "combine_policy_reports",
+    "conduct_client_context",
     "decode_strings",
     "decoded_texts",
     "detect_tool_call_injection",
@@ -325,8 +328,10 @@ def _inspect(payload: str, contracts: Optional[Dict[str, Any]]) -> ContractRepor
 #   with a bracket), and each level decoded shortens the text, so each text is
 #   judged with the approval markers it holds: a marker that decoding a deeper
 #   level brings near a match does not suppress the match where it already
-#   shows one level up. The conduct rule weighs profanity against client
-#   context anywhere in a text, keys included, as it does in the call as sent.
+#   shows one level up. The conduct rules find profanity, insults and client
+#   words in each text, keys included, and a text's client words count only
+#   when :func:`conduct_client_context` does not rule them out: a call whose
+#   only client words are its names names no client.
 #
 # The decoded strings are every JSON string in the call, keys and values from
 # any shape, and the strings inside a string that is itself JSON (OpenAI's
@@ -916,10 +921,14 @@ def evaluate_tool_call_policy(
 
     *evaluator* reads each text on its own, so an approval marker counts only in
     the text it is in, and :func:`combine_policy_reports` folds the reports into
-    one.
+    one. In every text the conduct rules count client words only when
+    :func:`conduct_client_context` does not rule them out; *evaluator*'s
+    ``evaluate`` receives that as its ``client_context`` keyword.
     """
     texts = [payload, *decoded_texts(payload)]
-    return combine_policy_reports([evaluator.evaluate(text, rules) for text in texts])
+    context = conduct_client_context(payload)
+    return combine_policy_reports(
+        [evaluator.evaluate(text, rules, client_context=context) for text in texts])
 
 
 # ---------------------------------------------------------------------------
@@ -1132,3 +1141,129 @@ def scan_tool_call_pii(payload: str) -> Dict[str, int]:
         for detector, count in scan_text(text).items():
             counts[detector] = max(count, counts.get(detector, 0))
     return counts
+
+
+# ---------------------------------------------------------------------------
+# Where a call names a client, for the conduct rules
+# ---------------------------------------------------------------------------
+#
+# ``CONDUCT-PROFANITY-CLIENT`` is a finding when profanity sits in a text that
+# names a client, with a word such as ``customer``, ``client`` or ``account``.
+# The words a tool sends are the call's string values. Its argument names and
+# its tool name come from the tool's schema whatever a message says, so an
+# ``account`` argument beside an internal message, or a tool called
+# ``customer.notify``, names no client for the message. A client named in any
+# value counts for the whole call, as it does in the same values sent as
+# ``model_output``: a subject line that names the customer makes profanity in
+# the body a finding. A key or a tool name that holds a profanity and a client
+# word together, as a translation catalog keyed by its source sentences can,
+# is text of its own and names a client for itself. Profanity and insults are
+# still found in names and values alike: the evaluator reads the call as sent
+# and as each of :func:`decoded_texts`, keys included. When the call names no
+# client, the client words in those texts are ruled out; when it does, each
+# text's own client words decide, so the call never makes a text name a client
+# it does not show, and no text is judged stricter than before.
+#
+# * The tool's name is read where :func:`_tool_name` finds it: the first of
+#   ``tool``, ``name``, ``function`` and ``tool_name`` that a call holds as
+#   text, a ``function`` object standing for its ``name`` (its other members
+#   hold values), and a key given twice read with its last value, as the
+#   contract's parser reads it. A call is the payload, each object in a list
+#   payload, or each object in a ``tool_calls`` list at the top. A key named
+#   like those anywhere else holds a value.
+# * A string that looks like JSON is read as JSON down to
+#   :data:`MAX_NESTED_JSON` levels, through its keys and values when the
+#   parser reads it. Otherwise, and past the last level, it is read as the text
+#   it is, and each string inside it that holds an escape is also read decoded.
+# * A payload the strict parser does not read has no names to tell from its
+#   values, so the conduct rules search each text they read for a client word,
+#   as for any text; on the engine, the contract vote reviews such a call.
+
+
+def _is_text(value: Any) -> bool:
+    return isinstance(value, str) and not isinstance(value, _Number)
+
+
+def _call_name_key(call: _Members) -> Optional[str]:
+    """The key a call's tool name is read from, as :func:`_tool_name` reads it, or None.
+
+    :func:`_tool_name` reads the call parsed without its repeated keys, so a
+    key given twice counts with its last value.
+    """
+    last = dict(call)
+    for name in _NAME_KEYS:
+        value = last.get(name)
+        if _is_text(value) and value.strip():
+            return name
+        if name == "function" and isinstance(value, _Members):
+            inner = dict(value).get("name")
+            if _is_text(inner) and inner.strip():
+                return name
+    return None
+
+
+def conduct_client_context(payload: str) -> Optional[bool]:
+    """Whether a ``tool_call`` payload names a client, for the conduct rules.
+
+    True when a string value names a client, at any level, or when a key or
+    the tool's name holds a profanity and a client word together; False when
+    none does, and the conduct rules then read the call as naming no client.
+    None when a strict JSON parser does not read *payload*: the conduct rules
+    then read the client words of each text, as for any text. See the comment
+    above.
+    """
+    from artzain.policy_enforcement import _CLIENT_CONTEXT, _CONDUCT_PROFANITY
+
+    root = _parse_values(payload or "")
+    if root is _UNPARSED:
+        return None
+
+    def holds_both(text: str) -> bool:
+        return bool(_CONDUCT_PROFANITY.search(text)) and bool(_CLIENT_CONTEXT.search(text))
+
+    # A string that repeats is parsed once, and searched for escapes once.
+    reads: Dict[str, Any] = {}
+    escaped: Dict[str, List[str]] = {}
+    # A value, its level of JSON inside strings, and what it is read as: the
+    # payload ("root"), a call, the call's function object, or a value.
+    stack: List[Tuple[Any, int, str]] = [(root, 0, "root")]
+    while stack:
+        node, level, role = stack.pop()
+        if isinstance(node, _Members):
+            if role == "root" and not any(key == "tool_calls" and isinstance(value, list) for key, value in node):
+                role = "call"
+            if role == "call":
+                name_key = _call_name_key(node)
+            elif role == "function":
+                name_key = "name"
+            else:
+                name_key = None
+            for key, value in node:
+                if holds_both(key):
+                    return True
+                if key == name_key and _is_text(value):
+                    if holds_both(value):
+                        return True
+                elif role == "call" and key == name_key == "function" and isinstance(value, _Members):
+                    stack.append((value, level, "function"))
+                elif role == "root" and key == "tool_calls" and isinstance(value, list):
+                    stack.extend((call, level, "call") for call in value)
+                else:
+                    stack.append((value, level, "value"))
+        elif isinstance(node, list):
+            stack.extend((item, level, "call" if role == "root" else "value") for item in node)
+        elif _is_text(node):
+            if _looks_like_json(node):
+                if level < MAX_NESTED_JSON:
+                    if node not in reads:
+                        reads[node] = _parse_values(node)
+                    if reads[node] is not _UNPARSED:
+                        stack.append((reads[node], level + 1, "value"))
+                        continue
+                if node not in escaped:
+                    escaped[node] = _escaped_strings(node)
+                if any(_CLIENT_CONTEXT.search(inner) for inner in escaped[node]):
+                    return True
+            if _CLIENT_CONTEXT.search(node):
+                return True
+    return False

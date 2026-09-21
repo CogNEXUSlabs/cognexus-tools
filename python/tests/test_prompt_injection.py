@@ -529,8 +529,6 @@ class HiddenCharacterTests(unittest.TestCase):
 # Right-to-left text and the bidi controls that lay it out
 # ---------------------------------------------------------------------------
 
-_LRO, _RLO = "\u202d", "\u202e"
-
 #: Right-to-left text as people and formatters write it: marks, embeddings,
 #: isolates, and overrides around text of their own direction or around numbers.
 _RIGHT_TO_LEFT_TEXT = [
@@ -551,6 +549,48 @@ _RIGHT_TO_LEFT_TEXT = [
     ("first-strong-isolate-with-a-mark-after-latin", _FSI + "Jean" + _RLM + _PDI + " liked it" + _RLM),
     ("first-strong-isolate-with-a-mark-after-an-accented-name", _FSI + "\u00c9mile" + _RLM + _PDI + " " + _HEBREW),
     ("empty-embeddings-with-reset-marks", "Hello " + (_RLE + _PDF + _RLM) * 2 + " world"),
+    ("digit-groups-isolated-left-to-right", _HEBREW + " " + _LRI + "100 200" + _PDI),
+    ("price-in-an-arabic-isolate", _RLI + _ARABIC + " \u0661\u0662\u0663" + _PDI),
+    # Amounts, sizes, times and dates as ICU formats them for right-to-left
+    # locales, inside the isolates Fluent, Apple's Foundation and
+    # MessageFormat 2 write and the embeddings Android and Chromium write.
+    ("fluent-invoice-in-arabic",
+     _ARABIC + " " + _FSI + "INV-2026-0042" + _PDI + " " + _ARABIC + " " + _FSI + _RLM + "1,250.00\u00a0US$" + _PDI
+     + " " + _ARABIC + " " + _FSI + "7" + _PDI + "."),
+    ("fluent-total-in-hebrew", _HEBREW + ": " + _FSI + _RLM + "1,234.50\u00a0" + _RLM + "USD" + _PDI + "."),
+    ("fluent-amount-alone", _FSI + _RLM + "99.00\u00a0" + _RLM + "CHF" + _PDI),
+    ("fluent-accounting-amount", _ARABIC + " " + _FSI + "(" + _ALM + "42.50\u00a0US$)" + _PDI),
+    ("fluent-arabic-indic-amount",
+     _ARABIC + " " + _FSI + _RLM + "\u0661\u066c\u0662\u0665\u0660\u066b\u0660\u0660\u00a0US$" + _PDI),
+    ("fluent-negative-number", _ARABIC + " " + _FSI + _ALM + "-\u0661\u066c\u0662\u0663\u0664\u066b\u0665" + _PDI),
+    ("fluent-percent", _ARABIC + " " + _FSI + "\u0665\u0660\u066a" + _ALM + _PDI),
+    ("fluent-date", _ARABIC + " " + _FSI + "14" + _RLM + "/9" + _RLM + "/2026" + _PDI),
+    ("fluent-day-and-month", _ARABIC + " " + _FSI + "3" + _RLM + "/12" + _PDI),
+    ("fluent-arabic-indic-date",
+     _ARABIC + " " + _FSI + "\u0661\u0664" + _RLM + "/\u0669" + _RLM + "/\u0662\u0660\u0662\u0666" + _PDI),
+    ("apple-amount", _ARABIC + " " + _FSI + _RLM + "18.00\u00a0UK\u00a3" + _PDI),
+    ("messageformat-amount", _HEBREW + ": " + _RLI + _RLM + "1,234.50\u00a0" + _RLM + "USD" + _PDI),
+    ("messageformat-size", _HEBREW + ": " + _RLI + "5 MB" + _PDI),
+    ("messageformat-time", _HEBREW + " " + _RLI + "12:59:55 GMT-7" + _LRM + _PDI),
+    ("messageformat-negative-amount",
+     _ARABIC + " " + _RLI + _LRM + "-" + _LRM + "USD\u00a0\u06f1\u066c\u06f2\u06f3\u06f4\u066b\u06f5\u06f0" + _PDI),
+    ("android-wrapped-amount", "Total due: " + _LRM + _RLE + _RLM + "1,250.00\u00a0US$" + _PDF + _LRM),
+    ("chromium-wrapped-amount", _HEBREW + ": " + _RLE + _RLM + "45.00\u00a0" + _RLM + "CA$" + _PDF),
+    # Overrides around amounts whose currency sign is of class AL.
+    ("rial-amount-in-an-override", "\u0642\u06cc\u0645\u062a: " + _LRO + "\u06f1\u066c\u06f2\u06f5\u06f0 \ufdfc" + _PDF),
+    ("afghani-amount-in-an-override", "\u0628\u06cc\u06d0: " + _LRO + "1,250 \u060b" + _PDF),
+    # More of ICU's output (review round 4): compact amounts, a currency sign or
+    # unit of two words, long numbers, two-digit years, and a time after a date.
+    ("fluent-compact-amount", _HEBREW + ": " + _FSI + _RLM + "1.2M" + _RLM + "\u00a0" + _RLM + "AED" + _PDI),
+    ("fluent-compact-amount-with-the-code-first", _ARABIC + " " + _FSI + _RLM + "-AED\u00a0\u0663K" + _PDI),
+    ("fluent-cfa-franc", _ARABIC + " " + _FSI + _RLM + "\u0661\u066c\u0662\u0663\u0665\u00a0F\u202fCFA" + _PDI),
+    ("fluent-accounting-cfa-franc", _ARABIC + " " + _FSI + "(" + _ALM + "3\u00a0FCFA)" + _PDI),
+    ("fluent-two-word-unit", _ARABIC + " " + _FSI + _RLM + "-\u0663 gal US" + _PDI),
+    ("fluent-long-arabic-number", _ARABIC + " " + _FSI + _ALM + "+\u0661\u0662" + "\u066c\u0663\u0664\u0665" * 8 + _PDI),
+    ("fluent-two-digit-year", _ARABIC + " " + _FSI + "14" + _RLM + "/09" + _RLM + "/26" + _PDI),
+    ("fluent-date-and-time", _ARABIC + " " + _FSI + "14" + _RLM + "/09" + _RLM + "/2026\u060c 09:05" + _PDI),
+    ("messageformat-long-number", _HEBREW + " " + _RLI + "12,345,678,901,234,567,890,123,456" + _PDI),
+    ("messageformat-accounting-amount", _ARABIC + " " + _RLI + _LRM + "($\u00a0\u06f3\u066b\u06f0\u06f0)" + _PDI),
 ]
 
 

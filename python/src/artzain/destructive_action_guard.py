@@ -78,6 +78,41 @@ _SEVERITY_ORDER = {
 # ---------------------------------------------------------------------------
 
 
+def _to_first(argument: str, command: str) -> str:
+    """Regex that skips ahead to where *argument* or another *command* first starts.
+
+    Consumes the rest of the shell segment (no newline, ``;``, ``|`` or ``&``)
+    up to the first position where *argument* or *command* matches. The caller
+    matches *argument* next, which fails when *command* came first. The scan is
+    a lazy single-character repeat inside a lookahead; Python does not backtrack
+    into a lookahead once it has matched, so the backreference consumes exactly
+    the stretch the scan found. The named group ``gap`` is part of the pattern:
+    the guard reads only a match's span, but ``findall`` or ``split`` on these
+    patterns would return the group.
+
+    These rules used to scan the rest of the segment again from every repeat
+    of the command, which took time quadratic in the length of the text.
+    Stopping at the next repeat keeps the scan linear and matches the same
+    strings: that repeat reaches every argument the earlier one would have,
+    provided a *command* match cannot cover the first character of the
+    argument. That holds for every ``_command_with`` rule; git.reset_hard
+    handles its one exception. The match can now start at a later repeat.
+    Repeating a group that checks for *command* before each character would
+    also be linear, but Python keeps a backtracking frame for every repetition.
+    """
+    return r"(?=(?P<gap>[^\n;|&]*?)(?:" + argument + r"|" + command + r"))(?P=gap)"
+
+
+def _command_with(command: str, argument: str) -> str:
+    """Regex for *command* followed, later in the same shell segment, by *argument*."""
+    return command + _to_first(argument, command) + argument
+
+
+#: The rest of the segment up to its last `--hard`, so git.reset_hard's match
+#: ends where the old greedy scan's did.
+_LAST_HARD = r"(?:[^\n;|&]*\s--hard\b)?"
+
+
 @dataclass(frozen=True)
 class _ActionRule:
     """One destructive-action regex with a severity and human-readable name."""
@@ -883,7 +918,7 @@ _RULES: tuple[_ActionRule, ...] = (
         name="git push --force",
         severity=ActionSeverity.CRITICAL,
         pattern=re.compile(
-            r"\bgit\s+push\b[^\n;|&]*?(?:--force(?!-with-lease)|-f\b)",
+            _command_with(r"\bgit\s+push\b", r"(?:--force(?!-with-lease)|-f\b)"),
             re.IGNORECASE,
         ),
     ),
@@ -891,8 +926,17 @@ _RULES: tuple[_ActionRule, ...] = (
         rule_id="git.reset_hard",
         name="git reset --hard",
         severity=ActionSeverity.CRITICAL,
+        # `(?!\s)` takes the blanks after `reset` whole: giving them back one
+        # at a time re-ran the scan from each blank, and a shorter run cannot
+        # match where the whole one does not. The blank before `--hard` can be
+        # the end of a later `git reset` (the exception in `_to_first`); that
+        # repeat then has `--hard` right after it, which the first branch
+        # takes. After a `--hard`, `_LAST_HARD` runs on to the last one in the
+        # segment; a `--hard` after a newline is already the last.
         pattern=re.compile(
-            r"\bgit\s+reset\s+(?:[^\n;|&]*\s)?--hard\b",
+            r"\bgit\s+reset\s+(?!\s)(?:--hard\b" + _LAST_HARD + r"|"
+            + _to_first(r"\s--hard\b", r"\bgit\s+reset\s")
+            + r"(?:\n--hard\b|\s--hard\b" + _LAST_HARD + r"))",
             re.IGNORECASE,
         ),
     ),
@@ -901,7 +945,7 @@ _RULES: tuple[_ActionRule, ...] = (
         name="git clean -fd",
         severity=ActionSeverity.HIGH,
         pattern=re.compile(
-            r"\bgit\s+clean\b[^\n;|&]*?-[a-z]*f[a-z]*d?",
+            _command_with(r"\bgit\s+clean\b", r"-[a-z]*f[a-z]*d?"),
             re.IGNORECASE,
         ),
     ),
@@ -909,8 +953,11 @@ _RULES: tuple[_ActionRule, ...] = (
         rule_id="git.branch_delete",
         name="git branch -D / push --delete",
         severity=ActionSeverity.HIGH,
+        # `(?!\s)` as in git.reset_hard.
         pattern=re.compile(
-            r"\bgit\s+(?:branch\s+-D\b|push\s+[^\n;|&]*?--delete\b)",
+            r"\bgit\s+(?:branch\s+-D\b|push\s+(?!\s)"
+            + _to_first(r"--delete\b", r"\bgit\s+push\s")
+            + r"--delete\b)",
             re.IGNORECASE,
         ),
     ),
@@ -980,7 +1027,7 @@ _RULES: tuple[_ActionRule, ...] = (
         name="dd of=/dev/sd*",
         severity=ActionSeverity.CRITICAL,
         pattern=re.compile(
-            r"\bdd\b[^\n;|&]*?\bof\s*=\s*/dev/(?:sd[a-z]|nvme\d|hd[a-z]|xvd[a-z])",
+            _command_with(r"\bdd\b", r"\bof\s*=\s*/dev/(?:sd[a-z]|nvme\d|hd[a-z]|xvd[a-z])"),
             re.IGNORECASE,
         ),
     ),
@@ -1016,7 +1063,10 @@ _RULES: tuple[_ActionRule, ...] = (
         name="docker system prune --volumes",
         severity=ActionSeverity.HIGH,
         pattern=re.compile(
-            r"\bdocker\s+(?:system|volume|image)\s+prune\b[^\n;|&]*?(?:--all|-a|--volumes|-f|--force)",
+            _command_with(
+                r"\bdocker\s+(?:system|volume|image)\s+prune\b",
+                r"(?:--all|-a|--volumes|-f|--force)",
+            ),
             re.IGNORECASE,
         ),
     ),
@@ -1025,7 +1075,7 @@ _RULES: tuple[_ActionRule, ...] = (
         name="kubectl delete all/--all",
         severity=ActionSeverity.CRITICAL,
         pattern=re.compile(
-            r"\bkubectl\s+delete\b[^\n;|&]*?(?:\ball\b|--all\b|-A\b)",
+            _command_with(r"\bkubectl\s+delete\b", r"(?:\ball\b|--all\b|-A\b)"),
             re.IGNORECASE,
         ),
     ),
@@ -1034,7 +1084,7 @@ _RULES: tuple[_ActionRule, ...] = (
         name="terraform destroy --auto-approve",
         severity=ActionSeverity.CRITICAL,
         pattern=re.compile(
-            r"\bterraform\s+destroy\b[^\n;|&]*?(?:--auto-approve|-auto-approve)",
+            _command_with(r"\bterraform\s+destroy\b", r"(?:--auto-approve|-auto-approve)"),
             re.IGNORECASE,
         ),
     ),
@@ -1044,7 +1094,7 @@ _RULES: tuple[_ActionRule, ...] = (
         name="aws s3 rb --force",
         severity=ActionSeverity.CRITICAL,
         pattern=re.compile(
-            r"\baws\s+s3\s+rb\b[^\n;|&]*?--force\b",
+            _command_with(r"\baws\s+s3\s+rb\b", r"--force\b"),
             re.IGNORECASE,
         ),
     ),

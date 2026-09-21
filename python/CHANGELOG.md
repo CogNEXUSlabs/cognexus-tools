@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.6.24
+
+### Fixed
+
+- Destructive-action guard: the `git.push_force`, `git.reset_hard`,
+  `git.clean_force`, `git.branch_delete`, `fs.dd_to_disk`,
+  `docker.system_prune_volumes`, `kubectl.delete_all`, `terraform.destroy` and
+  `aws.s3_rb_force` rules could take time quadratic in the length of crafted
+  text, in `screen_action()` and in offline `decide()` votes. They now take
+  linear time and fire on the same inputs as before; for some inputs a
+  finding's excerpt shows a different part of the text than earlier versions
+  did.
+- The prompt-injection screen's bidi reordering findings, added in 0.6.21
+  (`token_smuggle:bidi_override`, `token_smuggle:bidi_rtl_over_ltr`), are
+  revised. They flag far less of the right-to-left formatting that locale
+  formatters and UI frameworks (Fluent, Apple's Foundation, MessageFormat 2,
+  Android, Chromium) write around values, and no longer flag an LRO around an
+  amount whose currency sign is right to left. Groups of digits that a
+  right-to-left isolate or embedding lays out in the other order count as
+  left-to-right text, only right-to-left letters and digits count as
+  right-to-left text, and a first-strong isolate is right to left whenever its
+  first strong character is, as the bidirectional algorithm decides it. The
+  work spent reading bidi controls has a bound.
+- Offline `decide(kind="tool_call")`: the conduct rules find a client in a
+  call's values, not in its argument or tool names. Profanity in a call was a
+  `CONDUCT-PROFANITY-CLIENT` finding, `critical` and so `deny`, whenever an
+  argument or the tool had a name such as `account`, `customer` or `client`,
+  though no value named a client: an internal message with an `account`
+  argument, say. A client named in the call's values, as the screens read
+  them (JSON inside strings to three levels), still makes profanity in the
+  call a finding, and so does an argument name that holds the profanity and
+  the client word together. Profanity and insults are found in names and
+  values alike, as before, a payload that is not JSON is read as text, and
+  no call is judged more strictly than before.
+
+### Changed
+
+- `artzain.tool_call_contract.conduct_client_context(payload)` says whether a
+  tool call names a client for the conduct rules, or returns `None` for a
+  payload a strict JSON parser does not read. `evaluate_conduct` and
+  `PolicyEnforcementEvaluator.evaluate` take an optional `client_context`:
+  `False` says the client words in the text name no client. It never adds a
+  client the text does not name. `evaluate_tool_call_policy` passes the
+  call's, so an evaluator given to it must accept that keyword.
+- README "Gating tool calls": says the conduct rules count a client word in
+  any value of the call, and an argument or tool name only when it holds the
+  profanity as well.
+
 ## 0.6.23
 
 ### Fixed
