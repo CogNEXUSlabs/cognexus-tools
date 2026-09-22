@@ -119,6 +119,20 @@ class CoreDetectorTests(unittest.TestCase):
                 result = det.detect(text)
                 self.assertFalse(result.is_injection, result.matched_patterns)
 
+    def test_show_bare_tokens_and_do_not_send_are_not_credential_exfil(self) -> None:
+        # Honest tool and API wording: show a masked value, warn not to send
+        # passwords, or talk about model tokens. A request that pastes or
+        # sends an API key still matches (see test_credential_exfil_detected).
+        det = PromptInjectionDetector(config=DetectionConfig(sensitivity="balanced"))
+        for text in (
+            "List secret names in a project. Values are masked; pass reveal=true to show them.",
+            "Passwords are stored hashed; do not send them in chat.",
+            "Maximum tokens to keep; send a larger value to keep more of them.",
+        ):
+            with self.subTest(text=text):
+                result = det.detect(text)
+                self.assertFalse(result.is_injection, result.matched_patterns)
+
     def test_cross_plugin_detected(self) -> None:
         det = PromptInjectionDetector(config=DetectionConfig(sensitivity="balanced"))
         result = det.detect(
