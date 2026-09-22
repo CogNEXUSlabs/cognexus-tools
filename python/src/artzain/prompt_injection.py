@@ -521,14 +521,68 @@ class _CredentialServiceSearch:
         return None
 
 
-_CREDENTIAL_EXFIL_PATTERNS: list[re.Pattern[str] | _CredentialServiceSearch] = [
+#: Credential word → handoff verb → recipient (pattern 1 of credential_exfil).
+#: ``show`` is not a verb here: tool text that reveals a masked value is not a
+#: request to hand the secret over. A bare ``token`` / ``tokens`` is not a
+#: credential either (model context windows); access, auth and bearer tokens
+#: still are.
+_HANDOFF_CREDENTIALS = (
+    r"api\s*keys?|secrets?|credentials?|passwords?|"
+    r"(?:access|auth|bearer)\s*tokens?"
+)
+_HANDOFF_VERBS = r"give|send|paste|dump|exfil|leak"
+_HANDOFF_RECIPIENTS = r"\bme\b|\bus\b|\bhere\b|\bthem\b|\bthose\b"
+_HANDOFF_PATTERN: re.Pattern[str] = re.compile(
+    rf"\b(?:{_HANDOFF_CREDENTIALS})\b.{{0,100}}?"
+    rf"(?:{_HANDOFF_VERBS})\b.{{0,40}}?"
+    rf"(?:{_HANDOFF_RECIPIENTS})",
+    re.IGNORECASE | re.DOTALL,
+)
+_HANDOFF_VERB_RE: re.Pattern[str] = re.compile(
+    rf"(?:{_HANDOFF_VERBS})\b", re.IGNORECASE,
+)
+# ``do not`` / ``don't`` / ``never`` immediately before the verb: not a handoff.
+# Words between the negation and the verb ("do not hesitate to send") still are.
+_NEGATED_HANDOFF_RE: re.Pattern[str] = re.compile(
+    r"(?:do\s+not|don't|never)\s+\Z", re.IGNORECASE,
+)
+_NEGATED_HANDOFF_LOOKBACK = 12
+
+
+class _CredentialHandoffSearch:
+    """Credential word, then a handoff verb, then a recipient.
+
+    ``pattern`` is the rule in source form. The screen records its first 72
+    characters. It is not compiled. Matches where ``do not``, ``don't`` or
+    ``never`` immediately precede the verb are skipped.
+    """
+
+    pattern = (
+        rf"\b(?:{_HANDOFF_CREDENTIALS})\b.{{0,100}}?"
+        rf"(?:{_HANDOFF_VERBS})\b.{{0,40}}?"
+        rf"(?:{_HANDOFF_RECIPIENTS})"
+    )
+
+    def search(self, text: str, pos: int = 0) -> re.Match[str] | None:
+        if pos < 0:
+            pos = 0
+        for match in _HANDOFF_PATTERN.finditer(text, pos):
+            verb = _HANDOFF_VERB_RE.search(match.group())
+            if verb is None:
+                continue
+            verb_at = match.start() + verb.start()
+            before = text[max(0, verb_at - _NEGATED_HANDOFF_LOOKBACK):verb_at]
+            if _NEGATED_HANDOFF_RE.search(before):
+                continue
+            return match
+        return None
+
+
+_CREDENTIAL_EXFIL_PATTERNS: list[
+    re.Pattern[str] | _CredentialServiceSearch | _CredentialHandoffSearch
+] = [
     _CredentialServiceSearch(),
-    re.compile(
-        r"\b(?:api\s*keys?|secrets?|credentials?|passwords?|tokens?)\b.{0,100}?"
-        r"(?:give|send|paste|dump|exfil|leak|show)\b.{0,40}?"
-        r"(?:\bme\b|\bus\b|\bhere\b|\bthem\b|\bthose\b)",
-        re.IGNORECASE | re.DOTALL,
-    ),
+    _CredentialHandoffSearch(),
 ]
 
 # Markdown / HTML gadget attempts in model-visible text (PD-11)

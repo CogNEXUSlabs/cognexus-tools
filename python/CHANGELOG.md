@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.26
+
+### Fixed
+
+- The prompt-injection screen's `credential_exfil` handoff rule (a credential
+  word, then give / send / paste / dump / exfil / leak, then a recipient)
+  matched honest tool and API wording: "pass reveal=true to show them",
+  "Passwords are stored hashed; do not send them in chat.", and "Maximum
+  tokens to keep; send a larger value to keep more of them." Those came back
+  `high` (`deny`), including under a closed envelope's tool-definition
+  screen. The rule no longer treats `show` as a handoff verb, no longer
+  treats a bare `token` / `tokens` as a credential (access, auth and bearer
+  tokens still count), and skips a verb that `do not`, `don't` or `never`
+  immediately precedes. A request that pastes or sends an API key, or that
+  puts words between the negation and the verb, is still found.
+
 ## 0.6.25
 
 ### Fixed
