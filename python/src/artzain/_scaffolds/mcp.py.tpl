@@ -15,7 +15,7 @@ every transport, and it is the one place the *arguments* are known.
 
 Note the payload kind: `tool_call`. That selects the tool-contract and
 destructive-action guards, which is what you want for a structured call —
-`model_output` would screen it as prose instead.
+`model_output` would skip the tool-contract check.
 
 Install::
 

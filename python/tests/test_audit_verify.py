@@ -707,6 +707,50 @@ def test_no_override_is_not_flagged(tmp_path, signer):
     assert r.evidence_root_fingerprint is None
 
 
+def test_pinned_root_restated_with_case_or_whitespace_is_not_an_override(
+        tmp_path, signer, authority, monkeypatch):
+    """The certificate check compares strip().lower(). The override flag has
+    to use that same form: restating the pinned fingerprint in upper case, or
+    with spaces around it, still attests to the published root."""
+    import artzain.audit_verify as av
+
+    fp = authority.root_fingerprint
+    monkeypatch.setattr(av, "EVIDENCE_ROOT_FINGERPRINT", fp)
+    d = _certified_bundle(tmp_path, signer, authority)
+    for supplied in (fp.upper(), " " + fp + " "):
+        r = verify_bundle(d, root_fingerprint=supplied)
+        assert r.attestation == "ATTESTED", supplied
+        assert r.root_fingerprint_overridden is False, supplied
+        assert r.evidence_root_fingerprint == fp, supplied
+
+    other = "ab" * 32
+    assert other != fp
+    r = verify_bundle(d, root_fingerprint=" " + other.upper() + " ")
+    assert r.root_fingerprint_overridden is True
+    assert r.evidence_root_fingerprint == other
+
+
+def test_licence_verify_normalises_root_fingerprint_the_same_way(monkeypatch):
+    """``verify_attestation`` already compared strip().lower(). The fingerprint
+    it reports has to be that same form, as ``verify_bundle`` reports it."""
+    import artzain.audit_verify as av
+    from artzain.licence import verify_attestation
+
+    fp = "cd" * 32
+    monkeypatch.setattr(av, "EVIDENCE_ROOT_FINGERPRINT", fp)
+    for supplied in (fp.upper(), " " + fp + " "):
+        r = verify_attestation({}, evidence_root_fingerprint=supplied)
+        assert r.root_fingerprint_overridden is False, supplied
+        assert r.evidence_root_fingerprint == fp, supplied
+
+    other = " " + ("ab" * 32).upper() + " "
+    r = verify_attestation({}, evidence_root_fingerprint=other)
+    assert r.root_fingerprint_overridden is True
+    assert r.evidence_root_fingerprint == "ab" * 32
+
+
+
+
 # ---------------------------------------------------------------------------
 # WS-4 — record-suppression via duplicate-seq refill and malformed indices.
 # These forges keep the GENUINE deployment-key-signed manifest and every
@@ -1111,3 +1155,133 @@ def test_interior_per_batch_seals_windowed_export_attests(tmp_path, signer, auth
     r = verify_bundle(d, root_fingerprint=authority.root_fingerprint)
     assert r.ok, r.error  # NOT a "deleted leaf" failure
     assert r.attestation == "ATTESTED"
+
+
+# ---------------------------------------------------------------------------
+# What `artzain audit verify` tells a person. The signatures verify against
+# public keys the bundle itself carries, so the words around a verdict must
+# not claim more trust than the verdict does.
+# ---------------------------------------------------------------------------
+
+
+def _run_cli(capsys, argv: list[str]) -> tuple[int, str]:
+    import artzain.cli as cli
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(argv)
+    return exc.value.code, capsys.readouterr().out
+
+
+def test_verify_help_and_docstrings_do_not_claim_zero_server_trust(capsys):
+    """Trust in the producing server drops out only at ATTESTED, once the
+    Evidence Root is pinned. The help and the docstrings used to say the check
+    needs no server trust at all."""
+    import artzain.audit_verify as av
+    import artzain.cli as cli
+
+    code, out = _run_cli(capsys, ["audit", "verify", "--help"])
+    assert code == 0
+    # Docstrings are None under python -OO; the help is checked regardless.
+    for text in (out, cli.cmd_audit_verify.__doc__ or "", av.__doc__ or ""):
+        flat = " ".join(text.lower().split())
+        for claim in ("zero server trust", "no server trust", "zero-trust", "zero trust"):
+            assert claim not in flat, claim
+    help_text = " ".join(out.split())
+    assert "SELF-ATTESTED" in help_text
+    # The help says this release pins no Evidence Root. Pinning one must
+    # reword the help in the same change.
+    assert "pins no Evidence Root" in help_text
+    assert av.EVIDENCE_ROOT_FINGERPRINT is None
+
+
+def test_cli_attested_under_root_override_names_the_supplied_root(
+        tmp_path, signer, authority, capsys):
+    """Under --root-fingerprint an ATTESTED verdict attests to the root the
+    caller supplied. The CLI warns that it is not the published CogNEXUS
+    Evidence Root, so the verdict after that warning must not say the signing
+    keys chain to it."""
+    d = _certified_bundle(tmp_path, signer, authority)
+    code, out = _run_cli(capsys, ["audit", "verify", str(d),
+                                  "--root-fingerprint", authority.root_fingerprint])
+    assert code == 0
+    assert "VERIFIED, ATTESTED" in out  # the ATTESTED branch ran
+    assert "not the published CogNEXUS Evidence Root" in out  # the warning stays
+    # That denial is the only mention of the CogNEXUS Evidence Root.
+    assert out.count("CogNEXUS Evidence Root") == 1, out
+    assert "The signing keys chain to the root you supplied" in out
+
+
+def test_cli_attested_against_the_pinned_root_names_the_cognexus_root(
+        tmp_path, signer, authority, capsys, monkeypatch):
+    """Once a release pins the root, an ATTESTED verdict against that pin
+    names the CogNEXUS Evidence Root, including when --root-fingerprint only
+    restates the pin."""
+    import artzain.audit_verify as av
+
+    fp = authority.root_fingerprint
+    monkeypatch.setattr(av, "EVIDENCE_ROOT_FINGERPRINT", fp)
+    d = _certified_bundle(tmp_path, signer, authority)
+    for extra in (
+        [],
+        ["--root-fingerprint", fp],
+        ["--root-fingerprint", fp.upper()],
+        ["--root-fingerprint", " " + fp + " "],
+    ):
+        code, out = _run_cli(capsys, ["audit", "verify", str(d), *extra])
+        assert code == 0
+        assert "VERIFIED, ATTESTED" in out
+        assert "The signing keys chain to the CogNEXUS Evidence Root" in out
+        assert "NON-DEFAULT" not in out
+
+
+def test_cli_default_run_is_self_attested_without_a_pinned_root(
+        tmp_path, signer, authority, capsys):
+    """Without an override this release pins no Evidence Root, so even a bundle
+    whose certificate chain would verify reports SELF-ATTESTED, and says why."""
+    d = _certified_bundle(tmp_path, signer, authority)
+    code, out = _run_cli(capsys, ["audit", "verify", str(d)])
+    assert code == 0
+    assert "VERIFIED, SELF-ATTESTED" in out
+    assert "self-attested because: no Evidence Root fingerprint pinned" in out
+    assert "VERIFIED, ATTESTED" not in out
+    assert "NON-DEFAULT" not in out
+
+
+def test_cli_attested_prints_notes_for_a_tampered_issuing_certificate(
+        tmp_path, signer, authority, capsys):
+    """A certificates.json that carries a tampered issuing certificate beside a
+    valid one still verifies ATTESTED — one sound issuer is enough — and the
+    text path must name it. The note is already in attestation_reasons (and in
+    --json); the ATTESTED branch used to print reasons only for SELF-ATTESTED."""
+    d = _certified_bundle(tmp_path, signer, authority)
+    certs = json.loads((d / "certificates.json").read_text(encoding="utf-8"))
+    tampered = dict(certs["issuing_certificates"][0])
+    # Body edited after signing. The signature stays the one over the original
+    # body, so the verifier records "signature invalid" and keeps the sound
+    # issuer, which is enough for ATTESTED.
+    tampered["cert_id"] = "ISS-TAMPERED"
+    certs["issuing_certificates"].append(tampered)
+    (d / "certificates.json").write_text(json.dumps(certs), encoding="utf-8")
+
+    code, out = _run_cli(capsys, [
+        "audit", "verify", str(d),
+        "--root-fingerprint", authority.root_fingerprint,
+    ])
+    assert code == 0
+    assert "VERIFIED, ATTESTED" in out
+    assert "Notes on the certificate chain:" in out
+    assert "  - issuing certificate ISS-TAMPERED signature invalid" in out
+    # The overridden-root wording from the ATTESTED branch stays.
+    assert "The signing keys chain to the root you supplied" in out
+    assert "self-attested because:" not in out
+
+    code, raw = _run_cli(capsys, [
+        "audit", "verify", str(d),
+        "--root-fingerprint", authority.root_fingerprint,
+        "--json",
+    ])
+    assert code == 0
+    payload = json.loads(raw)
+    assert payload["attestation"] == "ATTESTED"
+    assert ("issuing certificate ISS-TAMPERED signature invalid"
+            in payload["attestation_reasons"])

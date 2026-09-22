@@ -262,11 +262,13 @@ def _offline_injection_vote(payload: str, kind: str, agent_did: str) -> dict[str
         PromptInjectionDetector,
         ThreatLevel,
     )
+    from artzain.tool_call_contract import reads_decoded
 
     sensitivity = _INJECTION_PRESET.get(kind, "balanced")
     detector = PromptInjectionDetector(config=DetectionConfig(sensitivity=sensitivity))
-    if kind == "tool_call":
-        # Read as sent and as the tool reads it: JSON-decoded.
+    if reads_decoded(kind, payload):
+        # A tool call, or a reply that is JSON: read as sent and as its reader
+        # reads it, JSON-decoded.
         from artzain.tool_call_contract import detect_tool_call_injection
 
         result = detect_tool_call_injection(detector, payload, source=agent_did)
@@ -293,8 +295,11 @@ def _offline_injection_vote(payload: str, kind: str, agent_did: str) -> dict[str
 def _offline_destructive_vote(payload: str, kind: str, *, surface: str) -> dict[str, Any]:
     if kind not in _OUTPUT_KINDS:
         return _vote("destructive-action", "allow", "none", findings=[f"skipped (payload_kind={kind})"])
-    if kind == "tool_call":
-        # Read as sent and as the tool reads it: JSON-decoded.
+    from artzain.tool_call_contract import reads_decoded
+
+    if reads_decoded(kind, payload):
+        # A tool call, or a reply that is JSON: read as sent and as its reader
+        # reads it, JSON-decoded.
         from artzain.tool_call_contract import screen_tool_call_action
 
         result = screen_tool_call_action(payload, surface=surface)
@@ -317,11 +322,24 @@ def _offline_policy_vote(payload: str, kind: str) -> dict[str, Any]:
     evaluator = PolicyEnforcementEvaluator()
     # Offline has no tenant rules; the always-on conduct rules still apply.
     rules = builtin_conduct_rules()
+    from artzain.tool_call_contract import reads_decoded
+
     if kind == "tool_call":
-        # Read as sent and as the tool reads it: JSON-decoded.
+        # Read as sent and as the tool reads it: JSON-decoded. Conduct
+        # counts a client in the call's values, not in its names.
         from artzain.tool_call_contract import evaluate_tool_call_policy
 
         report = evaluate_tool_call_policy(evaluator, payload, rules)
+    elif reads_decoded(kind, payload):
+        # A JSON reply: the same policy texts as a tool call, without a tool
+        # name to set client words aside, so each text's client words decide
+        # as as-sent did. The approval window stays in the characters of each
+        # text as written; only a tool_call as sent measures escapes decoded.
+        from artzain.tool_call_contract import combine_policy_reports, tool_call_policy_texts
+
+        report = combine_policy_reports(
+            [evaluator.evaluate(text, rules) for text in tool_call_policy_texts(payload)]
+        )
     else:
         report = evaluator.evaluate(payload, rules)
     if not report.has_violations:

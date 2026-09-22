@@ -1,9 +1,13 @@
 """Offline verification of a CogNexus audit evidence bundle (FR-3, WS2 §2.4).
 
-Zero network, zero server trust.  Given a bundle directory (or ``.zip``) produced
-by ``GET /api/v1/audit/export``, this recomputes every leaf hash, checks the
+Zero network.  Given a bundle directory (or ``.zip``) produced by
+``GET /api/v1/audit/export``, this recomputes every leaf hash, checks the
 hash-chain linkage and Merkle roots, and verifies Ed25519 signatures against the
 bundled public keys.  It is the Art. 12 "offline reconstruction" artifact.
+Because those keys come from the bundle, trust in the producing server drops
+out only at ``VERIFIED, ATTESTED``, once the Evidence Root is pinned
+(:data:`EVIDENCE_ROOT_FINGERPRINT`).  While that pin is ``None`` and the caller
+supplies no root, an intact bundle verifies ``SELF-ATTESTED``.
 
 Bundle layout::
 
@@ -117,13 +121,15 @@ class VerifyResult:
     #: key — but it is also the shape a substitution takes, and the reader
     #: should be the one to decide which it is.
     unexplained_key_ids: list[str] = field(default_factory=list)
-    #: The Evidence Root fingerprint the run actually pinned against (the
-    #: caller override if supplied, else the module default; ``None``
-    #: pre-ceremony).  ``root_fingerprint_overridden`` is ``True`` when the
-    #: caller passed a fingerprint that differs from the built-in pin — an
-    #: ATTESTED result then attests to *that* root, not the published
-    #: CogNEXUS Evidence Root.  Machine consumers must read this flag: the
-    #: loud human-readable warning is on the text path only.
+    #: The Evidence Root fingerprint this run pinned against, in comparison
+    #: form (stripped, lower case): the caller override when one was supplied,
+    #: otherwise the module default.  ``None`` when neither is set.
+    #: ``root_fingerprint_overridden`` is ``True`` when the caller passed a
+    #: fingerprint that still differs after that normalisation — an ATTESTED
+    #: result then attests to *that* root, not the published CogNEXUS Evidence
+    #: Root.  Case and surrounding whitespace alone are not an override.
+    #: Machine consumers must read this flag: the loud human-readable warning
+    #: is on the text path only.
     evidence_root_fingerprint: Optional[str] = None
     root_fingerprint_overridden: bool = False
 
@@ -320,6 +326,18 @@ def _pem_key_id(pem: str) -> str:
 
 def _pem_fingerprint(pem: str) -> str:
     return hashlib.sha256(_canonical_pem(pem).encode("ascii")).hexdigest()
+
+
+def _normalised_root_fingerprint(value: Optional[str]) -> Optional[str]:
+    """Evidence Root fingerprint in the form the chain check compares.
+
+    Case and surrounding whitespace are not part of the fingerprint. A blank
+    value is no fingerprint.
+    """
+    if value is None:
+        return None
+    text = value.strip().lower()
+    return text or None
 
 
 def _parse_ts(value: Any) -> Optional[datetime]:
@@ -780,18 +798,27 @@ def verify_bundle(bundle_path: str | Path,
     """Verify a bundle directory or .zip. Returns a :class:`VerifyResult`.
 
     *root_fingerprint* overrides the module-level
-    :data:`EVIDENCE_ROOT_FINGERPRINT` pin (test roots only).
+    :data:`EVIDENCE_ROOT_FINGERPRINT` pin (test roots only). Comparison
+    ignores case and surrounding whitespace, the same way the certificate
+    check does, and ``evidence_root_fingerprint`` is that normalised value.
     """
     path = Path(bundle_path)
     res = VerifyResult()
     # Record which root this run actually pinned against, before any early
     # return, so even a FAILED result carries it. A caller-supplied
-    # fingerprint that differs from the built-in pin is an override: an
-    # ATTESTED verdict then attests to that root, not the published one.
-    effective_root = root_fingerprint or EVIDENCE_ROOT_FINGERPRINT
+    # fingerprint that still differs once both sides are stripped and lower
+    # cased is an override: an ATTESTED verdict then attests to that root,
+    # not the published one. ``None`` and ``""`` use the module pin, as
+    # before. A value that is blank once stripped is not a fingerprint.
+    pinned = _normalised_root_fingerprint(EVIDENCE_ROOT_FINGERPRINT)
+    if root_fingerprint:
+        effective_root = _normalised_root_fingerprint(root_fingerprint)
+        overridden = effective_root != pinned
+    else:
+        effective_root = pinned
+        overridden = False
     res.evidence_root_fingerprint = effective_root
-    res.root_fingerprint_overridden = bool(
-        root_fingerprint and root_fingerprint != EVIDENCE_ROOT_FINGERPRINT)
+    res.root_fingerprint_overridden = overridden
     try:
         return _verify_bundle_body(res, path, effective_root)
     except Exception as exc:  # noqa: BLE001

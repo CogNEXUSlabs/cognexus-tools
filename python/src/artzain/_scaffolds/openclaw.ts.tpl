@@ -24,7 +24,7 @@
  * would pretend the human clicked inside OpenClaw. Block instead.
  *
  * Note the payload kind: `tool_call`. That selects the tool-contract and
- * destructive-action guards — `model_output` would screen the call as prose.
+ * destructive-action guards — `model_output` would skip the tool-contract check.
  *
  * Install (inside the plugin package)::
  *

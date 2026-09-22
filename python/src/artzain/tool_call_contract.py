@@ -27,6 +27,11 @@ its tool does (:func:`screen_tool_call_action`,
 ``\\n``, so ``DROP\\nDATABASE`` has no whitespace between its words, and
 ``ensure_ascii`` writes Cyrillic, CJK and emoji as runs of ``\\uXXXX``, which
 read as escape-sequence smuggling. The tool decodes the JSON and sees neither.
+A ``model_output`` payload that is JSON reaches its reader through a JSON parser
+too, so the destructive-action, injection, policy, PII and special-category
+screens read it the same way (:func:`reads_decoded`). :func:`evaluate_tool_call_policy`
+still applies only to a ``tool_call``: it sets conduct client context from the
+call's values and tool name, which a reply does not have.
 
 A tool call also names its values: an argument's name is the label that PII
 detectors look for in prose, as in ``dob: 1990-01-01``. :func:`member_text`
@@ -72,7 +77,10 @@ __all__ = [
     "detect_tool_call_injection",
     "evaluate_tool_call_policy",
     "inspect_tool_call",
+    "tool_call_policy_readings",
+    "tool_call_policy_texts",
     "member_text",
+    "reads_decoded",
     "scan_tool_call_pii",
     "screen_tool_call_action",
     "unescape_non_ascii",
@@ -328,14 +336,26 @@ def _inspect(payload: str, contracts: Optional[Dict[str, Any]]) -> ContractRepor
 #   with a bracket), and each level decoded shortens the text, so each text is
 #   judged with the approval markers it holds: a marker that decoding a deeper
 #   level brings near a match does not suppress the match where it already
-#   shows one level up. The conduct rules find profanity, insults and client
-#   words in each text, keys included, and a text's client words count only
+#   shows one level up. A repeated key is also read as each parser keeps it
+#   (:func:`_views_a_parser_keeps`): ``json.loads`` keeps the last value and some
+#   parsers keep the first, and a marker in a value that parser drops is blanked,
+#   so it cannot approve the value that parser delivers. A marker in a
+#   neighbouring argument is in every reading, at the same distance. On a
+#   reading that is still JSON, that distance counts each string escape as the
+#   character it stands for: a hex digit of an escape is not a letter of a
+#   marker, and ``ensure_ascii``'s six-character escapes do not stretch the
+#   window. The conduct rules find profanity, insults and client words in each
+#   text, keys included, and a text's client words count only
 #   when :func:`conduct_client_context` does not rule them out: a call whose
 #   only client words are its names names no client.
 #
 # The decoded strings are every JSON string in the call, keys and values from
 # any shape, and the strings inside a string that is itself JSON (OpenAI's
 # stringified ``arguments``, a JSON request body).
+#
+# A ``model_output`` payload that is JSON is read the same way by the
+# destructive-action and injection screens (:func:`reads_decoded`): a client
+# that parses a reply acts on its strings.
 
 #: Most distinct decoded strings the destructive-action screen reads one at a
 #: time. Past this the rest are read as one text, which still catches what
@@ -357,6 +377,11 @@ NESTED_TOO_DEEP_RULE_ID = "input.nested_too_deep"
 #: string into the next through whitespace, and a statement-bounded lookahead
 #: (DELETE without WHERE) stops at the string's end.
 _JOIN = "\n;\n"
+
+#: Destructive-action rules not read in a command reconstructed from an argv
+#: array whose first element is the word ``truncate`` (see
+#: :func:`screen_tool_call_action`).
+_NOT_READ_IN_TRUNCATE_COMMANDS = ("sql.truncate",)
 
 #: Opens like a JSON object, array or string, after any whitespace or BOM.
 _JSON_OPENING_RE = re.compile(r"[\s\ufeff]*[\[{\"]")
@@ -413,6 +438,10 @@ _SIMPLE_ESCAPES = {
 }
 _HEXDIGITS = frozenset("0123456789abcdefABCDEF")
 
+#: A JSON string's body as a lenient reader finds its end: everything up to the
+#: first quote no backslash escapes. Shared with :func:`reads_decoded`.
+_STRING_BODY_RE = re.compile(r'[^"\\]*(?:\\[\s\S][^"\\]*)*')
+
 
 def _cut_short(text: str, pos: int) -> bool:
     """Whether ``text[pos:]`` is nothing, or the start of a ``\\uXXXX`` escape cut short."""
@@ -426,48 +455,59 @@ def _cut_short(text: str, pos: int) -> bool:
     )
 
 
-def _truncated_literal(text: str, pos: int) -> Optional[str]:
-    """Decoded prefix of an unterminated JSON string starting at *pos*.
+def _decode_literal(body: str, *, incomplete_at_end: bool) -> str:
+    """*body* with valid JSON escapes decoded and invalid ones kept as written.
 
-    ``None`` when a complete bad escape sits in the string: nothing after it
-    can be told from string content. An incomplete escape at the end of
-    *text* (a lone backslash, or ``\\u`` with fewer than four hex digits) is
-    dropped, and the prefix before it is returned; so is a high surrogate
-    whose low half the end cut off, which would otherwise leave half a
-    character the tool never receives. Linear in the remainder.
+    When *incomplete_at_end* is true, *body* runs to the end of the text (the
+    literal was never closed). An incomplete escape there — a lone backslash,
+    or ``\\u`` with fewer than four hex digits — is dropped, and so is a high
+    surrogate whose low half the end cut off. A complete bad escape, in a
+    closed literal or in this prefix, stays as written: a backslash and a
+    character that is not an escape, or ``\\u`` and characters that are not
+    four hex digits.
     """
     parts: List[str] = []
-    i = pos
-    n = len(text)
+    i = 0
+    n = len(body)
     while i < n:
-        slash = text.find("\\", i)
+        slash = body.find("\\", i)
         if slash < 0:
-            parts.append(text[i:])
+            parts.append(body[i:])
             break
         if slash > i:
-            parts.append(text[i:slash])
+            parts.append(body[i:slash])
         if slash + 1 >= n:
+            if not incomplete_at_end:
+                parts.append("\\")
             break
-        esc = text[slash + 1]
+        esc = body[slash + 1]
         if esc == "u":
-            digits_end = min(slash + 6, n)
-            digits = text[slash + 2:digits_end]
-            if len(digits) < 4:
-                if all(c in _HEXDIGITS for c in digits):
+            digits = body[slash + 2:slash + 6]
+            if len(digits) < 4 or any(c not in _HEXDIGITS for c in digits):
+                if (
+                    incomplete_at_end
+                    and len(digits) < 4
+                    and all(c in _HEXDIGITS for c in digits)
+                ):
                     break
-                return None
-            if any(c not in _HEXDIGITS for c in digits):
-                return None
+                if len(digits) < 4:
+                    parts.append(body[slash:])
+                    break
+                parts.append(body[slash:slash + 6])
+                i = slash + 6
+                continue
             code = int(digits, 16)
             i = slash + 6
             if 0xD800 <= code <= 0xDBFF:
-                if _cut_short(text, i):
+                if incomplete_at_end and _cut_short(body, i):
                     # The end cut off the low half: drop the high half with it.
                     break
-                if text[i:i + 2] == "\\u":
-                    low_digits = text[i + 2:i + 6]
-                    if any(c not in _HEXDIGITS for c in low_digits):
-                        return None
+                low_digits = body[i + 2:i + 6]
+                if (
+                    body[i:i + 2] == "\\u"
+                    and len(low_digits) == 4
+                    and all(c in _HEXDIGITS for c in low_digits)
+                ):
                     low = int(low_digits, 16)
                     if 0xDC00 <= low <= 0xDFFF:
                         code = 0x10000 + (((code - 0xD800) << 10) | (low - 0xDC00))
@@ -476,10 +516,33 @@ def _truncated_literal(text: str, pos: int) -> Optional[str]:
             continue
         mapped = _SIMPLE_ESCAPES.get(esc)
         if mapped is None:
-            return None
+            parts.append(body[slash:slash + 2])
+            i = slash + 2
+            continue
         parts.append(mapped)
         i = slash + 2
     return "".join(parts)
+
+
+def _read_literal(text: str, body: int) -> Tuple[str, int, bool]:
+    """The JSON string whose body starts at *body*, where to resume, and whether it closed.
+
+    The literal ends at the first quote no backslash escapes. A closed literal
+    is decoded from that slice alone: :func:`json.decoder.scanstring` on the
+    whole of *text* builds a :class:`json.JSONDecodeError`, which counts lines
+    from position 0, so one rejected literal per call is quadratic. Valid
+    escapes are decoded; a complete bad escape is kept as written. A literal
+    that never closes yields its decoded prefix, and an incomplete escape at
+    the end of *text* is dropped.
+    """
+    end = _STRING_BODY_RE.match(text, body).end()
+    if end < len(text) and text[end] == '"':
+        try:
+            value, _ = scanstring(text[body - 1:end + 1], 1, False)
+        except ValueError:
+            value = _decode_literal(text[body:end], incomplete_at_end=False)
+        return value, end + 1, True
+    return _decode_literal(text[body:], incomplete_at_end=True), len(text), False
 
 
 def _literals(text: str) -> Iterator[str]:
@@ -488,24 +551,19 @@ def _literals(text: str) -> Iterator[str]:
     In JSON a ``"`` outside a string always opens one, so reading literal by
     literal recovers every string without parsing the structure around it:
     nesting depth, duplicate keys and trailing text do not matter. A literal
-    that is never closed at the end of *text* (a payload cut inside a string)
-    yields its decoded prefix; an incomplete trailing escape (a lone
-    backslash, or ``\\u`` with fewer than four hex digits) is dropped. A bad
-    escape in the middle still stops the reading, since nothing after it can
-    be told apart from string content.
+    ends at the first quote no backslash escapes, where a lenient reader ends
+    it. A strict decoder's bad escape stays as written, and the literals after
+    it are still read. A literal that is never closed at the end of *text* (a
+    payload cut inside a string) yields its decoded prefix; an incomplete
+    trailing escape (a lone backslash, or ``\\u`` with fewer than four hex
+    digits) is dropped.
     """
     pos = 0
     while True:
         start = text.find('"', pos)
         if start < 0:
             return
-        try:
-            value, pos = scanstring(text, start + 1, False)
-        except ValueError:
-            value = _truncated_literal(text, start + 1)
-            if value is not None:
-                yield value
-            return
+        value, pos, _closed = _read_literal(text, start + 1)
         yield value
 
 
@@ -679,9 +737,11 @@ def decoded_texts(payload: str) -> List[str]:
     backslash has nothing to write out and gets no text, and a text the same as
     the one before it is left out. Decoding only shortens text: no text is
     longer than *payload*, and two positions are never further apart in a text
-    than in the one before it. Reading a text stops at the first string that
-    does not decode, and the rest of that text stays as it is. A lone surrogate
-    stays as decoded, for the screens to refuse.
+    than in the one before it. A string a strict decoder rejects is still
+    written out — valid escapes decoded, invalid ones as written — and the
+    strings after it are too. A string that never closes stops the reading,
+    and the rest of that text stays as it is. A lone surrogate stays as
+    decoded, for the screens to refuse.
     """
     payload = payload or ""
     if "\\" not in payload:
@@ -698,6 +758,9 @@ def _write_out_strings(text: str, level: int, depth: int) -> str:
     """*text* with the strings at *level* decoded, and deeper ones while ``level + 1 < depth``.
 
     The ``,``, ``}`` or ``]`` right after each string becomes a line break.
+    A closed string a strict decoder rejects is written out with invalid
+    escapes kept as written, and the strings after it are too. A string that
+    never closes stops the walk.
     """
     parts: List[str] = []
     pos = 0
@@ -705,9 +768,8 @@ def _write_out_strings(text: str, level: int, depth: int) -> str:
         start = text.find('"', pos)
         if start < 0:
             break
-        try:
-            value, end = scanstring(text, start + 1, False)
-        except ValueError:
+        value, end, closed = _read_literal(text, start + 1)
+        if not closed:
             break
         if level + 1 < depth and _looks_like_json(value):
             value = _write_out_strings(value, level + 1, depth)
@@ -776,13 +838,19 @@ def screen_tool_call_action(
     surface: str = "agent_action",
     disabled_rule_ids: Collection[str] = (),
 ) -> "ActionScreenResult":
-    """Destructive-action screen of a ``tool_call`` payload, as sent and decoded.
+    """Destructive-action screen of a payload :func:`reads_decoded` names, as sent and decoded.
 
     The payload as sent, then each distinct decoded string and each argv-style
     array reconstructed as the command it runs, one at a time (the first
     :data:`MAX_SCREENED_STRINGS`), then any past that as one text. The results
     are combined by
-    :func:`~artzain.destructive_action_guard.combine_screens`.
+    :func:`~artzain.destructive_action_guard.combine_screens`. A command
+    reconstructed from an array that begins with the word ``truncate`` is not
+    read for the rules in :data:`_NOT_READ_IN_TRUNCATE_COMMANDS`: it is a list
+    of words (`["truncate", "wrap"]`, `["TRUNCATE", "ERROR"]`) or the coreutils
+    command. A TRUNCATE statement passed in an array sits in one element,
+    which is read on its own, or follows the client that runs it (`["db2",
+    "truncate", "table", "t"]`).
     """
     from artzain.destructive_action_guard import (
         ActionMatch,
@@ -795,7 +863,14 @@ def screen_tool_call_action(
     decoded = decode_strings(payload)
     texts = decoded.strings + decoded.commands
     results = [screen_action(payload, surface=surface)]
-    results.extend(screen_action(s, surface=surface) for s in texts[:MAX_SCREENED_STRINGS])
+    results.extend(screen_action(s, surface=surface) for s in decoded.strings[:MAX_SCREENED_STRINGS])
+    results.extend(
+        combine_screens(
+            [screen_action(c, surface=surface)],
+            disabled_rule_ids=_NOT_READ_IN_TRUNCATE_COMMANDS if c.split(" ", 1)[0].lower() == "truncate" else (),
+        )
+        for c in decoded.commands[:max(0, MAX_SCREENED_STRINGS - len(decoded.strings))]
+    )
     ceilings: List[ActionMatch] = []
     rest = texts[MAX_SCREENED_STRINGS:]
     if rest:
@@ -837,7 +912,7 @@ def detect_tool_call_injection(
     *,
     source: str = "unknown",
 ) -> "DetectionResult":
-    """Prompt-injection screen of a ``tool_call`` payload, as sent and decoded.
+    """Prompt-injection screen of a payload :func:`reads_decoded` names, as sent and decoded.
 
     *detector* reads the payload with escapes of visible non-ASCII characters
     written out (:func:`unescape_non_ascii`), then the decoded strings as one
@@ -912,6 +987,302 @@ def combine_policy_reports(reports: Sequence["PolicyEnforcementReport"]) -> "Pol
     )
 
 
+_NUMBER_RE = re.compile(r"-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?")
+
+
+def _skip_ws(text: str, i: int) -> int:
+    n = len(text)
+    while i < n and text[i] in " \t\n\r":
+        i += 1
+    return i
+
+
+def _raw_map(text: str, start: int, end: int) -> List[int]:
+    """Raw index of each decoded character of ``text[start:end]``, plus *end*.
+
+    *start* is the first character inside a JSON string and *end* the index of
+    its closing quote. The result has one entry more than the decoded string,
+    so a span ``[a, b)`` in that string is ``[raw[a], raw[b])`` in *text*.
+    """
+    raw_of: List[int] = []
+    i = start
+    while i < end:
+        raw_of.append(i)
+        if text[i] != "\\":
+            i += 1
+            continue
+        if i + 1 >= end:
+            raise ValueError
+        esc = text[i + 1]
+        if esc == "u":
+            if i + 6 > end or any(c not in _HEXDIGITS for c in text[i + 2:i + 6]):
+                raise ValueError
+            code = int(text[i + 2:i + 6], 16)
+            i += 6
+            if 0xD800 <= code <= 0xDBFF and text.startswith("\\u", i) and i + 6 <= end:
+                low_digits = text[i + 2:i + 6]
+                if all(c in _HEXDIGITS for c in low_digits):
+                    low = int(low_digits, 16)
+                    if 0xDC00 <= low <= 0xDFFF:
+                        i += 6
+            continue
+        if esc not in _SIMPLE_ESCAPES:
+            raise ValueError
+        i += 2
+    if i != end:
+        raise ValueError
+    raw_of.append(end)
+    return raw_of
+
+
+def _parse_string(
+    text: str,
+    i: int,
+    level: int,
+    last_spans: List[Tuple[int, int]],
+    first_spans: List[Tuple[int, int]],
+) -> int:
+    """The index after the string at *i*, recording dropped values nested inside it."""
+    decoded, end = scanstring(text, i + 1, True)
+    if level >= MAX_NESTED_JSON or not _looks_like_json(decoded):
+        return end
+    nested_last: List[Tuple[int, int]] = []
+    nested_first: List[Tuple[int, int]] = []
+    try:
+        pos = _parse_json_value(decoded, 0, level + 1, nested_last, nested_first)
+    except (ValueError, RecursionError):
+        return end
+    if decoded[pos:].strip() or not (nested_last or nested_first):
+        return end
+    try:
+        raw_of = _raw_map(text, i + 1, end - 1)
+    except ValueError:
+        return end
+    if len(raw_of) != len(decoded) + 1:
+        return end
+    limit = len(decoded)
+    for spans, nested in ((last_spans, nested_last), (first_spans, nested_first)):
+        for start, stop in nested:
+            if 0 <= start <= stop <= limit:
+                spans.append((raw_of[start], raw_of[stop]))
+    return end
+
+
+def _parse_json_value(
+    text: str,
+    i: int,
+    level: int,
+    last_spans: List[Tuple[int, int]],
+    first_spans: List[Tuple[int, int]],
+) -> int:
+    """The index after the JSON value at *i*. Repeated keys add the spans a parser drops.
+
+    *last_spans* collects every value but a key's last; *first_spans* every
+    value but its first. Nested JSON strings are read the same way, and their
+    spans are translated back into *text*.
+    """
+    i = _skip_ws(text, i)
+    if i >= len(text):
+        raise ValueError
+    ch = text[i]
+    if ch == '"':
+        return _parse_string(text, i, level, last_spans, first_spans)
+    if ch == "{":
+        return _parse_object(text, i, level, last_spans, first_spans)
+    if ch == "[":
+        return _parse_array(text, i, level, last_spans, first_spans)
+    if ch == "t":
+        return _literal(text, i, "true")
+    if ch == "f":
+        return _literal(text, i, "false")
+    if ch == "n":
+        return _literal(text, i, "null")
+    if text.startswith("NaN", i):
+        return i + 3
+    if text.startswith("Infinity", i):
+        return i + 8
+    if text.startswith("-Infinity", i):
+        return i + 9
+    matched = _NUMBER_RE.match(text, i)
+    if matched is None or matched.end() == i:
+        raise ValueError
+    return matched.end()
+
+
+def _literal(text: str, i: int, word: str) -> int:
+    if not text.startswith(word, i):
+        raise ValueError
+    return i + len(word)
+
+
+def _parse_array(
+    text: str,
+    i: int,
+    level: int,
+    last_spans: List[Tuple[int, int]],
+    first_spans: List[Tuple[int, int]],
+) -> int:
+    i = _skip_ws(text, i + 1)
+    if i < len(text) and text[i] == "]":
+        return i + 1
+    while True:
+        i = _parse_json_value(text, i, level, last_spans, first_spans)
+        i = _skip_ws(text, i)
+        if i >= len(text):
+            raise ValueError
+        if text[i] == "]":
+            return i + 1
+        if text[i] != ",":
+            raise ValueError
+        i += 1
+
+
+def _parse_object(
+    text: str,
+    i: int,
+    level: int,
+    last_spans: List[Tuple[int, int]],
+    first_spans: List[Tuple[int, int]],
+) -> int:
+    i = _skip_ws(text, i + 1)
+    members: List[Tuple[str, int, int]] = []
+    if i < len(text) and text[i] == "}":
+        return i + 1
+    while True:
+        i = _skip_ws(text, i)
+        if i >= len(text) or text[i] != '"':
+            raise ValueError
+        key, key_end = scanstring(text, i + 1, True)
+        i = _skip_ws(text, key_end)
+        if i >= len(text) or text[i] != ":":
+            raise ValueError
+        value_start = _skip_ws(text, i + 1)
+        value_end = _parse_json_value(text, value_start, level, last_spans, first_spans)
+        members.append((key, value_start, value_end))
+        i = _skip_ws(text, value_end)
+        if i >= len(text):
+            raise ValueError
+        if text[i] == "}":
+            break
+        if text[i] != ",":
+            raise ValueError
+        i += 1
+    grouped: Dict[str, List[Tuple[int, int]]] = {}
+    for key, start, end in members:
+        grouped.setdefault(key, []).append((start, end))
+    for group in grouped.values():
+        if len(group) < 2:
+            continue
+        last_spans.extend(group[:-1])
+        first_spans.extend(group[1:])
+    return i + 1
+
+
+def _blank_spans(text: str, spans: List[Tuple[int, int]]) -> str:
+    """*text* with each span replaced by the same number of spaces.
+
+    The characters around a span stay at the same indexes, so a marker in a
+    neighbouring value stays as near a match as it was, and one on the far
+    side of a long dropped value stays far.
+    """
+    merged: List[Tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if start < 0 or end <= start or start >= len(text):
+            continue
+        end = min(end, len(text))
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    if not merged:
+        return text
+    parts: List[str] = []
+    prev = 0
+    for start, end in merged:
+        parts.append(text[prev:start])
+        parts.append(" " * (end - start))
+        prev = end
+    parts.append(text[prev:])
+    return "".join(parts)
+
+
+def _views_a_parser_keeps(payload: str) -> Tuple[Tuple[str, bool], ...]:
+    """Readings of *payload* with the values one parser drops replaced by spaces.
+
+    Two readings, when a key is given twice anywhere a strict parser reads,
+    including inside a string that is itself JSON (stringified ``arguments``),
+    down to :data:`MAX_NESTED_JSON` levels. The first keeps each key's last
+    value, as ``json.loads`` does; the second keeps its first, as a first-wins
+    parser does. Each dropped value becomes spaces of the same length, and
+    each reading is also given with its escapes written out
+    (:func:`decoded_texts`), so a match that appears only once newlines are
+    written out is judged without the marker the parser did not deliver. Each
+    pair is ``(text, json_string_escapes)``: true for the blanked JSON, false
+    once its escapes are written out. No readings when nothing repeats or the
+    payload does not parse: a parser that rejects it drops nothing. Never raises.
+    """
+    payload = payload or ""
+    if not payload:
+        return ()
+    last_spans: List[Tuple[int, int]] = []
+    first_spans: List[Tuple[int, int]] = []
+    try:
+        end = _parse_json_value(payload, 0, 0, last_spans, first_spans)
+        if payload[end:].strip():
+            raise ValueError
+    except (ValueError, RecursionError, IndexError):
+        return ()
+    if not last_spans and not first_spans:
+        return ()
+    seen = {payload, *decoded_texts(payload)}
+    views: List[Tuple[str, bool]] = []
+
+    def add(text: str, escapes: bool) -> None:
+        if text not in seen:
+            seen.add(text)
+            views.append((text, escapes))
+
+    for spans in (last_spans, first_spans):
+        if not spans:
+            continue
+        view = _blank_spans(payload, spans)
+        # Still JSON, so the approval window measures escapes the way it does
+        # on the call as sent. The decoded copy below has already written them out.
+        add(view, True)
+        for text in decoded_texts(view):
+            add(text, False)
+    return tuple(views)
+
+
+def tool_call_policy_readings(payload: str) -> List[Tuple[str, bool]]:
+    """``(text, json_string_escapes)`` pairs the policy screen reads, payload first.
+
+    The payload as sent, then each of :func:`decoded_texts`, then each reading
+    from :func:`_views_a_parser_keeps`. The boolean is the evaluator's
+    ``json_string_escapes``: true for a text that is still JSON, so a hex digit
+    of an escape is not a letter of a marker, and false once escapes are
+    written out. An approval marker counts only in the text it is in;
+    :func:`combine_policy_reports` keeps a match any one of them reports.
+    """
+    payload = payload or ""
+    readings = [(payload, True)]
+    seen = {payload}
+    for text in decoded_texts(payload):
+        if text not in seen:
+            seen.add(text)
+            readings.append((text, False))
+    for text, escapes in _views_a_parser_keeps(payload):
+        if text not in seen:
+            seen.add(text)
+            readings.append((text, escapes))
+    return readings
+
+
+def tool_call_policy_texts(payload: str) -> List[str]:
+    """The texts of :func:`tool_call_policy_readings`, without the escape flags."""
+    return [text for text, _escapes in tool_call_policy_readings(payload)]
+
+
 def evaluate_tool_call_policy(
     evaluator: "PolicyEnforcementEvaluator",
     payload: str,
@@ -921,14 +1292,19 @@ def evaluate_tool_call_policy(
 
     *evaluator* reads each text on its own, so an approval marker counts only in
     the text it is in, and :func:`combine_policy_reports` folds the reports into
-    one. In every text the conduct rules count client words only when
+    one. Readings from :func:`_views_a_parser_keeps` are included, so a marker
+    in a repeated key's dropped value does not approve the value a parser
+    keeps. A text that is still JSON is read with ``json_string_escapes``, so
+    the approval window counts an escape as the character it stands for. In
+    every text the conduct rules count client words only when
     :func:`conduct_client_context` does not rule them out; *evaluator*'s
     ``evaluate`` receives that as its ``client_context`` keyword.
     """
-    texts = [payload, *decoded_texts(payload)]
     context = conduct_client_context(payload)
-    return combine_policy_reports(
-        [evaluator.evaluate(text, rules, client_context=context) for text in texts])
+    return combine_policy_reports([
+        evaluator.evaluate(text, rules, client_context=context, json_string_escapes=escapes)
+        for text, escapes in tool_call_policy_readings(payload)
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -1029,19 +1405,20 @@ class _Text(str):
 def _pieces(text: str) -> Iterator[str]:
     """*text* in order: the text before each JSON string literal, then the literal decoded.
 
-    Found the way :func:`_literals` finds complete literals. From a literal
-    ``scanstring`` does not decode, the rest of *text* is one piece of text
-    between strings (an unterminated last literal's prefix is decoded by
-    :func:`_literals` for the screens; this walk leaves it as surrounding text).
+    Found the way :func:`_literals` finds closed literals. A literal that never
+    closes ends the walk: the rest of *text*, from where that literal opened,
+    is one piece of text (its prefix is decoded by :func:`_literals` for the
+    screens; this walk leaves it as surrounding text). A closed literal a
+    strict decoder rejects is decoded with invalid escapes kept as written,
+    and the walk continues.
     """
     pos = 0
     while True:
         start = text.find('"', pos)
         if start < 0:
             break
-        try:
-            value, end = scanstring(text, start + 1, False)
-        except ValueError:
+        value, end, closed = _read_literal(text, start + 1)
+        if not closed:
             break
         yield _Text(text[pos:start])
         yield value
@@ -1050,16 +1427,19 @@ def _pieces(text: str) -> Iterator[str]:
 
 
 def _escaped_strings(text: str) -> List[str]:
-    """Each JSON string literal in *text* that holds an escape, decoded, found as :func:`_literals` finds them."""
+    """Each closed JSON string literal in *text* that holds an escape, decoded.
+
+    Found the way :func:`_literals` finds them. A bad escape is kept as written
+    and does not stop the walk; a literal that never closes does.
+    """
     found: List[str] = []
     pos = 0
     while True:
         start = text.find('"', pos)
         if start < 0:
             return found
-        try:
-            value, end = scanstring(text, start + 1, False)
-        except ValueError:
+        value, end, closed = _read_literal(text, start + 1)
+        if not closed:
             return found
         if "\\" in text[start + 1:end - 1]:
             found.append(value)
@@ -1171,10 +1551,20 @@ def scan_tool_call_pii(payload: str) -> Dict[str, int]:
 #   contract's parser reads it. A call is the payload, each object in a list
 #   payload, or each object in a ``tool_calls`` list at the top. A key named
 #   like those anywhere else holds a value.
-# * A string that looks like JSON is read as JSON down to
+# * A value that looks like JSON is read as JSON down to
 #   :data:`MAX_NESTED_JSON` levels, through its keys and values when the
-#   parser reads it. Otherwise, and past the last level, it is read as the text
-#   it is, and each string inside it that holds an escape is also read decoded.
+#   parser reads it. Past the last level it is read as the text it is, and
+#   each string inside it that holds an escape is also read decoded.
+# * JSON in a value that the parser does not read, such as a document cut
+#   short, has no names to tell from its values. It is text, and so is each
+#   string in it, keys included: decoded, and read as text in turn, down to
+#   the last level. This reads such JSON as :func:`decoded_texts` writes it
+#   out: its strings up to the first one that does not decode, such as the one
+#   the end cuts off, and at the last level each string as the text it is, its
+#   own strings not decoded. Such JSON names a client only where a text the
+#   conduct rules read shows one.
+# * Each string is read once at each level in each of these ways, however
+#   often it repeats.
 # * A payload the strict parser does not read has no names to tell from its
 #   values, so the conduct rules search each text they read for a client word,
 #   as for any text; on the engine, the contract vote reviews such a call.
@@ -1208,6 +1598,10 @@ def conduct_client_context(payload: str) -> Optional[bool]:
     True when a string value names a client, at any level, or when a key or
     the tool's name holds a profanity and a client word together; False when
     none does, and the conduct rules then read the call as naming no client.
+    A value holding JSON that a strict parser does not read is text, keys
+    included, read as far as :func:`decoded_texts` decodes it; JSON in a
+    value past the last level is the text it is, with its escaped strings
+    read decoded.
     None when a strict JSON parser does not read *payload*: the conduct rules
     then read the client words of each text, as for any text. See the comment
     above.
@@ -1224,8 +1618,18 @@ def conduct_client_context(payload: str) -> Optional[bool]:
     # A string that repeats is parsed once, and searched for escapes once.
     reads: Dict[str, Any] = {}
     escaped: Dict[str, List[str]] = {}
+
+    def escaped_strings(text: str) -> List[str]:
+        if text not in escaped:
+            escaped[text] = _escaped_strings(text)
+        return escaped[text]
+
+    # Each string is read once at each level as each role, however often it repeats.
+    seen: Set[Tuple[str, int, str]] = set()
     # A value, its level of JSON inside strings, and what it is read as: the
-    # payload ("root"), a call, the call's function object, or a value.
+    # payload ("root"), a call, the call's function object, a value, or text (a
+    # string in JSON the parser did not read, whose keys cannot be told from
+    # its values).
     stack: List[Tuple[Any, int, str]] = [(root, 0, "root")]
     while stack:
         node, level, role = stack.pop()
@@ -1253,17 +1657,72 @@ def conduct_client_context(payload: str) -> Optional[bool]:
         elif isinstance(node, list):
             stack.extend((item, level, "call" if role == "root" else "value") for item in node)
         elif _is_text(node):
+            if (node, level, role) in seen:
+                continue
+            seen.add((node, level, role))
             if _looks_like_json(node):
-                if level < MAX_NESTED_JSON:
+                if role != "text" and level < MAX_NESTED_JSON:
                     if node not in reads:
                         reads[node] = _parse_values(node)
                     if reads[node] is not _UNPARSED:
                         stack.append((reads[node], level + 1, "value"))
                         continue
-                if node not in escaped:
-                    escaped[node] = _escaped_strings(node)
-                if any(_CLIENT_CONTEXT.search(inner) for inner in escaped[node]):
+                if level < MAX_NESTED_JSON:
+                    # Not parsed: text, and so is each string in it. A string
+                    # without an escape reads the same in the text itself.
+                    stack.extend((inner, level + 1, "text") for inner in escaped_strings(node))
+                elif role != "text" and any(_CLIENT_CONTEXT.search(inner) for inner in escaped_strings(node)):
                     return True
             if _CLIENT_CONTEXT.search(node):
                 return True
     return False
+
+
+#: How a reply that is a JSON object or array opens, after any whitespace or
+#: byte order mark: an object with its first key or its end, an array with its
+#: first value or its end. ``NaN`` and ``Infinity`` are the constants Python's
+#: parser also accepts.
+_JSON_CONTAINER_OPENING_RE = re.compile(
+    r'[\s\ufeff]*(?:\{[\s\ufeff]*["}]'
+    r'|\[[\s\ufeff]*(?:["{\[\]0-9-]|(?:true|false|null|NaN|Infinity)\b))'
+)
+
+_JSON_STRING_OPENING_RE = re.compile(r'[\s\ufeff]*"')
+
+
+def reads_decoded(payload_kind: str, payload: str) -> bool:
+    """Whether the screens read a payload decoded as well as sent.
+
+    Such a payload's destructive-action and injection screens are
+    :func:`screen_tool_call_action` and :func:`detect_tool_call_injection`.
+    The policy, privacy and special-category screens read it as sent and as
+    :func:`tool_call_policy_texts`, and the privacy screen also as
+    :func:`member_text`. Offline ``decide()``'s policy vote reads those texts
+    without :func:`conduct_client_context`, which keys off a tool name a reply
+    does not have, and without measuring the approval window in decoded
+    characters, which is a tool call's as-sent reading.
+
+    * A ``tool_call`` payload always is: a call is JSON.
+    * A ``model_output`` payload is when it is JSON with a string to decode: it
+      opens, after any whitespace or byte order mark, as an object with its
+      first key, as an array with its first value, or as a string that is the
+      whole reply. A client that parses the reply acts on its strings decoded.
+      A lenient parser also reads an object or array a strict one rejects,
+      such as one cut off at a token limit, so for those only the opening is
+      checked.
+    * Any other payload is read as written.
+    """
+    if payload_kind == "tool_call":
+        return True
+    text = payload or ""
+    if payload_kind != "model_output" or '"' not in text:
+        return False
+    if _JSON_CONTAINER_OPENING_RE.match(text):
+        return True
+    opening = _JSON_STRING_OPENING_RE.match(text)
+    if opening is None:
+        return False
+    # A string is the whole reply when nothing but whitespace follows it, or
+    # when it is never closed (cut off at a token limit).
+    end = _STRING_BODY_RE.match(text, opening.end()).end()
+    return end >= len(text) or text[end] != '"' or not text[end + 1:].strip()

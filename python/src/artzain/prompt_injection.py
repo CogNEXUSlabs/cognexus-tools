@@ -82,6 +82,7 @@ Architecture:
 from __future__ import annotations
 
 import base64
+import bisect
 import functools
 import hashlib
 import logging
@@ -322,16 +323,206 @@ _CROSS_PLUGIN_PATTERNS: list[re.Pattern[str]] = [
     ),
 ]
 
-# User asks the agent to harvest authentication material from integrations
-_CREDENTIAL_EXFIL_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(
-        r"(?:search|find|scan|list|export|dump|retrieve|pull)\b.{0,140}?"
-        r"(?:google\s+drive|google\s+workspace|g\s*suite|onedrive|sharepoint|"
-        r"gmail|outlook|github|gitlab|slack|jira|notion|dropbox|box)\b"
-        r".{0,120}?\b(?:api\s*keys?|secret\s*keys?|passwords?|credentials?|"
-        r"auth\s*tokens?|bearer\s*tokens?|access\s*tokens?)\b",
-        re.IGNORECASE | re.DOTALL,
-    ),
+# User asks the agent to harvest authentication material from integrations.
+# A service name does not count straight after a letter a-z, so the "box"
+# that ends "inbox", "mailbox" or "sandbox", or the "g suite" that ends
+# "testing suite", names no service; nor does "box" after an underscore
+# ("text_box") or "g suite" after a digit ("5G suite"). The character that
+# ends a backslash escape such as \n or \uXXXX in JSON text read as written
+# never counts against a name. Anything else may come first: a digit or an
+# underscore ("acme_github"), or a letter of another script (Chinese puts no
+# space before a Latin name).
+# The service rule is _CredentialServiceSearch, below. The give/send rule is
+# still one expression: its gaps are 100 characters, then 40.
+_EXFIL_VERBS = "search|find|scan|list|export|dump|retrieve|pull"
+_EXFIL_CREDENTIALS = (
+    "api\\s*keys?|secret\\s*keys?|passwords?|credentials?|"
+    "auth\\s*tokens?|bearer\\s*tokens?|access\\s*tokens?"
+)
+_VERB_WINDOW = 140
+_CREDENTIAL_WINDOW = 120
+# The same anchors the expression used, checked at the start of the service.
+_SERVICE_ANCHOR = re.compile(
+    r"(?:(?<![a-z])|(?<=\\[nrt])|(?<=\\u[0-9a-f]{4}))",
+    re.IGNORECASE,
+)
+_G_SUITE_ANCHOR = re.compile(
+    r"(?:(?<!\d)|(?<=\\u[0-9a-f]{4}))",
+    re.IGNORECASE,
+)
+_BOX_ANCHOR = re.compile(r"(?<!_)")
+_EXFIL_VERB_RE = re.compile(rf"(?:{_EXFIL_VERBS})\b", re.IGNORECASE)
+_EXFIL_CREDENTIAL_RE = re.compile(
+    rf"\b(?:{_EXFIL_CREDENTIALS})\b",
+    re.IGNORECASE | re.DOTALL,
+)
+# Longer words before a word they end with, so "onedrive" is not read as
+# "drive" and "dropbox" is not read as "box" when the search starts on the
+# longer word.
+_SERVICE_END_WORDS = (
+    "workspace", "sharepoint", "onedrive", "dropbox", "outlook", "github",
+    "gitlab", "gmail", "notion", "slack", "drive", "suite", "jira", "box",
+)
+_SERVICE_END_MAX = max(len(word) for word in _SERVICE_END_WORDS)
+_EXFIL_SERVICE_END_RE = re.compile(
+    r"(?:" + "|".join(_SERVICE_END_WORDS) + r")\b",
+    re.IGNORECASE,
+)
+_SINGLE_SERVICE_ENDS = frozenset({
+    "onedrive", "sharepoint", "gmail", "outlook", "github", "gitlab",
+    "slack", "jira", "notion", "dropbox", "box",
+})
+_GOOGLE_AT_END = re.compile(r"google\Z", re.IGNORECASE)
+_G_AT_END = re.compile(r"g\Z", re.IGNORECASE)
+
+
+def _literal_ending_at(
+    text: str, end: int, literal: re.Pattern[str], width: int,
+) -> int | None:
+    """Where *literal* matches so that the match ends at *end*, or None.
+
+    *width* is the most characters *literal* can cover. A case-folded letter
+    can match a shorter stretch of the text.
+    """
+    if end <= 0:
+        return None
+    start = max(0, end - width)
+    found = literal.search(text[start:end])
+    if found is None or found.end() != end - start:
+        return None
+    return start + found.start()
+
+
+def _prefixed_service_start(
+    text: str, word_start: int, prefix: re.Pattern[str], width: int, *, spaces: bool,
+) -> int | None:
+    """Start of *prefix* plus the whitespace before ``text[word_start]``.
+
+    ``spaces`` requires at least one whitespace character (``google\\s+drive``).
+    Without it the prefix may sit against the word (``gsuite``). The whitespace
+    is ``str.isspace``, the same characters ``\\s`` matches in a ``str`` pattern.
+    """
+    i = word_start
+    while i > 0 and text[i - 1].isspace():
+        i -= 1
+    if spaces and i == word_start:
+        return None
+    return _literal_ending_at(text, i, prefix, width)
+
+
+def _service_start(text: str, word_start: int, word_end: int) -> tuple[int, str] | None:
+    """Where the service ending at *word_end* starts, and which end word it is."""
+    word = text[word_start:word_end].casefold()
+    if word in _SINGLE_SERVICE_ENDS:
+        start = word_start
+    elif word in ("drive", "workspace"):
+        start = _prefixed_service_start(text, word_start, _GOOGLE_AT_END, 6, spaces=True)
+    elif word == "suite":
+        start = _prefixed_service_start(text, word_start, _G_AT_END, 1, spaces=False)
+    else:
+        return None
+    if start is None or not _service_anchor(text, start, word):
+        return None
+    return start, word
+
+
+def _service_anchor(text: str, start: int, word: str) -> bool:
+    """The lookbehinds the expression checks at the start of a service name."""
+    if _SERVICE_ANCHOR.match(text, start) is None:
+        return False
+    if word == "suite" and _G_SUITE_ANCHOR.match(text, start) is None:
+        return False
+    if word == "box" and _BOX_ANCHOR.match(text, start) is None:
+        return False
+    return True
+
+
+class _Hit:
+    """The span a rule match reports. Truthy, like a ``re.Match``."""
+
+    __slots__ = ("_start", "_end")
+
+    def __init__(self, start: int, end: int) -> None:
+        self._start = start
+        self._end = end
+
+    def span(self) -> tuple[int, int]:
+        return (self._start, self._end)
+
+    def start(self) -> int:
+        return self._start
+
+    def end(self) -> int:
+        return self._end
+
+
+class _CredentialServiceSearch:
+    """Verb, then a service within 140 characters, then a credential within 120.
+
+    The expression walked the first gap from every verb and, at every service
+    in that gap, walked the second. A credential word is the rare piece, so
+    this finds those and looks back: the service ends in the 120 characters
+    before the credential, and a verb ends in the 140 before the service
+    starts. The anchors above are checked at the start of that service. Text
+    with no credential word is one pass over the credential expression. The
+    same strings match, and the span is the same.
+
+    Python 3.10 has no atomic groups. A repeat that tests the next word at
+    every character would stay linear and would keep a frame per character, so
+    the look-back is a scan of the window rather than another expression.
+
+    ``pattern`` is the rule in source form. The screen records its first 72
+    characters. It is not compiled.
+    """
+
+    pattern = (
+        rf"(?:{_EXFIL_VERBS})\b.{{0,{_VERB_WINDOW}}}"
+        r"(?:(?<![a-z])|(?<=\\[nrt])|(?<=\\u[0-9a-f]{4}))"
+        r"(?:google\s+drive|google\s+workspace|"
+        r"(?:(?<!\d)|(?<=\\u[0-9a-f]{4}))g\s*suite|onedrive|sharepoint|"
+        r"gmail|outlook|github|gitlab|slack|jira|notion|dropbox|(?<!_)box)\b"
+        rf".{{0,{_CREDENTIAL_WINDOW}}}"
+        rf"\b(?:{_EXFIL_CREDENTIALS})\b"
+    )
+
+    def search(self, text: str, pos: int = 0) -> _Hit | None:
+        if pos < 0:
+            pos = 0
+        verbs: list[tuple[int, int]] | None = None
+        ends: list[int] = []
+        for cred in _EXFIL_CREDENTIAL_RE.finditer(text, pos):
+            if verbs is None:
+                verbs = [(m.start(), m.end()) for m in _EXFIL_VERB_RE.finditer(text, pos)]
+                if not verbs:
+                    return None
+                ends = [end for _, end in verbs]
+            region = max(pos, cred.start() - _CREDENTIAL_WINDOW - _SERVICE_END_MAX)
+            best: int | None = None
+            # One character past the credential keeps the service's trailing
+            # ``\b`` on the real next character. A match that runs into that
+            # character ends after the credential and is ignored.
+            limit = min(len(text), cred.start() + 1)
+            for endw in _EXFIL_SERVICE_END_RE.finditer(text, region, limit):
+                if endw.end() < cred.start() - _CREDENTIAL_WINDOW or endw.end() > cred.start():
+                    continue
+                found = _service_start(text, endw.start(), endw.end())
+                if found is None:
+                    continue
+                svc, _word = found
+                if svc < pos:
+                    continue
+                lo = bisect.bisect_left(ends, svc - _VERB_WINDOW)
+                if lo < len(ends) and ends[lo] <= svc and (
+                    best is None or verbs[lo][0] < best
+                ):
+                    best = verbs[lo][0]
+            if best is not None:
+                return _Hit(best, cred.end())
+        return None
+
+
+_CREDENTIAL_EXFIL_PATTERNS: list[re.Pattern[str] | _CredentialServiceSearch] = [
+    _CredentialServiceSearch(),
     re.compile(
         r"\b(?:api\s*keys?|secrets?|credentials?|passwords?|tokens?)\b.{0,100}?"
         r"(?:give|send|paste|dump|exfil|leak|show)\b.{0,40}?"

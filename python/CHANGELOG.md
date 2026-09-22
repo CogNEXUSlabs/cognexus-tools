@@ -1,5 +1,213 @@
 # Changelog
 
+## 0.6.25
+
+### Fixed
+
+- Destructive-action guard: the `sql.truncate` rule matched TRUNCATE followed
+  by any word, so ordinary text that uses "truncate" as a verb, a `truncate`
+  CSS class, a docstring, or a list of tags holding the word was a critical
+  finding in `screen_action()` and a denied offline `decide()` for
+  `model_output` and `tool_call` payloads. The rule now reads a TRUNCATE
+  statement: the words that may come before its tables (such as `TABLE`,
+  `ONLY` or `IF EXISTS`), one or more tables, any of TRUNCATE's own options
+  (such as `CASCADE` or `RESTART IDENTITY`), and then the end of the
+  statement. It reads names in plain, escaped or doubled quotes, and names
+  that code builds from template placeholders or joined strings. TRUNCATE
+  statements in SQL scripts, in code that builds or runs SQL, and in the
+  strings of a tool call are still critical, including some forms that 0.6.24
+  did not catch. The rule takes time linear in the length of the text.
+- Offline `decide(kind="tool_call")` no longer reads an array that begins with
+  the word "truncate", such as a package's keywords or a schema's enum, as a
+  TRUNCATE statement. A statement passed as one argument of a command, or as
+  the arguments after a database client, is still read.
+- Destructive-action guard: the `sql.drop_table`, `sql.drop_database`,
+  `sql.drop_index`, `sql.delete_no_where` and `sql.update_no_where` rules
+  matched their keywords and a word, so English such as "drag and drop table
+  rows to reorder them", "delete from the list any items you no longer need"
+  and "we update the set of rules every week", and code or documentation that
+  names the statements (`blocked_patterns=["DROP TABLE"]`), were critical or
+  high findings in `screen_action()` and in offline `decide()` for
+  `model_output` and `tool_call` payloads. The rules now read a statement, as
+  `sql.truncate` does: DROP, what it drops (such as `TABLE` or `DATABASE`),
+  one or more names, any of DROP's options (such as `CASCADE` or `PURGE`),
+  and then the end of the statement; DELETE FROM, a table, an optional alias,
+  and then the end of the statement or a clause such as `RETURNING` or
+  `LIMIT`; UPDATE, a table, SET and an assignment. DELETE and UPDATE still
+  count only without a WHERE in the same statement. The rules read names in
+  quotes, including PostgreSQL's `U&"..."` and a string where SQLite takes one
+  as a name, and names that code builds from template placeholders or joined
+  strings. Statements in SQL scripts, in code that builds or runs SQL, and in
+  the strings of a tool call are still found, including some forms that 0.6.24
+  did not catch, such as `DROP TEMPORARY TABLE`. A name that is only a template
+  placeholder (`DROP TABLE {table}`) or a single-quoted string is read where
+  the keyword is in capitals or a terminator follows, as it is in generated
+  SQL, but not where it reads as interface text (`Delete from {name}`). A DROP
+  finding's excerpt now runs to the first name. The rules take time linear in
+  the length of the text.
+- `decode_strings` and `decoded_texts` keep reading after a JSON string a
+  strict decoder rejects for a bad escape. The literal ends at the first quote
+  no backslash escapes; valid escapes are decoded and an invalid one stays as
+  written, and each literal is decoded from its own slice. An unterminated
+  literal still yields its decoded prefix, and an incomplete escape at the end
+  of the text is still dropped. Screens that use those strings therefore still
+  see the strings that follow the bad escape.
+
+### Added
+
+- Destructive-action guard: a `find` rooted at `/`, `~` or `$HOME` that deletes
+  (with `-delete`, or an `-exec`/`-execdir` that runs `rm`) is flagged
+  `critical` (`fs.find_delete_root`). A `find` under any other path, or one that
+  does not delete, is not flagged.
+
+### Changed
+
+- Destructive-action guard: the `rm` rules recognise more spellings of a
+  recursive root, home or working-directory removal. A home or working-directory
+  glob target (`rm -r ~/*`, `rm -r $HOME/*`, `rm -r ./*`) is now rated a
+  root-class wipe, as `rm -r *` and `rm -r ~` already were; and a removal whose
+  flag or target is separated from the command by shell quoting or expansion is
+  read as the command it is, by screening a shell-normalised reading of the text
+  alongside the text as written.
+
+### Fixed
+
+- Destructive-action guard, SQL rules: in SQL held in a JSON or code string,
+  where a line break or tab is written as an escape (a backslash, then `n`,
+  `r` or `t`), a statement or a `WHERE` that starts right after an escape is
+  read as it is after a real line break or tab. A `DELETE` or `UPDATE` whose
+  `WHERE` starts a new line that way is no longer flagged. An escape whose
+  backslash is itself escaped is not read as one.
+- `artzain audit verify --help`, and the docstrings of `cmd_audit_verify` and
+  `artzain.audit_verify`, said the check needs zero server trust. The verifier
+  checks signatures against public keys that travel inside the bundle, so trust
+  in the producing server drops out only at `VERIFIED, ATTESTED`, which needs
+  the signing keys to chain to the pinned CogNEXUS Evidence Root. This release
+  pins no Evidence Root, so an intact bundle reports `VERIFIED, SELF-ATTESTED`
+  unless `--root-fingerprint` supplies a test root. The help now says so. No
+  verdict changes.
+- `artzain audit verify --root-fingerprint`: an `ATTESTED` verdict went on to
+  say the signing keys chain to the CogNEXUS Evidence Root, straight after
+  warning that the supplied root is not the published one. It now names the
+  root you supplied, as `artzain licence verify` already does. The `--json`
+  output is unchanged and still reports `root_fingerprint_overridden`.
+- Policy enforcement, on a tool call that is still JSON: the approval escape
+  read markers in the JSON text and measured its window there. A hex digit of
+  a string escape could complete a marker the tool never reads, and the call
+  was allowed. `json.dumps` writes each non-ASCII character as six characters,
+  so a marker inside the window in the text the tool reads could sit outside
+  it, and the call was denied. An escape now counts as the character it stands
+  for, and a hex digit of an escape is not a letter of a marker. Readings
+  whose escapes are already written out are unchanged, so a marker only a
+  deeper reading brings near a match still does not approve it.
+- The policy approval escape no longer treats a marker in a repeated JSON
+  key's dropped value as approval of the value a parser keeps. `json.loads`
+  keeps the last value and some parsers keep the first; a marker in the other
+  value never reaches that tool. A marker in a neighbouring argument still
+  approves, at the same distance.
+- `root_fingerprint_overridden` compared a caller-supplied Evidence Root
+  fingerprint to the built-in pin as raw strings. The certificate check
+  already ignores case and surrounding whitespace, so restating the pinned
+  fingerprint in upper case or with spaces around it still verified
+  `ATTESTED` but was reported as a different root: `artzain audit verify`
+  warned that it was not the published CogNEXUS Evidence Root, and `--json`
+  set `root_fingerprint_overridden` to true. The flag now uses the same
+  comparison as the certificate check. `evidence_root_fingerprint` is that
+  normalised fingerprint, on `artzain audit verify` and
+  `artzain licence verify`.
+- `artzain audit verify`: an `ATTESTED` verdict whose certificate chain
+  carries a note (a tampered issuing certificate beside a valid one, for
+  example) left that note off the text output. It now prints "Notes on the
+  certificate chain:" and each reason, as `artzain licence verify` already
+  does. Verification, the verdict, and the `--json` fields are unchanged.
+- The prompt-injection screen's `credential_exfil` rule for a request to
+  search a connected service (Google Drive, Slack, Box and others) for
+  credentials found a service name inside a longer word: "box" in "inbox",
+  "mailbox", "sandbox", "TextBox" or "password_box", and "g suite" in
+  "testing suite" or "5G suite". So honest text such as "Search the inbox for
+  messages; needs an access token.", "List mailbox folders. Requires a secret
+  key." or "Find files in the sandbox. Uses your access token." came back
+  `high` (`deny`). A service name no longer counts straight after an ASCII
+  letter, nor "box" after an underscore or "g suite" after a digit, unless
+  that character ends a backslash escape such as `\n` in JSON text read as
+  written. Box, Dropbox and the other services named on their own are found
+  as before. The rule's entry in `matched_patterns` quotes the start of its
+  pattern, so it reads differently.
+- Prompt-injection screening: the credential-exfil rule for a verb, a connected
+  service, and a credential word retried the gap before the credential from
+  every service after every verb. It now matches the same text, including the
+  service-name anchors, and reports the same span, in linear time. The pattern
+  text recorded on that match changes.
+- Policy enforcement (`PolicyEnforcementEvaluator`, `screen_client_policy`):
+  the approval escape judged a pattern's matches one after another, each
+  approved by a marker near any part of its matched text, so an approved match
+  could cover commitments that its matched text overlapped. Every place a
+  pattern matches is now judged, a match that starts inside another one
+  included, and each needs a marker near where it starts.
+
+### Changed
+
+- `PolicyEnforcementConfig.approval_window_chars` (default 160) is measured
+  from where each match starts, before or after it, however far the match
+  runs; after a match it used to count from the match's end. An approval
+  written after a long commitment has to end within that distance of the
+  commitment's first character. A rule pattern that opens with an open-ended
+  repeat such as `.*` matches from every position the repeat can start at
+  (for `.*`, from the start of the line up to where the rest of the pattern
+  last matches), and each of those needs a marker within that distance.
+  `approval_window_chars=0` approves nothing; it used to mean a marker inside
+  the match.
+- `PolicyEnforcementConfig.approval_max_matches` counts matches one after
+  another, without overlap, each looked for from where the previous one ends
+  (one character further on after an empty match); for a pattern that can
+  match an empty string this count can differ from what `re.finditer`
+  returns. A pattern for which more than `approval_max_matches` places inside
+  its longer matches have to be checked one at a time is a finding too; for a
+  pattern whose matches do not all start with at least three fixed
+  characters, each group of separately approved commitments inside one longer
+  match counts as such a place.
+- Offline `decide(kind="model_output")` reads a reply that is JSON the way it
+  reads a tool call. A payload counts as JSON when, after any whitespace, it
+  opens as an object with its first key, as an array with its first value, or
+  as a single JSON string that is the whole reply. The destructive-action,
+  injection and policy votes then read it as sent and also read every string
+  in it JSON-decoded, which is the text a JSON parser hands the caller. The
+  engine's privacy guardian and EU AI Act overlay do the same, and the
+  privacy guardian also reads each object member as a `key: value` line. A
+  reply has no tool name, so the policy vote does not apply
+  `conduct_client_context`; a client word in a JSON key still names a client
+  for the conduct rules. Before, those votes other than destructive-action
+  and injection read only the JSON text as sent: a phrase or identifier a
+  JSON escape split was missed, and non-Latin text and emoji escaped by
+  `ensure_ascii` could be denied as an encoding attack.
+- Offline `decide(kind="tool_call")`: when a value in a call holds JSON that a
+  strict parser does not read, such as a document cut short, the conduct rules
+  looked for a client only in that text and in its strings decoded once. The
+  policy vote's decoded text also shows the strings of JSON inside those
+  strings, so a client it showed there did not count, and profanity elsewhere
+  in the call was allowed. Such JSON is now read as text, keys included, as the
+  vote decodes it: down to the third level of JSON inside strings, and up to
+  its first string that does not decode. JSON nested in strings past the third
+  level is read as before.
+
+### Changed
+
+- A JSON `model_output` reply's strings draw what a tool call's arguments
+  draw. Each string is read on its own, and each list of strings is also read
+  joined with spaces, so a keyword or tag list can be denied. A line of only
+  `---`, `###` or three backticks inside a string is a `medium` delimiter
+  finding (`review`). More than 1024 distinct strings and lists of strings, or
+  JSON nested in strings more than three levels deep, is a `high` finding
+  (`input.too_many_strings`, `input.nested_too_deep`).
+- `artzain.tool_call_contract` adds `reads_decoded(payload_kind, payload)`,
+  which says whether the screens read a payload JSON-decoded as well as sent:
+  always for `tool_call`, and for `model_output` when it is JSON as above.
+  The engine's policy, privacy and EU-overlay votes use it too.
+- `artzain init --framework mcp` and `--framework openclaw`: the generated
+  comment about the payload kind says `model_output` would skip the
+  tool-contract check. It said a call sent as `model_output` would be screened
+  as prose, which is no longer so.
+
 ## 0.6.24
 
 ### Fixed
