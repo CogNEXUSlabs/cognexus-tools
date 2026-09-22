@@ -13,11 +13,17 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
-from functools import cached_property
-from itertools import accumulate
-from typing import Any, Iterator, Optional, Sequence
+from functools import cached_property, lru_cache
+from typing import Any, Optional, Sequence
+
+try:  # Python 3.11 and later: the parser ``re`` compiles patterns with
+    from re import _constants as _sre_constants
+    from re import _parser as _sre_parse
+except ImportError:  # Python 3.10, where the same parser has its older name
+    import sre_constants as _sre_constants
+    import sre_parse as _sre_parse
 
 # ---------------------------------------------------------------------------
 # Rule model
@@ -146,12 +152,14 @@ class PolicyEnforcementFinding:
     severity: str
     matched_pattern: str
     summary: str
-    #: True when every match of the pattern had an approval marker near it,
-    #: which suppressed this finding. Suppressed findings live in
+    #: True when every match of the pattern had an approval marker near where
+    #: it starts, within the limits ``approval_max_matches`` sets, which
+    #: suppressed this finding. Suppressed findings live in
     #: ``PolicyEnforcementReport.suppressed`` and never count toward
     #: ``violation_count``.
     suppressed_by_approval_marker: bool = False
-    #: The configured marker near the pattern's first match (lower-case).
+    #: The configured marker near where the pattern's first match starts
+    #: (lower-case).
     approval_marker: str = ""
 
 
@@ -162,8 +170,9 @@ class PolicyEnforcementReport:
     rules_checked: int
     text_hash: str = ""
     #: Rule patterns the approval escape suppressed, kept for the audit trail:
-    #: one entry per pattern whose every match had a marker nearby. A pattern
-    #: with an unapproved match is a finding and is not listed here.
+    #: one entry per pattern whose every match had a marker near where it
+    #: starts, within the limits ``approval_max_matches`` sets. A pattern with
+    #: an unapproved match is a finding and is not listed here.
     suppressed: list[PolicyEnforcementFinding] = field(default_factory=list)
 
     @property
@@ -186,15 +195,32 @@ class PolicyEnforcementConfig:
         "compliance approval",
         "per policy",
     )
-    #: An approval marker only approves a match when it occurs within this
-    #: many characters before or after the matched span. A marker elsewhere in
-    #: the text (e.g. a trailing "per policy") no longer switches the rule off,
-    #: and a pattern is suppressed only when every one of its matches is
-    #: approved: one approved match does not approve the others.
+    #: An approval marker only approves a match when it lies within this many
+    #: characters of where the match starts, before or after, however far the
+    #: match runs. Every place a pattern matches is judged, a match that starts
+    #: inside another match included, and a pattern is suppressed only when
+    #: every one of them is approved: one approved match does not approve the
+    #: others, and a marker elsewhere in the text (e.g. a trailing "per
+    #: policy") does not switch the rule off. An approval written after a long
+    #: commitment has to end within this distance of the commitment's first
+    #: character. A pattern that opens with an open-ended repeat such as ``.*``
+    #: matches from every position the repeat can start at (for ``.*``, from
+    #: the start of the line up to where the rest of the pattern last
+    #: matches), so each of those needs a marker within this distance. 0
+    #: approves nothing.
     approval_window_chars: int = 160
-    #: At most this many matches of one pattern can be approved. A pattern with
-    #: more is a finding, whatever markers sit near them; the escape is for an
-    #: occasional approved exception.
+    #: At most this many matches of one pattern can be approved, counted one
+    #: after another without overlap: each is looked for from where the
+    #: previous one ends, or one character further on after an empty match
+    #: (for a pattern that can match the empty string, this count can differ
+    #: from what ``re.finditer`` returns). A pattern with more is a finding,
+    #: whatever markers sit near them; the escape is for an occasional
+    #: approved exception. So is a pattern for which more than this many
+    #: places inside its longer matches have to be checked one at a time for
+    #: another match starting there: when every match of the pattern starts
+    #: with at least three fixed characters, each place those occur outside
+    #: the runs of approved starts, and otherwise each run of approved starts
+    #: inside a longer match that holds another start.
     approval_max_matches: int = 100
 
 
@@ -485,6 +511,284 @@ def evaluate_conduct(
 #: sigma from the letters around it, so markers compare with both read as small.
 _SIGMA, _FINAL_SIGMA = chr(0x3C3), chr(0x3C2)
 
+#: One JSON string escape, the character it stands for. ``\u`` and a high
+#: surrogate are handled apart: JSON spells both with a lowercase ``u``.
+_JSON_SIMPLE_ESCAPES = {
+    '"': '"', "\\": "\\", "/": "/",
+    "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t",
+}
+_JSON_HEX = frozenset("0123456789abcdefABCDEF")
+
+
+def _json_unicode_escape(text: str, i: int) -> tuple[str, int] | None:
+    """The character ``text[i:]``'s ``\\uXXXX`` stands for, and how many raw characters it uses.
+
+    ``i`` points at the backslash. A high surrogate followed by a low one is
+    the one character the pair stands for (twelve raw characters); anything
+    else, including a lone surrogate, is the one character of those four hex
+    digits. Incomplete or non-hex tails are not an escape.
+    """
+    if i + 6 > len(text) or text[i + 1] != "u":
+        return None
+    hex4 = text[i + 2:i + 6]
+    if any(c not in _JSON_HEX for c in hex4):
+        return None
+    code = int(hex4, 16)
+    if 0xD800 <= code <= 0xDBFF and i + 12 <= len(text) and text[i + 6:i + 8] == "\\u":
+        low = text[i + 8:i + 12]
+        if all(c in _JSON_HEX for c in low):
+            low_code = int(low, 16)
+            if 0xDC00 <= low_code <= 0xDFFF:
+                point = 0x10000 + ((code - 0xD800) << 10) + (low_code - 0xDC00)
+                return chr(point), 12
+    return chr(code), 6
+
+
+def _json_escape(text: str, i: int) -> tuple[str, int] | None:
+    """The character the escape at ``text[i]`` stands for, and its raw length, or None."""
+    if i + 1 >= len(text) or text[i] != "\\":
+        return None
+    simple = _JSON_SIMPLE_ESCAPES.get(text[i + 1])
+    if simple is not None:
+        return simple, 2
+    if text[i + 1] == "u":
+        return _json_unicode_escape(text, i)
+    return None
+
+
+def _json_string_escapes(text: str) -> tuple[str, list[int]]:
+    """*text* with each complete JSON string escape replaced by the character it stands for.
+
+    Returns ``(decoded, at)``. ``at[i]`` is how many decoded characters
+    ``text[:i]`` holds, so every raw index of one escape shares the index of
+    the character it stands for and ``at[len(text)]`` is ``len(decoded)``. An
+    escape that does not complete stays as written, and so does everything
+    outside a string: quotes, commas and brackets are not dropped, and a marker
+    cannot move across them. A hex digit of an escape is therefore not a letter
+    of a marker; the letter, when the escape stands for one, is.
+    """
+    at = [0] * (len(text) + 1)
+    decoded: list[str] = []
+    i = 0
+    d = 0
+    n = len(text)
+    while i < n:
+        at[i] = d
+        ch = text[i]
+        if ch != '"':
+            decoded.append(ch)
+            i += 1
+            d += 1
+            continue
+        decoded.append('"')
+        i += 1
+        d += 1
+        while i < n:
+            at[i] = d
+            ch = text[i]
+            if ch == '"':
+                decoded.append('"')
+                i += 1
+                d += 1
+                break
+            if ch == "\\":
+                escape = _json_escape(text, i)
+                if escape is not None:
+                    chars, consumed = escape
+                    for k in range(1, consumed):
+                        at[i + k] = d
+                    decoded.append(chars)
+                    i += consumed
+                    d += len(chars)
+                    continue
+            decoded.append(ch)
+            i += 1
+            d += 1
+    at[n] = d
+    return "".join(decoded), at
+
+# ---------------------------------------------------------------------------
+# The characters every match of a pattern starts with
+# ---------------------------------------------------------------------------
+#
+# Inside a longer match, the approval escape looks for further matches that
+# start outside the runs of starts that markers approve. When every match of a
+# pattern starts with some fixed characters (``offer``, ``[Oo]ffer``, one of
+# ``commit|guarantee``), only the places those characters occur can start a
+# match, so only those places are tried, one ``match`` each: no match is tried
+# inside the runs, and the scan for the characters reads each part of the text
+# once.
+
+_CATEGORY_SOURCES = {
+    _sre_constants.CATEGORY_DIGIT: r"\d",
+    _sre_constants.CATEGORY_NOT_DIGIT: r"\D",
+    _sre_constants.CATEGORY_SPACE: r"\s",
+    _sre_constants.CATEGORY_NOT_SPACE: r"\S",
+    _sre_constants.CATEGORY_WORD: r"\w",
+    _sre_constants.CATEGORY_NOT_WORD: r"\W",
+}
+_ZERO_WIDTH = (_sre_constants.AT, _sre_constants.ASSERT, _sre_constants.ASSERT_NOT)
+_REPEATS = tuple(
+    op
+    for op in (
+        _sre_constants.MAX_REPEAT,
+        _sre_constants.MIN_REPEAT,
+        getattr(_sre_constants, "POSSESSIVE_REPEAT", None),
+    )
+    if op is not None
+)
+_ATOMIC_GROUP = getattr(_sre_constants, "ATOMIC_GROUP", None)
+#: The flags that decide which characters a leading character matches.
+_LEAD_FLAGS = re.IGNORECASE | re.UNICODE | re.ASCII
+#: Leading characters are looked for only when every match starts with at
+#: least this many, in at most this many alternatives; shorter ones occur too
+#: often. Without them, the places inside longer matches are found by search,
+#: one per run of approved starts, and those count toward
+#: ``approval_max_matches`` too.
+_LEAD_MIN_CHARACTERS = 3
+_LEAD_MAX_ALTERNATIVES = 128
+#: A run is read to at most this many characters, and a pattern to at most
+#: this many parsed items ahead: a shorter run is still a start every match
+#: has, so a long pattern costs no more to read than a short one.
+_LEAD_MAX_RUN = 16
+_LEAD_MAX_ITEMS = 32
+#: Scoped flags that change which characters a leading character matches.
+_LEAD_SCOPE_FLAGS = re.ASCII | re.UNICODE | re.LOCALE
+
+
+def _one_character(op: Any, av: Any) -> Optional[str]:
+    """The source of a parsed item that always matches exactly one character, or None."""
+    if op is _sre_constants.LITERAL:
+        return re.escape(chr(av))
+    if op is _sre_constants.NOT_LITERAL:
+        return "[^" + re.escape(chr(av)) + "]"
+    if op is _sre_constants.IN:
+        parts: list[str] = []
+        for item_op, item_av in av:
+            if item_op is _sre_constants.NEGATE:
+                parts.insert(0, "^")
+            elif item_op is _sre_constants.LITERAL:
+                parts.append(re.escape(chr(item_av)))
+            elif item_op is _sre_constants.RANGE:
+                parts.append(re.escape(chr(item_av[0])) + "-" + re.escape(chr(item_av[1])))
+            elif item_op is _sre_constants.CATEGORY and item_av in _CATEGORY_SOURCES:
+                parts.append(_CATEGORY_SOURCES[item_av])
+            else:
+                return None
+        return "[" + "".join(parts) + "]"
+    return None
+
+
+def _followed_by(first: Any, rest: list) -> list:
+    """The parsed items of *first* and then *rest*, to at most ``_LEAD_MAX_ITEMS``.
+
+    When *first* alone is longer it is cut there and *rest* left out: reading
+    stops at the cut, which only ever shortens or drops what is found.
+    """
+    head = list(first[:_LEAD_MAX_ITEMS + 1])
+    if len(head) > _LEAD_MAX_ITEMS:
+        return head[:_LEAD_MAX_ITEMS]
+    return (head + rest)[:_LEAD_MAX_ITEMS]
+
+
+def _run_on(run: list[str], rest: list) -> list[tuple[str, int]]:
+    """*run* and the single characters that follow it in *rest*, to ``_LEAD_MAX_RUN``."""
+    for op, av in rest:
+        if len(run) >= _LEAD_MAX_RUN:
+            break
+        char = _one_character(op, av)
+        if char is None:
+            break
+        run.append(char)
+    return [("".join(run), len(run))]
+
+
+def _leading_runs(items: list, flags: int, budget: list[int]) -> Optional[list[tuple[str, int]]]:
+    """How every match of the parsed *items* starts: one fixed run of characters per alternative.
+
+    Each run is ``(source, number of characters)``. None when a match can start
+    some other way (empty, with any character, with a backreference, under
+    scoped flags that change what a character matches) or when reading the
+    pattern costs more than *budget* allows. *flags* are the pattern's own.
+    """
+    budget[0] -= 1
+    if budget[0] < 0:
+        return None
+    items = items[:_LEAD_MAX_ITEMS]
+    i = 0
+    while i < len(items) and items[i][0] in _ZERO_WIDTH:
+        i += 1
+    if i == len(items):
+        return None
+    op, av = items[i]
+    rest = items[i + 1:]
+    first = _one_character(op, av)
+    if first is not None:
+        return _run_on([first], rest)
+    if op is _sre_constants.BRANCH:
+        runs: list[tuple[str, int]] = []
+        for branch in av[1]:
+            found = _leading_runs(_followed_by(branch, rest), flags, budget)
+            if found is None:
+                return None
+            runs.extend(found)
+            if len(runs) > _LEAD_MAX_ALTERNATIVES:
+                return None
+        return runs
+    if op is _sre_constants.SUBPATTERN:
+        _group, add_flags, del_flags, inner = av
+        if (add_flags | del_flags) & _LEAD_SCOPE_FLAGS:
+            return None
+        # A scoped case flag that the pattern already has (or lacks) changes nothing.
+        if (add_flags & re.IGNORECASE and not flags & re.IGNORECASE) or (
+            del_flags & re.IGNORECASE and flags & re.IGNORECASE
+        ):
+            return None
+        return _leading_runs(_followed_by(inner, rest), flags, budget)
+    if _ATOMIC_GROUP is not None and op is _ATOMIC_GROUP:
+        return _leading_runs(_followed_by(av, rest), flags, budget)
+    if op in _REPEATS:
+        low, high, inner = av
+        head = list(inner[:2])
+        if low >= 1 and len(head) == 1:
+            char = _one_character(*head[0])
+            if char is not None:
+                # At least *low* of the one character, then the rest after an exact count.
+                return _run_on([char] * min(low, _LEAD_MAX_RUN), rest if low == high else [])
+        once = _leading_runs(list(inner[:_LEAD_MAX_ITEMS]), flags, budget)
+        if once is None or low >= 1:
+            return once
+        skipped = _leading_runs(rest, flags, budget)
+        if skipped is None or len(once) + len(skipped) > _LEAD_MAX_ALTERNATIVES:
+            return None
+        return once + skipped
+    return None
+
+
+@lru_cache(maxsize=1024)
+def _leading_pattern(source: str, flags: int) -> Optional[re.Pattern[str]]:
+    """A pattern that matches wherever a match of *source* can start, or None.
+
+    It is the fixed characters every match of *source* starts with, one
+    alternative per way a match can start, compiled with the flags that decide
+    which characters match. None when some match can start otherwise, with
+    fewer than ``_LEAD_MIN_CHARACTERS`` fixed characters, or in more than
+    ``_LEAD_MAX_ALTERNATIVES`` ways, and when the pattern takes too long to
+    read or the parser reads it differently from this module.
+    """
+    try:
+        runs = _leading_runs(list(_sre_parse.parse(source, flags)[:_LEAD_MAX_ITEMS]), flags, [1024])
+    except Exception:  # a pattern the parser reads differently from this module
+        return None
+    if not runs or len(runs) > _LEAD_MAX_ALTERNATIVES:
+        return None
+    if min(chars for _, chars in runs) < _LEAD_MIN_CHARACTERS:
+        return None
+    try:
+        return re.compile("|".join(src for src, _ in runs), flags & _LEAD_FLAGS)
+    except re.error:
+        return None
+
 
 class _ApprovalMarkers:
     """Where the approval markers occur in one text, found once for every match.
@@ -499,9 +803,15 @@ class _ApprovalMarkers:
     the markers, since which of the two a capital sigma becomes depends on the
     letters around it. Markers that are not strings are ignored. Occurrences of
     a marker may overlap.
+
+    A match starting at ``s`` is approved by an occurrence that lies entirely
+    inside ``[s - window, s + window)``, so an occurrence approves a run of
+    starts, from ``window`` characters before its end to ``window`` after its
+    start. The runs of every occurrence are merged once per text, so the
+    starts one run approves are passed over together.
     """
 
-    def __init__(self, text: str, markers: Sequence[str]) -> None:
+    def __init__(self, text: str, markers: Sequence[str], window: int) -> None:
         lowered = text.lower()
         if len(lowered) != len(text):
             lowered = "".join(ch if len(ch.lower()) != 1 else ch.lower() for ch in text)
@@ -512,9 +822,10 @@ class _ApprovalMarkers:
         for m in markers:
             if isinstance(m, str) and m:
                 searched.setdefault(m.lower().replace(_FINAL_SIGMA, _SIGMA), m.lower())
+        self._window = window
         #: Each distinct marker, in configured order, with its sorted starts.
         self._by_marker: list[tuple[str, list[int]]] = []
-        spans: list[tuple[int, int]] = []
+        runs: list[tuple[int, int]] = []
         for key, marker in searched.items():
             starts: list[int] = []
             at = lowered.find(key)
@@ -522,24 +833,40 @@ class _ApprovalMarkers:
                 starts.append(at)
                 at = lowered.find(key, at + 1)
             self._by_marker.append((marker, starts))
-            spans.extend((start, start + len(key)) for start in starts)
-        spans.sort()
-        self._starts = [start for start, _ in spans]
-        #: ``_min_end[i]``: the earliest end among the occurrences from ``i`` on.
-        self._min_end = list(accumulate(reversed([end for _, end in spans]), min))[::-1]
+            runs.extend((start + len(key) - window, start + window) for start in starts)
+        runs.sort()
+        #: The merged runs of approved starts, first and last start of each.
+        self._run_first: list[int] = []
+        self._run_last: list[int] = []
+        for first, last in runs:
+            if first > last:
+                continue  # longer than the window is wide: approves no start
+            if self._run_last and first <= self._run_last[-1] + 1:
+                self._run_last[-1] = max(self._run_last[-1], last)
+            else:
+                self._run_first.append(first)
+                self._run_last.append(last)
 
-    def any_within(self, lo: int, hi: int) -> bool:
-        """True when some marker occurs entirely inside ``[lo, hi)``."""
-        i = bisect_left(self._starts, lo)
-        return i < len(self._starts) and self._min_end[i] <= hi
-
-    def first_within(self, lo: int, hi: int) -> Optional[str]:
-        """The first configured marker that occurs entirely inside ``[lo, hi)``."""
+    def first_near(self, start: int) -> Optional[str]:
+        """The first configured marker that approves a match starting at *start*."""
+        lo, hi = start - self._window, start + self._window
         for marker, starts in self._by_marker:
             i = bisect_left(starts, lo)
             if i < len(starts) and starts[i] + len(marker) <= hi:
                 return marker
         return None
+
+    def approved_through(self, start: int) -> int:
+        """The last start of the run of approved starts holding *start*, or -1 outside every run."""
+        i = bisect_right(self._run_first, start) - 1
+        if i >= 0 and self._run_last[i] >= start:
+            return self._run_last[i]
+        return -1
+
+    def next_run(self, start: int) -> Optional[int]:
+        """The first start of the first run of approved starts at or after *start*, if any."""
+        i = bisect_left(self._run_first, start)
+        return self._run_first[i] if i < len(self._run_first) else None
 
 
 class PolicyEnforcementEvaluator:
@@ -554,11 +881,23 @@ class PolicyEnforcementEvaluator:
         rules: Sequence[ClientPolicyRule],
         *,
         client_context: Optional[bool] = None,
+        json_string_escapes: bool = False,
     ) -> PolicyEnforcementReport:
         """Screen *text* against *rules*, and against the conduct rules unless *rules* is empty.
 
         *client_context* is passed to :func:`evaluate_conduct`: ``False`` says
         the client words in *text* name no client.
+
+        *json_string_escapes* is for the as-sent text of a JSON tool call. The
+        pattern is still matched on *text*, so a match that runs from one
+        argument into the next is still caught. Approval markers are found in
+        decoded characters, and ``approval_window_chars`` is measured from
+        where each match starts in those characters: a complete escape inside
+        a JSON string counts as the character it stands for, so a hex digit of
+        an escape is not a letter of a marker and ``ensure_ascii``'s
+        six-character escapes do not stretch the window.
+        Quotes and the characters between strings stay, so a marker is not
+        moved next to a match.
         """
         if not text or not rules:
             return PolicyEnforcementReport(
@@ -570,21 +909,30 @@ class PolicyEnforcementEvaluator:
         findings: list[PolicyEnforcementFinding] = []
         suppressed: list[PolicyEnforcementFinding] = []
         # Found on the first match of a rule the approval escape applies to.
+        # For a JSON tool call as sent, markers live in the decoded-character
+        # text and ``escape_at`` maps a match index onto it.
         markers: Optional[_ApprovalMarkers] = None
+        marker_text = text
+        escape_at: list[int] | None = None
+        if json_string_escapes and "\\" in text:
+            marker_text, escape_at = _json_string_escapes(text)
         for rule in rules:
             escapable = (
                 self.config.require_approval_escape
                 and "approval" in rule.summary.lower()
             )
             for pat in rule.compiled_patterns():
-                matches = pat.finditer(text)
-                m = next(matches, None)
+                m = pat.search(text)
                 if m:
                     marker = None
                     if escapable:
                         if markers is None:
-                            markers = _ApprovalMarkers(text, self.config.approval_markers)
-                        marker = self._approval_marker(markers, m, matches)
+                            markers = _ApprovalMarkers(
+                                marker_text,
+                                self.config.approval_markers,
+                                max(0, int(self.config.approval_window_chars)),
+                            )
+                        marker = self._approval_marker(markers, pat, text, m, escape_at)
                     finding = PolicyEnforcementFinding(
                         rule_id=rule.rule_id,
                         rule_title=rule.title,
@@ -633,26 +981,90 @@ class PolicyEnforcementEvaluator:
     def _approval_marker(
         self,
         markers: _ApprovalMarkers,
+        pat: re.Pattern[str],
+        text: str,
         first: re.Match[str],
-        rest: Iterator[re.Match[str]],
+        at: list[int] | None = None,
     ) -> Optional[str]:
-        """The marker that approves *first*, when every match of its pattern is approved.
+        """The marker that approves *first*, when every match of *pat* is approved.
 
-        A marker approves a match when it lies within ``approval_window_chars``
-        before its start or after its end, or inside the match; a non-positive
-        window leaves only inside. *first* is a pattern's first match and
-        *rest* its later ones: the first match with no marker near it, or the
-        first past ``approval_max_matches``, makes the pattern a finding,
-        whatever markers the other matches have, and the result is ``None``.
+        A marker approves a match when it lies within `approval_window_chars`
+        of where the match starts, however far the match runs. *first* is the
+        pattern's first match. The later matches are walked in the order they
+        start: the next match one after another, looked for from where the
+        previous one ends, and, since a match can also start inside another
+        one, any match starting inside it outside the runs of starts that
+        markers approve. There, when every match of *pat* starts with fixed
+        characters, only the places those occur are checked, one `match`
+        each; otherwise one search finds the next match past each run. No
+        position is tried twice as a start. A match no marker approves, more
+        than `approval_max_matches` matches one after another, or more than
+        that many places inside longer matches checked one at a time makes
+        the pattern a finding and the result `None`.
+
+        *at*, when set, maps an index in the text the pattern matched to an
+        index in the text *markers* was built on: the as-sent JSON, with each
+        string escape counted as the character it stands for. The window and
+        the runs of approved starts are in that text; the pattern is still
+        searched in the text as sent.
         """
-        window = max(0, int(self.config.approval_window_chars))
+        def pos(index: int) -> int:
+            return index if at is None else at[index]
+
+        def raw_of(decoded: int) -> int:
+            """The first index in *text* at this decoded position, or later."""
+            return decoded if at is None else bisect_left(at, decoded)
+
+        def raw_after(decoded: int) -> int:
+            """The first index in *text* past this decoded position."""
+            return decoded + 1 if at is None else bisect_right(at, decoded)
+
         limit = int(self.config.approval_max_matches)
-        marker = markers.first_within(first.start() - window, first.end() + window)
+        marker = markers.first_near(pos(first.start()))
         if marker is None or limit < 1:
             return None
-        for count, m in enumerate(rest, start=2):
-            if count > limit or not markers.any_within(m.start() - window, m.end() + window):
+        lead = _leading_pattern(pat.pattern, pat.flags)
+        count, checked = 1, 0
+        # The next match one after another starts at `after` or later (past
+        # an empty match, one character on); every start before `beyond` is
+        # approved: in a run of approved starts, or checked.
+        after = max(first.end(), first.start() + 1)
+        beyond = raw_after(markers.approved_through(pos(first.start())))
+        lead_at = -1  # where `lead` was last found
+        while min(after, beyond) <= len(text):
+            if beyond < after and lead is not None:
+                # Inside a match, up to the next run of approved starts: only
+                # a place the leading characters are can start a match.
+                run = markers.next_run(pos(beyond))
+                stop = after if run is None else min(raw_of(run), after)
+                while True:
+                    if lead_at < beyond:
+                        found = lead.search(text, beyond)
+                        lead_at = found.start() if found else len(text) + 1
+                    if lead_at >= stop:
+                        break
+                    checked += 1
+                    if checked > limit or pat.match(text, lead_at):
+                        return None
+                    beyond = lead_at + 1
+                beyond = after if stop == after else raw_after(markers.approved_through(pos(stop)))
+                continue
+            m = pat.search(text, min(after, beyond))
+            if m is None:
+                break
+            last = markers.approved_through(pos(m.start()))
+            if last < 0:
                 return None
+            if m.start() >= after:
+                count += 1
+                if count > limit:
+                    return None
+                after = max(m.end(), m.start() + 1)
+            else:
+                checked += 1
+                if checked > limit:
+                    return None
+            beyond = raw_after(last)
         return marker
 
     def should_block(self, report: PolicyEnforcementReport) -> bool:

@@ -37,7 +37,11 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from artzain import audit_verify as _av
-from artzain.audit_verify import _canonical_pem, validated_deployment_certificates
+from artzain.audit_verify import (
+    _canonical_pem,
+    _normalised_root_fingerprint,
+    validated_deployment_certificates,
+)
 
 
 def _root_pin() -> Optional[str]:
@@ -204,6 +208,10 @@ class AttestationResult:
     attestation: Optional[str] = None
     attestation_reasons: list[str] = field(default_factory=list)
     certificates_checked: int = 0
+    #: Comparison form (stripped, lower case), same as
+    #: ``audit_verify.VerifyResult``. ``None`` when no fingerprint is pinned.
+    #: ``root_fingerprint_overridden`` is ``True`` when the caller passed a
+    #: fingerprint that still differs after that normalisation.
     evidence_root_fingerprint: Optional[str] = None
     root_fingerprint_overridden: bool = False
 
@@ -426,13 +434,18 @@ def verify_attestation(attestation: dict[str, Any],
     makes the count hard to understate.
     """
     res = AttestationResult()
-    pin = (evidence_root_fingerprint if evidence_root_fingerprint is not None
-           else _root_pin())
+    # Same comparison form as ``verify_bundle``: strip + lower, and the
+    # reported fingerprint is that value. ``None`` means "use the module
+    # pin"; a supplied value, including one that is blank once stripped, is
+    # the caller's pin.
+    pinned = _normalised_root_fingerprint(_root_pin())
+    if evidence_root_fingerprint is None:
+        pin = pinned
+        res.root_fingerprint_overridden = False
+    else:
+        pin = _normalised_root_fingerprint(evidence_root_fingerprint)
+        res.root_fingerprint_overridden = pin != pinned
     res.evidence_root_fingerprint = pin
-    res.root_fingerprint_overridden = bool(
-        evidence_root_fingerprint is not None
-        and (evidence_root_fingerprint or "").strip().lower()
-        != (_root_pin() or "").strip().lower())
 
     if not isinstance(attestation, dict):
         return res._fail("attestation is not an object")

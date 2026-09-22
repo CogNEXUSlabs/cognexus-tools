@@ -75,11 +75,11 @@ def test_evaluator_allows_with_approval_marker() -> None:
             severity="high",
         )
     ]
-    report = PolicyEnforcementEvaluator().evaluate(
-        "Custom SLA offered with sales leadership approval documented in ticket #99.",
-        rules,
-    )
+    text = "We can offer a custom SLA with sales leadership approval documented in ticket #99."
+    assert rules[0].compiled_patterns()[0].search(text)
+    report = PolicyEnforcementEvaluator().evaluate(text, rules)
     assert not report.has_violations
+    assert [f.approval_marker for f in report.suppressed] == ["leadership approval"]
 
 
 _PRICING_RULE = ClientPolicyRule(
@@ -149,9 +149,10 @@ def test_approval_escape_disabled_never_suppresses() -> None:
     assert report.suppressed == []
 
 
-# Approval markers: each match of a pattern is approved by a marker near it,
-# markers compare in lower case, and a bounded number of matches of one
-# pattern can be approved. The engine suite holds the adversarial cases.
+# Approval markers: each place a pattern matches is approved by a marker near
+# where that match starts, markers compare in lower case, and a bounded number
+# of matches of one pattern can be approved. The engine suite holds the
+# adversarial cases.
 
 #: One approved commitment per line; ``.`` stops a match at the line end.
 _APPROVED_LINE = "Per policy we offer a discount on this renewal.\n"
@@ -185,13 +186,14 @@ def test_every_match_approved_is_one_suppression_with_the_first_marker() -> None
     [
         ("per policy" + " " * 150 + "offer discount", True),
         ("per policy" + " " * 151 + "offer discount", False),
-        ("offer discount" + " " * 150 + "per policy", True),
-        ("offer discount" + " " * 151 + "per policy", False),
+        ("offer discount" + " " * 136 + "per policy", True),
+        ("offer discount" + " " * 137 + "per policy", False),
     ],
     ids=["before-at-edge", "before-past-edge", "after-at-edge", "after-past-edge"],
 )
 def test_the_window_edges_are_exact(text: str, approved: bool) -> None:
-    # The match is "offer discount"; the window is 160 characters on each side.
+    # The match is "offer discount"; the window runs 160 characters either
+    # side of where it starts, so a marker after it has 146 to fit in.
     report = PolicyEnforcementEvaluator().evaluate(text, [_PRICING_RULE])
     assert report.has_violations is not approved
     assert len(report.suppressed) == int(approved)
@@ -221,6 +223,27 @@ def test_a_sigma_matches_in_either_form_whatever_else_the_text_holds(marker: str
     assert [f.approval_marker for f in report.suppressed] == [marker]
 
 
+def test_commitments_approved_where_they_start_are_approved_under_one_long_match() -> None:
+    # A pattern with ``.*`` matches from the first commitment to the last
+    # object on the line; each commitment inside that match has its own marker
+    # near where it starts, and one match one after another stays within the
+    # limit.
+    rule = ClientPolicyRule(
+        rule_id="CPR-open",
+        title="No pricing commitments",
+        summary="No commitments on pricing without sales leadership approval.",
+        category="acceptable_use",
+        agent="compliance_monitor",
+        violation_patterns=(r"(?:offer|guarantee).*(?:discount|pricing)",),
+        severity="high",
+    )
+    line = ("Per policy we can offer a 10% discount on this renewal. " + " " * 300) * 5
+    cfg = PolicyEnforcementConfig(approval_max_matches=2)
+    report = PolicyEnforcementEvaluator(cfg).evaluate(line, [rule])
+    assert not report.has_violations
+    assert [f.approval_marker for f in report.suppressed] == ["per policy"]
+
+
 def test_markers_that_are_not_text_are_ignored() -> None:
     cfg = PolicyEnforcementConfig(approval_markers=(123, None, b"per policy", "", "Per Policy"))
     report = PolicyEnforcementEvaluator(cfg).evaluate(
@@ -230,32 +253,36 @@ def test_markers_that_are_not_text_are_ignored() -> None:
     assert [f.approval_marker for f in report.suppressed] == ["per policy"]
 
 
-def test_with_no_window_the_marker_must_be_inside_the_match() -> None:
+@pytest.mark.parametrize(
+    "text",
+    [
+        "We commit, per policy, to custom pricing.",
+        "Per policy: we commit to custom pricing.",
+        "We commit to custom pricing per policy.",
+    ],
+    ids=["inside", "before", "after"],
+)
+def test_with_no_window_no_marker_approves(text: str) -> None:
+    # Nothing fits within 0 characters of where a match starts.
     cfg = PolicyEnforcementConfig(approval_window_chars=0)
-    inside = PolicyEnforcementEvaluator(cfg).evaluate(
-        "We commit, per policy, to custom pricing.", [_PRICING_RULE]
-    )
-    before = PolicyEnforcementEvaluator(cfg).evaluate(
-        "Per policy: we commit to custom pricing.", [_PRICING_RULE]
-    )
-    assert not inside.has_violations
-    assert len(inside.suppressed) == 1
-    assert [f.rule_id for f in before.findings] == ["CPR-pricing"]
+    report = PolicyEnforcementEvaluator(cfg).evaluate(text, [_PRICING_RULE])
+    assert [f.rule_id for f in report.findings] == ["CPR-pricing"]
+    assert report.suppressed == []
 
 
 def test_overlapping_occurrences_of_a_marker_count() -> None:
-    # Only the occurrence of "abab" that starts at index 2 lies inside the
-    # match (window 0); it overlaps the one at index 0.
+    # The match starts at index 4, so a window of 3 runs from 1 to 7: only the
+    # occurrence of "abab" at index 2 fits, and it overlaps the one at 0.
     rule = ClientPolicyRule(
         rule_id="CPR-ab",
         title="ab",
         summary="Needs approval.",
         category="general",
         agent="compliance_monitor",
-        violation_patterns=(r"(?<=ab)abab",),
+        violation_patterns=(r"(?<=abab)ab",),
         severity="high",
     )
-    cfg = PolicyEnforcementConfig(approval_markers=("abab",), approval_window_chars=0)
+    cfg = PolicyEnforcementConfig(approval_markers=("abab",), approval_window_chars=3)
     report = PolicyEnforcementEvaluator(cfg).evaluate("ababab", [rule])
     assert not report.has_violations
     assert [f.approval_marker for f in report.suppressed] == ["abab"]

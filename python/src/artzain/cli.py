@@ -762,7 +762,14 @@ def cmd_quickstart(_args: argparse.Namespace) -> None:
 
 
 def cmd_audit_verify(args: argparse.Namespace) -> None:
-    """Verify an audit evidence bundle offline (no network, no server trust)."""
+    """Verify an audit evidence bundle offline, with no network.
+
+    Signatures verify against public keys the bundle carries, so trust in the
+    producing server drops out only at ATTESTED, once the Evidence Root is
+    pinned. When ``--root-fingerprint`` differs from the built-in pin, an
+    ATTESTED verdict attests to the root supplied, not the published one, and
+    the output says so.
+    """
     from artzain.audit_verify import verify_bundle
 
     override = getattr(args, "root_fingerprint", None)
@@ -817,8 +824,18 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
               + ("" if result.signatures_skipped else " and signatures")
               + " are intact.")
         if state == "ATTESTED":
-            print("The signing keys chain to the CogNEXUS Evidence Root and "
-                  "were certified at signing time.")
+            if result.attestation_reasons:
+                # A tampered issuing certificate beside a valid one is recorded
+                # and the bundle still reaches ATTESTED. Reasons were printed
+                # on the SELF-ATTESTED branch only, so the text path hid the
+                # note (it is already in --json).
+                print("Notes on the certificate chain:")
+                for reason in result.attestation_reasons:
+                    print(f"  - {reason}")
+            root = ("the root you supplied" if result.root_fingerprint_overridden
+                    else "the CogNEXUS Evidence Root")
+            print(f"The signing keys chain to {root} and were certified at "
+                  "signing time.")
         else:
             for reason in result.attestation_reasons:
                 print(f"  self-attested because: {reason}")
@@ -1654,9 +1671,14 @@ def main(argv: list[str] | None = None) -> None:
         help="Verify an exported audit evidence bundle (directory or .zip) offline.",
         description=(
             "Recompute every leaf hash, check hash-chain linkage and Merkle roots,\n"
-            "and verify Ed25519 signatures against the bundle's public keys —\n"
-            "zero network, zero server trust. Download a bundle from\n"
-            "GET /api/v1/audit/export. Signature checks require 'artzain[verify]'."
+            "and verify Ed25519 signatures against the bundle's public keys, with\n"
+            "zero network. Those keys come from the bundle, so trust in the\n"
+            "producing server drops out only at VERIFIED, ATTESTED, which needs the\n"
+            "signing keys to chain to the pinned CogNEXUS Evidence Root. This\n"
+            "release pins no Evidence Root: an intact bundle reports\n"
+            "VERIFIED, SELF-ATTESTED unless --root-fingerprint supplies a test root.\n"
+            "Download a bundle from GET /api/v1/audit/export. Signature checks\n"
+            "require 'artzain[verify]'."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
