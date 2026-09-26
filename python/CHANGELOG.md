@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.29
+
+### Fixed
+
+- **Artzain Chat (local) says why the API key did not sign it in.** When the
+  platform refused to open a session with the configured key (a key bound to
+  an agent, for instance), `artzain gui` dropped the reply and the page said
+  "No API key found". The page now shows the platform's reason in the sign-in
+  form, which points to a key that is not bound to an agent or to signing in
+  with your password there. The two-factor message is unchanged.
+
 ## 0.6.28
 
 ### Fixed
