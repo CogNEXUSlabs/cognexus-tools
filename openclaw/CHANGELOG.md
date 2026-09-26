@@ -4,6 +4,26 @@ All notable changes to `@cognexuslabs/openclaw-artzain`. Headings are the
 bare version (`## 0.2.2`): the mirror's `publish-npm.yml` cuts the GitHub
 release notes for tag `openclaw-v<version>` from the matching section.
 
+## 0.2.6
+
+### Changed
+
+- README: install from npm, `openclaw plugins install
+  @cognexuslabs/openclaw-artzain`, as the ClawHub listing already says. It
+  said to install from a git checkout until a listing existed; a checkout
+  install is now the route for an unreleased change.
+
+### Fixed
+
+- **The gate's Decision API call times out while reading the response, not
+  only while waiting for it.** The timer was cleared once the response
+  headers arrived, so a server that sent them and then stopped mid-body left
+  the tool call waiting indefinitely. The deadline now covers the whole call,
+  and a timeout blocks the tool (fail closed) as any other engine error does.
+  A body that could not be read says so instead of blaming a "non-JSON
+  body". Same fix as `@cognexuslabs/artzain` 0.1.7, whose response handling
+  `client.ts` remains a verbatim copy of.
+
 ## 0.2.5
 
 ### Added

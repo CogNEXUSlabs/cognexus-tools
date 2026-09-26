@@ -16,7 +16,9 @@ name: Publish npm packages
 #   organization/user : CogNEXUSlabs
 #   repository        : cognexus-tools
 #   workflow filename : publish-npm.yml   (filename only, not the path)
-#   environment       : (leave blank — these jobs use none)
+#   environment       : release   (set it only once this file is live on
+#                       the mirror: a job outside that environment cannot
+#                       publish once the binding names it)
 #   allowed actions   : npm publish
 # npm then mints a short-lived credential from the id-token below at publish
 # time and generates provenance automatically (no --provenance flag needed, no
@@ -30,7 +32,14 @@ name: Publish npm packages
 # binding, re-run it from the Actions tab.
 #
 # Requirements: npm CLI >= 11.5.1 and Node >= 22.14.0. Node 22 ships npm 10.x,
-# so npm is upgraded below. Actions are pinned to commit SHAs (WS-8).
+# so npm is upgraded below, to a pinned version. Actions are pinned to commit
+# SHAs (WS-8).
+#
+# Only a release tag publishes. Every publish job runs only when the ref is
+# its own tag prefix, on a push or a manual dispatch alike, so a dispatch
+# from a branch publishes nothing. Each job runs in the `release` GitHub
+# Environment, whose settings on the mirror limit it to the release tag
+# patterns and require a reviewer before the job gets its OIDC token.
 
 on:
   push:
@@ -39,28 +48,22 @@ on:
       - "openclaw-v*"
       - "n8n-v*"
       - "grokbot-v*"
+  # Run it from the Actions tab on a release tag ("Use workflow from" →
+  # Tags) to retry a publish; the tag picks the package. On a branch no
+  # publish job runs.
   workflow_dispatch:
-    inputs:
-      package:
-        description: "Package to publish (tag pushes select automatically)"
-        type: choice
-        options:
-          - typescript
-          - openclaw
-          - n8n
-          - grokbot
-        default: typescript
 
 permissions:
   contents: read
-  id-token: write # OIDC token for npm Trusted Publishing (mints the publish credential + provenance)
 
 jobs:
   typescript:
     name: "@cognexuslabs/artzain"
-    if: >-
-      (github.ref_type == 'tag' && startsWith(github.ref_name, 'sdk-ts-v')) ||
-      (github.event_name == 'workflow_dispatch' && inputs.package == 'typescript')
+    if: startsWith(github.ref, 'refs/tags/sdk-ts-v')
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # OIDC token for npm Trusted Publishing (mints the publish credential + provenance)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -74,14 +77,15 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       # Trusted Publishing requires npm >= 11.5.1; Node 22 bundles npm 10.x.
+      # Pinned: whatever runs here runs beside the OIDC token. npm 12 needs
+      # Node ^22.22.2, which node-version 22 resolves to.
       - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@12.1.0
 
       - name: Install
         run: npm ci
 
       - name: Verify tag matches package version
-        if: github.ref_type == 'tag'
         run: |
           PKG_VERSION=$(node -p "require('./package.json').version")
           TAG_VERSION="${GITHUB_REF_NAME#sdk-ts-v}"
@@ -141,9 +145,11 @@ jobs:
 
   openclaw:
     name: "@cognexuslabs/openclaw-artzain"
-    if: >-
-      (github.ref_type == 'tag' && startsWith(github.ref_name, 'openclaw-v')) ||
-      (github.event_name == 'workflow_dispatch' && inputs.package == 'openclaw')
+    if: startsWith(github.ref, 'refs/tags/openclaw-v')
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # OIDC token for npm Trusted Publishing (mints the publish credential + provenance)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -157,13 +163,12 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@12.1.0
 
       - name: Install
         run: npm ci
 
       - name: Verify tag matches package version
-        if: github.ref_type == 'tag'
         run: |
           PKG_VERSION=$(node -p "require('./package.json').version")
           TAG_VERSION="${GITHUB_REF_NAME#openclaw-v}"
@@ -211,9 +216,11 @@ jobs:
 
   n8n:
     name: "@cognexuslabs/n8n-nodes-artzain"
-    if: >-
-      (github.ref_type == 'tag' && startsWith(github.ref_name, 'n8n-v')) ||
-      (github.event_name == 'workflow_dispatch' && inputs.package == 'n8n')
+    if: startsWith(github.ref, 'refs/tags/n8n-v')
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # OIDC token for npm Trusted Publishing (mints the publish credential + provenance)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -227,13 +234,12 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@12.1.0
 
       - name: Install
         run: npm ci
 
       - name: Verify tag matches package version
-        if: github.ref_type == 'tag'
         run: |
           PKG_VERSION=$(node -p "require('./package.json').version")
           TAG_VERSION="${GITHUB_REF_NAME#n8n-v}"
@@ -277,9 +283,11 @@ jobs:
 
   grokbot:
     name: "@cognexuslabs/grokbot-artzain"
-    if: >-
-      (github.ref_type == 'tag' && startsWith(github.ref_name, 'grokbot-v')) ||
-      (github.event_name == 'workflow_dispatch' && inputs.package == 'grokbot')
+    if: startsWith(github.ref, 'refs/tags/grokbot-v')
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # OIDC token for npm Trusted Publishing (mints the publish credential + provenance)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -293,13 +301,12 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@12.1.0
 
       - name: Install
         run: npm ci
 
       - name: Verify tag matches package version
-        if: github.ref_type == 'tag'
         run: |
           PKG_VERSION=$(node -p "require('./package.json').version")
           TAG_VERSION="${GITHUB_REF_NAME#grokbot-v}"

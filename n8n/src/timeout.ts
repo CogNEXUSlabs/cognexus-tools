@@ -8,16 +8,30 @@ export function resolveTimeoutMs(raw: unknown): number {
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_TIMEOUT_MS;
 }
 
-/** Fetch `url` with `init`, aborting after `timeoutMs`. Callers handle the rejection. */
-export async function fetchWithTimeout(
+/**
+ * Fetch `url` with `init` and hand the response to `read`, aborting after
+ * `timeoutMs`. The deadline covers `read` too: a server that sends its
+ * headers and then stalls mid-body fails the call instead of hanging it, so
+ * read the body inside `read`, not after this returns. Callers handle the
+ * rejection.
+ */
+export async function fetchWithTimeout<T>(
   url: string,
   init: RequestInit,
   timeoutMs: number,
-): Promise<Response> {
+  read: (resp: Response) => Promise<T>,
+): Promise<T> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(
+    () =>
+      controller.abort(
+        new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+      ),
+    timeoutMs,
+  );
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const resp = await fetch(url, { ...init, signal: controller.signal });
+    return await read(resp);
   } finally {
     clearTimeout(timer);
   }

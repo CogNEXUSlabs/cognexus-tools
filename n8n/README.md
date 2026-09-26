@@ -18,9 +18,13 @@ n8n execution, so two runs of the same workflow never share a key (0.1.1 and
 earlier sent `n8n-<item>-<action>`, which was identical for item 0 of every
 execution and could replay another run's sealed verdict). Set it explicitly
 to your own business key — an order id, an invoice number — when you *want*
-server-side replay across retries: the server returns the prior decision for
-the same request id for **48 hours** without re-evaluating the payload, so
-never reuse a key for a different customer or amount. Max 64 characters.
+server-side replay across retries: for **48 hours** (the server's default
+window) a repeat of the same request id with the same inputs — Agent DID,
+Action, Target, Payload and Payload Kind — returns the sealed decision
+instead of deciding again, and a repeat whose inputs differ is decided and
+sealed afresh. Still never reuse a key for a different customer or amount:
+engines built before 21 September 2026 replay the prior decision whatever the
+inputs. Max 64 characters.
 
 How the fallback is built (`fallbackRequestId` in `src/decision.ts`): for
 each item the node reads the **Request ID** parameter (`requestId`); when it
@@ -35,22 +39,26 @@ the value is cut to the server's cap of 64 characters before it is sent as
 ## What this is not
 
 - Not a Connectors-panel card named n8n.
-- Not published to npm from this repository. Dest
-  (`CogNEXUSlabs/cognexus-tools`) holds Trusted Publishing. Until that
-  package is tagged, install from a git checkout.
+- Not published to npm from the engine repository. Dest
+  (`CogNEXUSlabs/cognexus-tools`) publishes it through npm Trusted
+  Publishing, with provenance, on an `n8n-v*` tag.
 - Not a Wait node that pretends CogNEXUS `review` resolved inside n8n.
 - Not an OpenClaw community node. OpenClaw Chat nodes drive the Gateway;
   this package sits in front of *your* side effects.
 
-## Install (from a CogNEXUS checkout)
+## Install
+
+In n8n: **Settings → Community nodes → Install from npm**, package
+`@cognexuslabs/n8n-nodes-artzain`.
+
+To try a change that is not released yet, build from a checkout of dest
+(`n8n/`) or the engine dual-home (`sdk/n8n/`) and point n8n at that folder
+per n8n's custom-node docs (`N8N_CUSTOM_EXTENSIONS`, or `npm pack` + install
+the tarball):
 
 ```bash
-cd sdk/n8n && npm ci && npm run build
+npm ci && npm run build
 ```
-
-In n8n: **Settings → Community nodes → Install from npm** is the published
-path. Until dest publishes, point n8n at this folder per n8n's custom-node
-docs (`N8N_CUSTOM_EXTENSIONS`, or `npm pack` + install the tarball).
 
 Credential for Decision: Header `X-Api-Key` = sandbox key from `/get-a-key`.
 **Not** a dashboard JWT. Envelope uses `Authorization: Bearer cnxe_…`.

@@ -74,7 +74,7 @@ export class ArtzainDecision implements INodeType {
         type: "string",
         default: "",
         description:
-          "Idempotency key (max 64). The server replays a prior decision for the same key for 48 h. Empty derives n8n-<executionId>-<item>, unique per execution.",
+          "Idempotency key (max 64). For 48 h the server replays the sealed decision for a repeat of this key with the same inputs; different inputs are decided again. Empty derives n8n-<executionId>-<item>, unique per execution.",
       },
       {
         displayName: "Timeout (ms)",
@@ -122,7 +122,10 @@ export class ArtzainDecision implements INodeType {
           payloadKind,
           requestId,
         });
-        const resp = await fetchWithTimeout(
+        // The body is read once, as text: after resp.json() fails, the body
+        // is spent and resp.text() throws, so a proxy's HTML error page
+        // raised a node error instead of reaching Deny.
+        const { status, text } = await fetchWithTimeout(
           decisionsUrl(baseUrl),
           {
             method: "POST",
@@ -133,14 +136,16 @@ export class ArtzainDecision implements INodeType {
             body: JSON.stringify(body),
           },
           timeoutMs,
+          async (resp) => ({ status: resp.status, text: await resp.text() }),
         );
         let parsed: unknown;
         try {
-          parsed = await resp.json();
+          parsed = JSON.parse(text);
         } catch {
-          parsed = { detail: await resp.text() };
+          // An empty body routes on its status alone ("HTTP 503").
+          parsed = text.trim() ? { detail: text } : undefined;
         }
-        const routed = routeHttpDecision(resp.status, parsed);
+        const routed = routeHttpDecision(status, parsed);
         const out: INodeExecutionData = {
           json: routed.json,
           pairedItem: { item: i },

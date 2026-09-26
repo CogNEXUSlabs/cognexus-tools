@@ -2,6 +2,37 @@
 
 All notable changes to `@cognexuslabs/n8n-nodes-artzain`.
 
+## 0.1.5
+
+### Changed
+
+- **The Request ID help text and the README describe replay as the server
+  does it now.** A repeat of a request id replays the sealed decision only
+  when its inputs (Agent DID, Action, Target, Payload, Payload Kind) match;
+  a repeat whose inputs differ is decided and sealed again. Both said the
+  server replays the prior decision without looking at the payload, which
+  holds only for engines built before 21 September 2026; the README still
+  warns about those. Replay itself is the server's; the node sends the same
+  request as before.
+- README: install from npm (published since 0.1.0). It said to install from
+  a git checkout until the package was tagged; a checkout build is now the
+  route for an unreleased change.
+
+### Fixed
+
+- **Both nodes time out while reading the response, not only while waiting
+  for it.** The Timeout (ms) deadline was cleared once the response headers
+  arrived, so a server that sent them and then stopped mid-body hung the
+  item indefinitely. The deadline now covers the whole call, and a timed-out
+  item fails closed as before (Deny on the Decision node, an error /
+  `outcome: "deny"` on the Envelope node).
+- **Decision node: a response body that is not JSON reaches Deny.** The node
+  read the body as JSON and then, to quote it, read it a second time, which
+  always failed because the body was already spent. A proxy's HTML error
+  page raised a node error, or with Continue On Fail a Deny quoting "Body is
+  unusable", instead of a Deny quoting the page. The body is now read once.
+  An empty body routes on its HTTP status.
+
 ## 0.1.4
 
 ### Changed

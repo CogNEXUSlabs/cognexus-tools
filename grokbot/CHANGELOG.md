@@ -4,6 +4,20 @@ All notable changes to `@cognexuslabs/grokbot-artzain`. Headings are the
 bare version (`## 0.1.0`): the mirror's `publish-npm.yml` cuts the GitHub
 release notes for tag `grokbot-v<version>` from the matching section.
 
+## 0.1.3
+
+### Fixed
+
+- **The Decision API call times out while reading the response, not only
+  while waiting for it.** The timer was cleared once the response headers
+  arrived, so a server that sent them and then stopped mid-body left
+  `gateToolCall` and `grokbot-artzain decide` waiting indefinitely. The
+  deadline now covers the whole call, and a timeout blocks the tool call
+  (fail closed) as any other engine error does. A body that could not be
+  read says so instead of blaming a "non-JSON body". Same fix as
+  `@cognexuslabs/artzain` 0.1.7, whose response handling `client.ts` remains
+  a verbatim copy of.
+
 ## 0.1.2
 
 Published 2026-09-18. Version-only for the first release through npm

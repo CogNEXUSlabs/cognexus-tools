@@ -10,15 +10,25 @@ This is pattern C. Envelope pattern B (model `base_url` swap) is still
 ## What this is not
 
 - Not a Connectors-panel card.
-- Not published on ClawHub from this repository. Dest
-  (`CogNEXUSlabs/cognexus-tools`) holds Trusted Publishing. Until that listing
-  exists, install from a git checkout.
+- Not published from the engine repository. Dest
+  (`CogNEXUSlabs/cognexus-tools`) publishes the npm package through Trusted
+  Publishing, with provenance, on an `openclaw-v*` tag. The ClawHub listing
+  ([`clawhub/SKILL.md`](clawhub/SKILL.md)) points at that package; it is not
+  a code bundle.
 - Not a mapping of CogNEXUS `review` onto OpenClaw `/approve`.
 
-## Install (from a CogNEXUS checkout)
+## Install
 
 ```bash
-openclaw plugins install ./sdk/openclaw
+openclaw plugins install @cognexuslabs/openclaw-artzain
+```
+
+To try a change that is not released yet, install the folder from a
+checkout instead, dest or the engine dual-home:
+
+```bash
+openclaw plugins install ./openclaw       # CogNEXUSlabs/cognexus-tools
+openclaw plugins install ./sdk/openclaw   # the engine repository
 ```
 
 Set `COGNEXUS_API_KEY` on the Gateway (sandbox key from `/get-a-key`, **not**
