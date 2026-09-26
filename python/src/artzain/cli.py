@@ -38,6 +38,13 @@ from artzain import (
     should_block,
 )
 from artzain.cloud import _sdk_headers
+from artzain.credentials import (
+    PROFILE_SOURCE,
+    CredentialConflictError,
+    ResolvedCredentials,
+    credentials_path,
+    resolve_credentials,
+)
 
 _log = logging.getLogger("artzain.cli")
 
@@ -101,6 +108,11 @@ def _request_headers_for_url(url: str) -> dict[str, str]:
 
 
 def _effective_base_url() -> str:
+    """The host `artzain login` and `signup` talk to: they obtain a key, send none.
+
+    ``COGNEXUS_API_BASE_URL`` or the default. A command that sends a key
+    uses :func:`_api_base_url`, the host that key was issued with.
+    """
     raw = (os.environ.get("COGNEXUS_API_BASE_URL") or "").strip().rstrip("/")
     return raw or _DEFAULT_BASE
 
@@ -165,6 +177,61 @@ def find_artzain_api_key_in_env_files(start: Path | None = None) -> tuple[str | 
     return None, None
 
 
+def extract_artzain_base_url_from_text(text: str) -> str | None:
+    """``COGNEXUS_API_BASE_URL`` from dotenv-style text; the first non-empty value wins."""
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        name, sep, val = line.partition("=")
+        if not sep or name.strip() != "COGNEXUS_API_BASE_URL":
+            continue
+        v = val.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        v = v.strip().rstrip("/")
+        if v:
+            return v
+    return None
+
+
+def _dotenv_credentials(start: Path | None = None) -> tuple[str, str | None, str] | None:
+    """``(key, base_url, path)`` from the first dotenv file that holds a key.
+
+    Both come from that one file, as `artzain quickstart` writes them.
+    """
+    for path in _iter_dotenv_paths(start):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        key = extract_artzain_api_key_from_text(text)
+        if key:
+            return key, extract_artzain_base_url_from_text(text), str(path)
+    return None
+
+
+def _cli_credentials() -> ResolvedCredentials:
+    """The API key a command sends and the host it goes to, decided together.
+
+    Environment, then a project dotenv file, then the credentials profile
+    (see :func:`artzain.credentials.resolve_credentials`). Exits when the
+    host that is set did not issue the key; the message names settings,
+    never values.
+    """
+    try:
+        return resolve_credentials(dotenv=_dotenv_credentials())
+    except CredentialConflictError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
+def _api_base_url() -> str:
+    """The host for a command that sends the resolved API key: the key's own."""
+    return _cli_credentials().base_url
+
+
 def _quickstart_demo_file_contents(base_url: str) -> str:
     """Fill the embedded template with the origin used during quickstart."""
     raw = resources.files("artzain").joinpath(_QUICKSTART_TEMPLATE).read_text(encoding="utf-8")
@@ -181,21 +248,19 @@ def _write_quickstart_demo_file(base_url: str) -> Path:
 
 
 def resolve_api_key_for_quickstart() -> tuple[str | None, Path | None]:
-    """Prefer process env, then dotenv files, then credentials profile."""
-    env_key = (os.environ.get("COGNEXUS_API_KEY") or os.environ.get("MYAPP_API_KEY") or "").strip()
-    if env_key:
-        return env_key, None
-    found = find_artzain_api_key_in_env_files()
-    if found[0]:
-        return found
-    try:
-        from artzain.credentials import credentials_path, profile_api_key
-        key = profile_api_key()
-        if key:
-            return key, credentials_path()
-    except Exception:
-        _log.debug("credentials profile unavailable; no API key from it", exc_info=True)
-    return None, None
+    """The CLI's API key and the file it came from (``None`` for the environment).
+
+    Process env, then dotenv files, then the credentials profile. Exits when
+    the host that is set did not issue the key (:func:`_cli_credentials`).
+    """
+    creds = _cli_credentials()
+    if not creds.api_key:
+        return None, None
+    if creds.key_source in ("COGNEXUS_API_KEY", "MYAPP_API_KEY"):
+        return creds.api_key, None
+    if creds.key_source == PROFILE_SOURCE:
+        return creds.api_key, credentials_path()
+    return creds.api_key, Path(creds.key_source)
 
 
 def cmd_login(_args: argparse.Namespace) -> None:
@@ -722,7 +787,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         print(f"{out} already exists. Re-run with --force to overwrite.")
         raise SystemExit(1)
 
-    base_url = _effective_base_url()
+    base_url = _api_base_url()
     out.write_text(scaffold_contents(framework, base_url), encoding="utf-8")
     print(f"Wrote {out}")
 
@@ -745,7 +810,7 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 
 def cmd_quickstart(_args: argparse.Namespace) -> None:
-    base_url = _effective_base_url()
+    base_url = _api_base_url()
     key, env_path = resolve_api_key_for_quickstart()
 
     if key:
@@ -1226,7 +1291,7 @@ def cmd_licence_verify(args: argparse.Namespace) -> None:
 
 def cmd_audit_export(args: argparse.Namespace) -> None:
     """Download an audit evidence bundle (ZIP) from the server to disk."""
-    base = _effective_base_url()
+    base = _api_base_url()
     params: list[str] = []
     if getattr(args, "profile", None):
         params.append(f"profile={urllib.parse.quote(args.profile)}")
@@ -1263,8 +1328,8 @@ def _default_policy_key_dir() -> Path:
 
 
 def _policy_auth_headers() -> dict[str, str]:
-    """Resolve an API key (env / dotenv) for authenticated policy calls."""
-    key, _ = resolve_api_key_for_quickstart()
+    """The API key for an authenticated call; pair the URL with :func:`_api_base_url`."""
+    key = _cli_credentials().api_key
     if not key:
         raise SystemExit(
             "No COGNEXUS_API_KEY found. Create one (Account → API Keys) and set "
@@ -1299,7 +1364,7 @@ def cmd_policy_register_key(args: argparse.Namespace) -> None:
         pub_pem = load_public_pem(key_dir)
     except PolicySigningError as exc:
         raise SystemExit(str(exc)) from exc
-    url = f"{_effective_base_url()}/api/v1/policy-keys"
+    url = f"{_api_base_url()}/api/v1/policy-keys"
     status, payload = _http_json("POST", url, headers=_policy_auth_headers(), body={"public_key_pem": pub_pem})
     if status == 200:
         print(f"Registered policy key {payload.get('key_id')} for team {payload.get('team_id')}.")
@@ -1333,7 +1398,7 @@ def cmd_policy_push(args: argparse.Namespace) -> None:
         bundle = json.loads(src.read_text(encoding="utf-8"))
     except Exception as exc:
         raise SystemExit(f"Could not read bundle {src}: {exc}") from exc
-    url = f"{_effective_base_url()}/api/v1/policy-bundles"
+    url = f"{_api_base_url()}/api/v1/policy-bundles"
     status, payload = _http_json("POST", url, headers=_policy_auth_headers(), body=bundle)
     if status == 200:
         print(f"Pushed bundle id={payload.get('id')} status={payload.get('status')} sha256={payload.get('body_sha256')}")
@@ -1342,7 +1407,7 @@ def cmd_policy_push(args: argparse.Namespace) -> None:
 
 
 def _policy_lifecycle(action: str, bundle_id: str) -> None:
-    url = f"{_effective_base_url()}/api/v1/policy-bundles/{bundle_id}/{action}"
+    url = f"{_api_base_url()}/api/v1/policy-bundles/{bundle_id}/{action}"
     status, payload = _http_json("POST", url, headers=_policy_auth_headers())
     if status == 200:
         print(f"Bundle {bundle_id} → {payload.get('status', action)}")
@@ -1368,7 +1433,7 @@ def cmd_policy_retire(args: argparse.Namespace) -> None:
 
 
 def cmd_policy_diff(args: argparse.Namespace) -> None:
-    url = f"{_effective_base_url()}/api/v1/policy-bundles/diff?a={urllib.parse.quote(args.a)}&b={urllib.parse.quote(args.b)}"
+    url = f"{_api_base_url()}/api/v1/policy-bundles/diff?a={urllib.parse.quote(args.a)}&b={urllib.parse.quote(args.b)}"
     status, payload = _http_json("GET", url, headers=_policy_auth_headers())
     if status != 200:
         raise SystemExit(f"diff failed ({status}): {_format_api_error(payload)}")
@@ -1384,7 +1449,7 @@ def cmd_registry_list(args: argparse.Namespace) -> None:
         params.append(f"source={urllib.parse.quote(args.source)}")
     if getattr(args, "lifecycle", None):
         params.append(f"lifecycle={urllib.parse.quote(args.lifecycle)}")
-    url = f"{_effective_base_url()}/api/v1/registry/catalog?{'&'.join(params)}"
+    url = f"{_api_base_url()}/api/v1/registry/catalog?{'&'.join(params)}"
     status, payload = _http_json("GET", url, headers=_policy_auth_headers())
     if status != 200:
         raise SystemExit(f"catalog fetch failed ({status}): {_format_api_error(payload)}")
@@ -1413,7 +1478,7 @@ def cmd_registry_findings(args: argparse.Namespace) -> None:
     params = [f"status={urllib.parse.quote(getattr(args, 'status', 'open') or 'open')}"]
     if getattr(args, "kind", None):
         params.append(f"kind={urllib.parse.quote(args.kind)}")
-    url = f"{_effective_base_url()}/api/v1/registry/findings?{'&'.join(params)}"
+    url = f"{_api_base_url()}/api/v1/registry/findings?{'&'.join(params)}"
     status, payload = _http_json("GET", url, headers=_policy_auth_headers())
     if status != 200:
         raise SystemExit(f"findings fetch failed ({status}): {_format_api_error(payload)}")
@@ -1444,7 +1509,7 @@ def cmd_registry_export(args: argparse.Namespace) -> None:
         params.append(f"source={urllib.parse.quote(args.source)}")
     if getattr(args, "lifecycle", None):
         params.append(f"lifecycle={urllib.parse.quote(args.lifecycle)}")
-    url = f"{_effective_base_url()}/api/v1/registry/catalog?{'&'.join(params)}"
+    url = f"{_api_base_url()}/api/v1/registry/catalog?{'&'.join(params)}"
     headers = {**_request_headers_for_url(url), **_policy_auth_headers()}
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
@@ -1567,7 +1632,7 @@ def cmd_gui(args: argparse.Namespace) -> None:
     """Launch Artzain Chat (local) — a chat client proxying to the platform."""
     from artzain.gui import launch_gui  # lazy import — keeps startup fast
 
-    base_url   = _effective_base_url()
+    base_url   = _api_base_url()
     port: int | None = getattr(args, "port", None)
     no_browser: bool = getattr(args, "no_browser", False)
 

@@ -5,7 +5,7 @@
  * `DecisionError` instead (documented divergence).
  */
 
-import { effectiveApiKey, effectiveBaseUrl } from "./config.js";
+import { resolveCredentials, type ResolvedCredentials } from "./config.js";
 import { DecisionError } from "./errors.js";
 
 export type PayloadKind =
@@ -101,7 +101,15 @@ export interface DecideOptions {
 }
 
 export async function decide(options: DecideOptions): Promise<DecisionResponse> {
-  const apiKey = effectiveApiKey();
+  // The key and the host it may go to are decided together; a host that is
+  // set but did not issue the key refuses the call before anything is sent.
+  let creds: ResolvedCredentials;
+  try {
+    creds = resolveCredentials();
+  } catch (err) {
+    throw new DecisionError(`Decision request not sent: ${(err as Error).message}`);
+  }
+  const apiKey = creds.apiKey;
   if (!apiKey) {
     throw new DecisionError(
       "No API key configured — decisions will not be sealed. " +
@@ -142,7 +150,7 @@ export async function decide(options: DecideOptions): Promise<DecisionResponse> 
   try {
     let resp: Awaited<ReturnType<FetchLike>>;
     try {
-      resp = await fetchImpl(`${effectiveBaseUrl()}/api/v1/decisions`, {
+      resp = await fetchImpl(`${creds.baseUrl}/api/v1/decisions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.6.28
+
+### Fixed
+
+- **The CLI now uses the profile's base URL.** `artzain login` records the
+  host it logged in against beside the key, and `artzain quickstart` writes
+  `COGNEXUS_API_BASE_URL` beside the key in `.env`, but the CLI read only the
+  key from either and sent it to `COGNEXUS_API_BASE_URL` or the default host.
+  After logging in to a self-hosted deployment, `artzain gui`, `policy`,
+  `registry`, `audit export` and `quickstart` in a later shell sent that
+  deployment's API key to the public host. A key from the profile now goes to
+  the profile's host, and a `.env` key to that file's host.
+- **The library pairs the key and the host the same way.** `decide()` and the
+  cloud calls took the key and the host independently, so the profile's key
+  could go to a host named by `COGNEXUS_API_BASE_URL` or
+  `configure(base_url=...)`, and an environment key to the profile's host.
+  The profile's host is now used only with the profile's key; any other key
+  goes to `configure(base_url=...)`, `COGNEXUS_API_BASE_URL` or the default.
+
+### Changed
+
+- When `COGNEXUS_API_BASE_URL` or `configure(base_url=...)` names a different
+  host from the one the key was issued with, nothing is sent: the CLI exits
+  with a message, `decide()` raises `DecisionError`, and event posts are
+  skipped with one warning. The message names the settings, never their
+  values. Fix it by setting `COGNEXUS_API_KEY` for that host, running
+  `artzain login` against it, or unsetting the base URL.
+- `artzain.credentials` adds `resolve_credentials()`, `ResolvedCredentials`,
+  `CredentialConflictError` and `DEFAULT_BASE_URL`.
+
 ## 0.6.27
 
 ### Changed

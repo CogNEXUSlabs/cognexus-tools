@@ -1,6 +1,6 @@
 /** `fetchApiKeyIdentity()` — validate the configured key (`GET /api/api-keys/me`). */
 
-import { effectiveApiKey, effectiveBaseUrl } from "./config.js";
+import { resolveCredentials, type ResolvedCredentials } from "./config.js";
 import { DecisionError } from "./errors.js";
 import type { FetchLike } from "./decide.js";
 
@@ -16,7 +16,13 @@ export async function fetchApiKeyIdentity(options?: {
   timeoutMs?: number;
   fetchImpl?: FetchLike;
 }): Promise<ApiKeyIdentity> {
-  const apiKey = effectiveApiKey();
+  let creds: ResolvedCredentials;
+  try {
+    creds = resolveCredentials();
+  } catch (err) {
+    throw new DecisionError(`Key validation not sent: ${(err as Error).message}`);
+  }
+  const apiKey = creds.apiKey;
   if (!apiKey) {
     throw new DecisionError("No API key configured.");
   }
@@ -34,7 +40,7 @@ export async function fetchApiKeyIdentity(options?: {
   try {
     let resp: Awaited<ReturnType<FetchLike>>;
     try {
-      resp = await fetchImpl(`${effectiveBaseUrl()}/api/api-keys/me`, {
+      resp = await fetchImpl(`${creds.baseUrl}/api/api-keys/me`, {
         method: "GET",
         headers: { "X-Api-Key": apiKey },
         signal: controller.signal,
