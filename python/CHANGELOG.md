@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.27
+
+### Changed
+
+- `artzain local` sets `COGNEXUS_MCP_TOOL_SUPPLY` to `enforce`. A tool list
+  with no accepted fingerprint is denied. A fingerprint that no longer
+  matches the accepted one is reviewed until a manager accepts it.
+
 ## 0.6.26
 
 ### Fixed

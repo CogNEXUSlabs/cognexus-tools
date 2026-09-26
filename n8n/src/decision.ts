@@ -60,8 +60,10 @@ export function buildDecisionBody(input: {
  * Fallback `request_id` for an item whose Request ID parameter is empty.
  *
  * The server keys its idempotency ledger on `(user_id, request_id)` for
- * 48 h and replays the earlier decision without comparing the payload, so
- * the fallback must never repeat across executions. It is derived from the
+ * 48 h. A repeat with the same inputs replays the earlier decision (engines
+ * built before 21 September 2026 replay it whatever the payload), so a
+ * second execution would get no decision of its own: the fallback must never
+ * repeat across executions. It is derived from the
  * n8n execution id plus the item index; when no execution id is available
  * (older n8n, unit tests) a random UUID stands in. Always ≤ 64 chars.
  */

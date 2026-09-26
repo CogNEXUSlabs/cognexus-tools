@@ -94,7 +94,7 @@ export interface DecideOptions {
   product?: string;
   /** Advisory context recorded alongside the decision. */
   context?: Record<string, unknown>;
-  /** Request timeout in milliseconds. Default 10000. */
+  /** Request timeout in milliseconds, reading the response included. Default 10000. */
   timeoutMs?: number;
   /** Test seam / custom transport. Defaults to global `fetch`. */
   fetchImpl?: FetchLike;
@@ -128,52 +128,69 @@ export async function decide(options: DecideOptions): Promise<DecisionResponse> 
     context: options.context ?? {},
   };
 
+  // One deadline for the request and for reading the response: the timer is
+  // cleared only once the body has been read, so a server that sends its
+  // headers and then stalls cannot hang the call.
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 10_000);
-  let resp: Awaited<ReturnType<FetchLike>>;
+  const timer = setTimeout(
+    () =>
+      controller.abort(
+        new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+      ),
+    options.timeoutMs ?? 10_000,
+  );
   try {
-    resp = await fetchImpl(`${effectiveBaseUrl()}/api/v1/decisions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Api-Key": apiKey,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-  } catch (err) {
-    throw new DecisionError(`Decision API unreachable: ${(err as Error).message}`);
+    let resp: Awaited<ReturnType<FetchLike>>;
+    try {
+      resp = await fetchImpl(`${effectiveBaseUrl()}/api/v1/decisions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Api-Key": apiKey,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      throw new DecisionError(`Decision API unreachable: ${(err as Error).message}`);
+    }
+
+    // lockstep:begin decision-response
+    if (!resp.ok) {
+      let detail: unknown;
+      try {
+        detail = ((await resp.json()) as { detail?: unknown })?.detail;
+      } catch {
+        detail = undefined;
+      }
+      // Typed engine refusals (fail-closed): kill_switch_active / audit_unavailable.
+      const detailText =
+        typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : "";
+      throw new DecisionError(
+        `Decision API returned HTTP ${resp.status}${detailText ? `: ${detailText}` : ""}`,
+        { status: resp.status, detail },
+      );
+    }
+    let parsed: unknown;
+    try {
+      parsed = await resp.json();
+    } catch (err) {
+      // A 2xx that is not JSON (a proxy or captive portal answering HTML)
+      // surfaced as a bare SyntaxError, outside the DecisionError contract.
+      // A body that could not be read at all (the timeout passed while it
+      // was arriving, the connection dropped) is not a JSON problem.
+      const problem =
+        (err as Error)?.name === "SyntaxError"
+          ? "with a non-JSON body"
+          : "but its body could not be read";
+      throw new DecisionError(
+        `Decision API returned HTTP ${resp.status} ${problem}: ${(err as Error).message}`,
+        { status: resp.status },
+      );
+    }
+    return parsed as DecisionResponse;
+    // lockstep:end decision-response
   } finally {
     clearTimeout(timer);
   }
-
-  // lockstep:begin decision-response
-  if (!resp.ok) {
-    let detail: unknown;
-    try {
-      detail = ((await resp.json()) as { detail?: unknown })?.detail;
-    } catch {
-      detail = undefined;
-    }
-    // Typed engine refusals (fail-closed): kill_switch_active / audit_unavailable.
-    const detailText =
-      typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : "";
-    throw new DecisionError(
-      `Decision API returned HTTP ${resp.status}${detailText ? `: ${detailText}` : ""}`,
-      { status: resp.status, detail },
-    );
-  }
-  let parsed: unknown;
-  try {
-    parsed = await resp.json();
-  } catch (err) {
-    // A 2xx that is not JSON (a proxy or captive portal answering HTML)
-    // surfaced as a bare SyntaxError, outside the DecisionError contract.
-    throw new DecisionError(
-      `Decision API returned HTTP ${resp.status} with a non-JSON body: ${(err as Error).message}`,
-      { status: resp.status },
-    );
-  }
-  return parsed as DecisionResponse;
-  // lockstep:end decision-response
 }

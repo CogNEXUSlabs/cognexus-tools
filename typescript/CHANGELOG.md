@@ -4,6 +4,21 @@ All notable changes to `@cognexuslabs/artzain`. Headings are the bare
 version (`## 0.1.5`): the mirror's `publish-npm.yml` cuts the GitHub release
 notes for tag `sdk-ts-v<version>` from the matching section.
 
+## 0.1.7
+
+### Fixed
+
+- **`decide()` and `fetchApiKeyIdentity()` time out while reading the
+  response, not only while waiting for it.** The timer was cleared once the
+  response headers arrived, so a server that sent them and then stopped
+  mid-body hung the call indefinitely. `timeoutMs` now covers the whole call,
+  which fails with `DecisionError`. The error quotes a `TimeoutError`
+  ("The operation was aborted due to timeout") where it said "This operation
+  was aborted".
+- A response whose body could not be read (the timeout passed, the
+  connection dropped) says the body "could not be read"; it blamed a
+  "non-JSON body". A body that is read and is not JSON still says so.
+
 ## 0.1.6
 
 ### Fixed
