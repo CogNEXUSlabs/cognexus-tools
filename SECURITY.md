@@ -12,8 +12,10 @@ them.
 
 ### Scope
 
-- the packages published from this repository: `artzain` on PyPI and
-  `@cognexuslabs/artzain` on npm;
+- the packages published from this repository: `artzain` on PyPI, and
+  `@cognexuslabs/artzain`, `@cognexuslabs/openclaw-artzain`,
+  `@cognexuslabs/n8n-nodes-artzain` and `@cognexuslabs/grokbot-artzain` on
+  npm;
 - the hosted service at <https://app.cognexuslabs.ai>;
 - the decision engine behind it (Decision API, audit chain, policy bundles),
   which is a separate private codebase that carries this same policy.
