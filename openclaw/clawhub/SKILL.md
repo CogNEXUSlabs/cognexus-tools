@@ -32,13 +32,37 @@ CogNEXUS deployment for a sealed decision before any host tool runs:
 
 ## Set up
 
-1. Install the plugin from npm:
+This listing version pins plugin **0.2.6**. The plugin has no runtime
+dependencies, so that one package is everything you install.
+
+1. Verify that exact version before you install it:
 
    ```
-   openclaw plugins install @cognexuslabs/openclaw-artzain
+   mkdir artzain-verify && cd artzain-verify && npm init -y
+   npm install --ignore-scripts @cognexuslabs/openclaw-artzain@0.2.6
+   npm audit signatures
    ```
 
-2. Give the Gateway a Decision API key — `COGNEXUS_API_KEY`, or plugin
+   Expect `1 package has a verified registry signature` and
+   `1 package has a verified attestation`, and stop if either is missing.
+   The attestation ties the tarball to the `openclaw-v0.2.6` release
+   workflow on CogNEXUSlabs/cognexus-tools. The tarball's integrity is:
+
+   ```
+   sha512-kgK8JhYACX4nF66gRLcd8Cq3xDki1XxeMF1wCKQuqDlkIBbZPDYRPgjqKX2+FH8tevUp23Ic9K3gB91GxPhsGw==
+   ```
+
+   `npm view @cognexuslabs/openclaw-artzain@0.2.6 dist.integrity` prints the
+   registry's copy, and the `package-lock.json` the install above wrote
+   records the same value.
+
+2. Install that version, pinned:
+
+   ```
+   openclaw plugins install @cognexuslabs/openclaw-artzain@0.2.6
+   ```
+
+3. Give the Gateway a Decision API key — `COGNEXUS_API_KEY`, or plugin
    config. The key is a sandbox/Decision key, **not** a dashboard JWT and
    **not** an envelope `cnxe_…` key:
 
@@ -59,16 +83,29 @@ CogNEXUS deployment for a sealed decision before any host tool runs:
    }
    ```
 
-3. Restart the Gateway. Tool calls now appear as sealed decisions in your
+4. Restart the Gateway. Tool calls now appear as sealed decisions in your
    CogNEXUS audit trail, and this instance becomes visible to the Agent
    registry.
 
 ## Security notes
 
-- `baseUrl` is **your own** CogNEXUS deployment. ArtzAIn is VPC-first; there
-  is no shared SaaS endpoint to configure here, and we never ask for keys
-  outside your own Gateway config.
-- Verify what you install: the npm package ships signed provenance
-  (`npm audit signatures`).
+- **What the plugin sees and sends.** It runs on every host tool call and
+  can block it; that is its purpose. For each call it sends the tool name,
+  the call's arguments and the agent id to the Decision API at `baseUrl`,
+  which screens them and seals the decision in your audit trail. On the
+  first gated call it also sends this instance's agent and skill names
+  (names only) to `/api/v1/registry/enroll` on the same host (`enroll: false`
+  turns that off), and to `/api/v1/registry/announce` only if you set
+  `announce: true`. It contacts no other host.
+- **Point `baseUrl` at your own deployment.** Without `baseUrl` or
+  `COGNEXUS_API_BASE_URL` the plugin uses the hosted
+  `https://app.cognexuslabs.ai`. Give the Gateway outbound HTTPS to that one
+  host and nothing else the plugin needs. We never ask for keys outside your
+  own Gateway config.
+- **Tool arguments are recorded.** Keep secrets out of arguments you do not
+  want screened and sealed in your audit trail.
+- **Upgrades.** Each plugin release gets a new listing version with its own
+  pin and digest. Upgrade by repeating step 1 with the new version, and never
+  install without a version.
 - The gate fails closed by design — a misconfigured key blocks tools rather
   than silently allowing them.
