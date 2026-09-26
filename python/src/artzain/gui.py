@@ -1005,7 +1005,7 @@ _GUI_HTML_TEMPLATE = """\
 
   async function boot() {
     // 1. Try API-key bootstrap (no login needed)
-    let mfaNotice = '';
+    let mfaNotice = '', keyNotice = '';
     try {
       const res = await fetch('/gui/bootstrap');
       if (res.ok) {
@@ -1018,6 +1018,9 @@ _GUI_HTML_TEMPLATE = """\
         // The key was accepted but the account has TOTP enabled: the
         // platform issued an MFA challenge instead of a session.
         if (d.mfa_required) mfaNotice = d.error || 'Two-factor authentication required \u2014 please sign in.';
+        // The platform will not open a session with this key (one bound
+        // to an agent, for instance); its reason says what to use instead.
+        else if (d.key_refused) keyNotice = d.error || 'This API key cannot open a session \u2014 please sign in.';
       }
     } catch {}
 
@@ -1038,8 +1041,10 @@ _GUI_HTML_TEMPLATE = """\
 
     // 3. Fall back to login form
     bootSub.textContent = mfaNotice ? 'Two-factor authentication required \u2014 please sign in.'
+                        : keyNotice ? 'This API key cannot open a session \u2014 please sign in.'
                                     : 'No API key found \u2014 please sign in.';
-    setTimeout(() => { showLogin(); if (mfaNotice) loginError.textContent = mfaNotice; }, 600);
+    const notice = mfaNotice || keyNotice;
+    setTimeout(() => { showLogin(); if (notice) loginError.textContent = notice; }, 600);
   }
 
   boot();
@@ -1069,6 +1074,27 @@ _MFA_BOOTSTRAP_ERROR = (
     "authenticator step; use the hosted dashboard to sign in."
 )
 
+#: Shown when ``/api/auth/token`` refuses the key (403) without a reason of
+#: its own.
+_KEY_REFUSED_BOOTSTRAP_ERROR = (
+    "The platform will not open a session with this API key. Use a key that "
+    "is not bound to an agent, or sign in with your password."
+)
+
+#: The platform's reason is shown in the login form; keep it to a few lines.
+_REFUSAL_DETAIL_MAX_CHARS = 500
+
+
+def _refusal_detail(exc: urllib.error.HTTPError) -> str:
+    """The ``detail`` of a refused key exchange, or a generic reason."""
+    try:
+        detail = json.loads(exc.read(65536).decode("utf-8")).get("detail")
+    except Exception:  # noqa: BLE001
+        detail = None
+    if isinstance(detail, str) and detail.strip():
+        return detail.strip()[:_REFUSAL_DETAIL_MAX_CHARS]
+    return _KEY_REFUSED_BOOTSTRAP_ERROR
+
 
 def _try_bootstrap(upstream: str, api_key: str) -> dict[str, Any] | None:
     """Exchange *api_key* for a JWT via ``POST /api/auth/token``.
@@ -1076,7 +1102,9 @@ def _try_bootstrap(upstream: str, api_key: str) -> dict[str, Any] | None:
     Returns ``{token, email, display_name}``, or ``{token: None,
     mfa_required: True, error}`` when the account has TOTP enabled and the
     platform answered with an MFA challenge (the pending ``mfa_token`` is
-    dropped: nothing local can complete it), or *None* on failure.
+    dropped: nothing local can complete it), or ``{token: None, key_refused:
+    True, error}`` when the platform refuses to open a session with this key
+    (403; *error* is its reason), or *None* on any other failure.
     """
     upstream = upstream.rstrip("/")
     url      = upstream + "/api/auth/token"
@@ -1091,6 +1119,10 @@ def _try_bootstrap(upstream: str, api_key: str) -> dict[str, Any] | None:
                 return data
             if data.get("mfa_required"):
                 return {"token": None, "mfa_required": True, "error": _MFA_BOOTSTRAP_ERROR}
+    except urllib.error.HTTPError as exc:
+        if exc.code == 403:
+            return {"token": None, "key_refused": True, "error": _refusal_detail(exc)}
+        _log.debug("token bootstrap against %s failed", url, exc_info=True)
     except Exception:  # noqa: BLE001
         _log.debug("token bootstrap against %s failed", url, exc_info=True)
     return None
@@ -1217,7 +1249,8 @@ def _make_handler(base_url: str, html_bytes: bytes, api_key: str) -> type[BaseHT
                 _cache["bootstrap_ts"] = time.time()
                 self._serve_json(200, result)
             elif result:
-                # MFA challenge: not cached, so enabling/disabling TOTP on the
+                # MFA challenge or refused key: not cached, so enabling or
+                # disabling TOTP, or changing the key's agent binding, on the
                 # dashboard takes effect on the next reload.
                 self._serve_json(200, result)
             else:
