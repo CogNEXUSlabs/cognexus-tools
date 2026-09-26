@@ -4,7 +4,7 @@
  * must not break the caller.
  */
 
-import { effectiveApiKey, effectiveBaseUrl } from "./config.js";
+import { resolveCredentials, type ResolvedCredentials } from "./config.js";
 import type { FetchLike } from "./decide.js";
 
 export interface SdkEventOptions {
@@ -18,7 +18,13 @@ export interface SdkEventOptions {
 }
 
 export async function postSdkEvent(options: SdkEventOptions): Promise<boolean> {
-  const apiKey = effectiveApiKey();
+  let creds: ResolvedCredentials;
+  try {
+    creds = resolveCredentials();
+  } catch {
+    return false; // the host that is set did not issue the key: send nothing
+  }
+  const apiKey = creds.apiKey;
   if (!apiKey) return false;
   const fetchImpl: FetchLike =
     options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
@@ -26,7 +32,7 @@ export async function postSdkEvent(options: SdkEventOptions): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 10_000);
   try {
-    const resp = await fetchImpl(`${effectiveBaseUrl()}/api/events`, {
+    const resp = await fetchImpl(`${creds.baseUrl}/api/events`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Api-Key": apiKey },
       body: JSON.stringify({

@@ -34,6 +34,13 @@ if (decision.outcome === "allow") {
 | `~/.artzain/credentials.toml` | Profile written by `artzain login` (Python CLI); read after the env vars on Node 20.16+ / 22.3+. `COGNEXUS_CREDENTIALS_PATH` overrides the path. |
 | `COGNEXUS_API_BASE_URL` | your deployment (default `https://app.cognexuslabs.ai`) |
 
+A key goes only to the host it was issued with. The profile's key (or the same
+key set another way) goes to the profile's `base_url`; any other key goes to
+`configure({ baseUrl })`, then `COGNEXUS_API_BASE_URL`, then the default. When a
+host you set is not the profile key's, the call sends nothing and fails with
+`DecisionError` (`postSdkEvent` returns `false`); the message names the settings,
+not their values.
+
 ## Surface
 
 - `decide(options)` → `DecisionResponse` — `POST /api/v1/decisions`. Deny/review

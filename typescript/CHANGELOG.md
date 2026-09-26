@@ -4,6 +4,25 @@ All notable changes to `@cognexuslabs/artzain`. Headings are the bare
 version (`## 0.1.5`): the mirror's `publish-npm.yml` cuts the GitHub release
 notes for tag `sdk-ts-v<version>` from the matching section.
 
+## 0.1.8
+
+### Fixed
+
+- **An API key goes only to the host it was issued with.** The key and the
+  host were resolved independently, so the key from the `artzain login`
+  profile could go to a host named by `COGNEXUS_API_BASE_URL` or
+  `configure({ baseUrl })`, and an environment key to the profile's host. The
+  profile's key (or the same key set another way) now goes to the profile's
+  `base_url`; any other key goes to `configure({ baseUrl })`,
+  `COGNEXUS_API_BASE_URL` or the default. Same rule as `artzain` 0.6.28.
+
+### Changed
+
+- When a host you set is not the one the profile's key was issued with,
+  nothing is sent: `decide()` and `fetchApiKeyIdentity()` throw
+  `DecisionError`, and `postSdkEvent()` returns `false`. The message names the
+  settings, never their values.
+
 ## 0.1.7
 
 ### Fixed

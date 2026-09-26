@@ -1,10 +1,9 @@
 /**
- * SDK configuration — mirrors the Python SDK's resolution order
- * (`artzain.cloud` + `artzain.credentials`): explicit `configure()` values
- * win, then the `COGNEXUS_API_KEY` / `MYAPP_API_KEY` /
- * `COGNEXUS_API_BASE_URL` environment variables, then the profile that
- * `artzain login` writes to `~/.artzain/credentials.toml`, then the
- * production default host.
+ * SDK configuration — mirrors the Python SDK (`artzain.credentials`). The API
+ * key comes from `configure()`, then `COGNEXUS_API_KEY` / `MYAPP_API_KEY`, then
+ * the profile that `artzain login` writes to `~/.artzain/credentials.toml`.
+ * The host is decided with the key (`resolveCredentials`): a key goes only to
+ * the host it was issued with.
  *
  * The profile is read only under Node 20.16+ / 22.3+, where
  * `process.getBuiltinModule` gives synchronous access to `node:fs` without a
@@ -104,20 +103,124 @@ function profileValue(key: string): string | undefined {
   return v && v.trim() ? v.trim() : undefined;
 }
 
-export function effectiveApiKey(): string | undefined {
-  return (
-    state.apiKey ?? env("COGNEXUS_API_KEY") ?? env("MYAPP_API_KEY") ?? profileValue("api_key")
-  );
-}
-
-export function effectiveBaseUrl(): string {
-  const raw =
-    state.baseUrl ?? env("COGNEXUS_API_BASE_URL") ?? profileValue("base_url") ?? DEFAULT_BASE_URL;
+function trimSlashes(raw: string): string {
   // Scanned rather than trimmed with /\/+$/, which backtracks quadratically
   // on a value made up mostly of slashes.
   let end = raw.length;
   while (end > 0 && raw.charCodeAt(end - 1) === 47) end--;
   return raw.slice(0, end);
+}
+
+/** Label for the profile. Messages name sources, never values. */
+const PROFILE_SOURCE = "credentials profile";
+
+/**
+ * The host that is set is not the host the API key was issued with. Nothing
+ * was sent; the message names the settings involved, never their values.
+ */
+export class CredentialConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CredentialConflictError";
+  }
+}
+
+/** An API key and the host it goes to, decided together. Sources are labels. */
+export interface ResolvedCredentials {
+  apiKey?: string;
+  baseUrl: string;
+  keySource: string;
+  baseSource: string;
+}
+
+/**
+ * Pick the API key, then the host it may be sent to — the same rule as the
+ * Python SDK's `artzain.credentials.resolve_credentials`.
+ *
+ * A key read from the profile goes to the profile's `base_url`, and so does a
+ * `configure()` or environment key equal to it. The profile's host is never
+ * used with any other key: that goes to `configure({ baseUrl })`, then
+ * `COGNEXUS_API_BASE_URL`, then the production default. A profile without
+ * `base_url` records no host. With no key at all the profile's host may name
+ * the default, since nothing is sent.
+ *
+ * @throws CredentialConflictError when `configure({ baseUrl })` or
+ *   `COGNEXUS_API_BASE_URL` names a host other than the key's.
+ */
+export function resolveCredentials(): ResolvedCredentials {
+  let named: string | undefined;
+  let namedSource = "";
+  if (state.baseUrl !== undefined) {
+    named = trimSlashes(state.baseUrl);
+    namedSource = "configure({ baseUrl })";
+  } else if (env("COGNEXUS_API_BASE_URL") !== undefined) {
+    named = trimSlashes(env("COGNEXUS_API_BASE_URL") as string);
+    namedSource = "COGNEXUS_API_BASE_URL";
+  }
+
+  const profileKey = profileValue("api_key");
+  const rawProfileBase = profileValue("base_url");
+  const profileBase = rawProfileBase ? trimSlashes(rawProfileBase) || undefined : undefined;
+
+  let apiKey: string | undefined;
+  let keySource = "none";
+  if (state.apiKey) {
+    apiKey = state.apiKey;
+    keySource = "configure({ apiKey })";
+  } else if (env("COGNEXUS_API_KEY")) {
+    apiKey = env("COGNEXUS_API_KEY");
+    keySource = "COGNEXUS_API_KEY";
+  } else if (env("MYAPP_API_KEY")) {
+    apiKey = env("MYAPP_API_KEY");
+    keySource = "MYAPP_API_KEY";
+  } else if (profileKey) {
+    apiKey = profileKey;
+    keySource = PROFILE_SOURCE;
+  }
+
+  if (apiKey === undefined) {
+    if (named !== undefined) return { baseUrl: named, keySource, baseSource: namedSource };
+    if (profileBase) return { baseUrl: profileBase, keySource, baseSource: PROFILE_SOURCE };
+    return { baseUrl: DEFAULT_BASE_URL, keySource, baseSource: "default" };
+  }
+
+  // The profile records which host issued its key; that key goes nowhere
+  // else, however it was supplied.
+  if (profileKey && profileBase && apiKey === profileKey) {
+    if (named !== undefined && named.toLowerCase() !== profileBase.toLowerCase()) {
+      throw new CredentialConflictError(
+        `Not sent: ${namedSource} names a different host from the one the API key ` +
+          `from ${keySource} was issued with (recorded in ${PROFILE_SOURCE}). Set ` +
+          "COGNEXUS_API_KEY to a key for that host, run `artzain login` against it, " +
+          `or unset ${namedSource}.`,
+      );
+    }
+    return { apiKey, baseUrl: profileBase, keySource, baseSource: PROFILE_SOURCE };
+  }
+  if (named !== undefined) return { apiKey, baseUrl: named, keySource, baseSource: namedSource };
+  return { apiKey, baseUrl: DEFAULT_BASE_URL, keySource, baseSource: "default" };
+}
+
+/** The resolved API key; `undefined` when there is none or the settings conflict. */
+export function effectiveApiKey(): string | undefined {
+  try {
+    return resolveCredentials().apiKey;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The host the resolved API key goes to. When the settings conflict, the
+ * host that was named, else the default; nothing is sent in that case.
+ */
+export function effectiveBaseUrl(): string {
+  try {
+    return resolveCredentials().baseUrl;
+  } catch {
+    const named = state.baseUrl ?? env("COGNEXUS_API_BASE_URL") ?? DEFAULT_BASE_URL;
+    return trimSlashes(named);
+  }
 }
 
 export function hasApiKey(): boolean {

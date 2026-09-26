@@ -37,6 +37,12 @@ import urllib.request
 from typing import Any, NamedTuple, Optional
 
 from artzain._surrogates import replace_unpaired_surrogates, without_unpaired_surrogates
+from artzain.credentials import (
+    DEFAULT_BASE_URL,
+    CredentialConflictError,
+    ResolvedCredentials,
+    resolve_credentials,
+)
 
 _log = logging.getLogger("artzain.cloud")
 
@@ -122,57 +128,55 @@ def configure(*, api_key: Any = _MISSING, base_url: Any = _MISSING) -> None:
             _override_base = str(base_url).strip().rstrip("/") or None
 
 
-def _effective_key() -> Optional[str]:
-    if _override_key:
-        return _override_key
-    env = (
-        (os.environ.get("COGNEXUS_API_KEY") or "").strip()
-        or (os.environ.get("MYAPP_API_KEY") or "").strip()
-        or None
-    )
-    if env:
-        return env
+def _resolve() -> ResolvedCredentials:
+    """The API key and the host it goes to, decided together.
+
+    Raises :class:`~artzain.credentials.CredentialConflictError` when a set
+    host is not the one the key was issued with.
+    """
+    return resolve_credentials(api_key=_override_key, base_url=_override_base)
+
+
+#: Conflict messages already logged, so fire-and-forget callers warn once.
+_conflicts_warned: set[str] = set()
+
+
+def _resolve_or_warn() -> Optional[ResolvedCredentials]:
+    """:func:`_resolve` for calls that must never raise: ``None`` on a conflict.
+
+    The warning names the settings involved, never their values.
+    """
     try:
-        from artzain.credentials import profile_api_key
-        return profile_api_key()
-    except Exception:
+        return _resolve()
+    except CredentialConflictError as exc:
+        message = str(exc)
+        if message not in _conflicts_warned:
+            _conflicts_warned.add(message)
+            _log.warning("cloud: %s", message)
         return None
 
 
+def _effective_key() -> Optional[str]:
+    creds = _resolve_or_warn()
+    return creds.api_key if creds else None
+
+
 def _effective_base() -> str:
-    if _override_base:
-        return _override_base.rstrip("/")
-    raw = (os.environ.get("COGNEXUS_API_BASE_URL") or "").strip().rstrip("/")
-    if raw:
-        return raw
-    try:
-        from artzain.credentials import profile_base_url
-        prof = profile_base_url()
-        if prof:
-            return prof
-    except Exception:
-        _log.debug("credentials profile unavailable; using the default base URL", exc_info=True)
-    return "https://app.cognexuslabs.ai"
+    creds = _resolve_or_warn()
+    if creds:
+        return creds.base_url
+    return DEFAULT_BASE_URL
 
 
 def _base_url_source() -> str:
-    """Which setting decided ``_effective_base()`` — a label, never the value.
+    """Which setting decided the base URL in use — a label, never the value.
 
     Log lines use this instead of the URL itself: the profile that can carry
     ``base_url`` is the same file that carries the API key, and a log entry
     must not be built from anything read out of it.
     """
-    if _override_base:
-        return "configure(base_url=...)"
-    if (os.environ.get("COGNEXUS_API_BASE_URL") or "").strip():
-        return "COGNEXUS_API_BASE_URL"
-    try:
-        from artzain.credentials import profile_base_url
-        if profile_base_url():
-            return "credentials profile"
-    except Exception:
-        _log.debug("credentials profile unavailable while naming the base URL source", exc_info=True)
-    return "default"
+    creds = _resolve_or_warn()
+    return creds.base_source if creds else "conflicting settings"
 
 
 def _sdk_user_agent() -> str:
@@ -268,8 +272,10 @@ def _probe_api_key_via_events(*, timeout_sec: float = 8.0) -> dict[str, Any]:
 
     Used when ``GET /api/api-keys/me`` is not deployed yet (HTTP 405/404).
     """
-    base = _effective_base()
-    key = _effective_key()
+    creds = _resolve_or_warn()
+    if creds is None:
+        return {"valid": False, "error": "credential_conflict"}
+    base, key = creds.base_url, creds.api_key
     if not key:
         return {"valid": False, "error": "no_api_key", "base_url": base}
 
@@ -333,8 +339,10 @@ def fetch_api_key_identity(*, timeout_sec: float = 8.0) -> dict[str, Any]:
     that route (HTTP 404/405), falls back to a lightweight ``POST /api/events``
     probe so quickstart still reports whether ingest will work.
     """
-    base = _effective_base()
-    key = _effective_key()
+    creds = _resolve_or_warn()
+    if creds is None:
+        return {"valid": False, "error": "credential_conflict"}
+    base, key = creds.base_url, creds.api_key
     if not key:
         return {"valid": False, "error": "no_api_key", "base_url": base}
 
@@ -390,11 +398,15 @@ def announce_cloud_ingest(*, file: Any = None) -> bool:
     Returns ``True`` when the API key was validated against the dashboard API.
     """
     out = file if file is not None else sys.stdout
-    base = _effective_base()
-    key = _effective_key()
-
     print(file=out)
     print("Cloud ingest (Event Logs)", file=out)
+    try:
+        creds = _resolve()
+    except CredentialConflictError as exc:
+        print(f"  Event Logs:     disabled — {exc}", file=out)
+        print(file=out)
+        return False
+    base, key = creds.base_url, creds.api_key
     print(f"  Dashboard API:  {base}", file=out)
 
     if not key:
@@ -830,8 +842,9 @@ def post_sdk_event(
     The first successful post in a process also emits ``sdk_session`` (package
     version and runtime) so the dashboard shows when the SDK was invoked.
     """
-    key = _effective_key()
-    if not key:
+    creds = _resolve_or_warn()
+    key = creds.api_key if creds else None
+    if not creds or not key:
         _log.debug("cloud: skip event %r — no COGNEXUS_API_KEY / MYAPP_API_KEY", event_type)
         return
 
@@ -868,7 +881,7 @@ def post_sdk_event(
             _QueuedPost(
                 op="event POST",
                 label=event_type,
-                url=_effective_base() + "/api/events",
+                url=creds.base_url + "/api/events",
                 body=json.dumps(without_unpaired_surrogates(body_obj), ensure_ascii=False).encode("utf-8"),
                 headers=headers,
                 timeout_sec=float(timeout_sec),
@@ -891,8 +904,9 @@ def post_policy_human_decision(
     Uses the same API key and base URL as :func:`post_sdk_event`. Fire-and-forget;
     never raises.
     """
-    key = _effective_key()
-    if not key:
+    creds = _resolve_or_warn()
+    key = creds.api_key if creds else None
+    if not creds or not key:
         _log.debug("cloud: skip policy decision %r — no COGNEXUS_API_KEY / MYAPP_API_KEY", verdict)
         return
     v = (verdict or "").strip().lower()
@@ -913,7 +927,7 @@ def post_policy_human_decision(
             _QueuedPost(
                 op="policy decision POST",
                 label=v,
-                url=_effective_base() + "/api/policy-decisions",
+                url=creds.base_url + "/api/policy-decisions",
                 body=json.dumps(without_unpaired_surrogates(body_obj), ensure_ascii=False).encode("utf-8"),
                 headers=headers,
                 timeout_sec=float(timeout_sec),
@@ -932,11 +946,12 @@ def fetch_client_policy_rules(
     Requires ``COGNEXUS_API_KEY`` (or :func:`configure`). Returns an empty list
     when no key is configured or the request fails.
     """
-    key = _effective_key()
-    if not key:
+    creds = _resolve_or_warn()
+    key = creds.api_key if creds else None
+    if not creds or not key:
         _log.debug("cloud: skip policy rules fetch — no API key")
         return []
-    url = _effective_base() + "/api/policy-enforcement/rules"
+    url = creds.base_url + "/api/policy-enforcement/rules"
     req = urllib.request.Request(
         url,
         method="GET",

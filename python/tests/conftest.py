@@ -20,6 +20,20 @@ from typing import Any
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _restore_cloud_configure():
+    """``configure()`` is process-wide; a test that sets it must not pass it on.
+
+    Since the host is resolved together with the key, a key one test
+    configured and left behind changes which host the next test's key goes to.
+    """
+    import artzain.cloud as cloud
+
+    saved = (cloud._override_key, cloud._override_base)
+    yield
+    cloud._override_key, cloud._override_base = saved
+
+
 @pytest.fixture
 def artzain_sync_cloud_threads(monkeypatch: pytest.MonkeyPatch) -> None:
     """Run :func:`artzain.cloud.post_sdk_event` HTTP delivery synchronously (tests only).

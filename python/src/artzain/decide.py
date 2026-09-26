@@ -26,9 +26,10 @@ from typing import Any, Callable, Optional
 
 from artzain.cloud import (
     _api_request_headers,
-    _effective_base,
     _effective_key,
+    _resolve,
 )
+from artzain.credentials import CredentialConflictError
 
 _log = logging.getLogger("artzain.decide")
 
@@ -98,12 +99,22 @@ def decide(
         DecisionError: If the online call fails (non-2xx or transport error),
             or the request cannot be sent: a field holds an unpaired
             surrogate (half of a UTF-16 pair, which ``json.loads`` makes from
-            a lone escape and which is not valid Unicode), or *context* does
-            not serialize to JSON. Nothing is sent in either case.
+            a lone escape and which is not valid Unicode), *context* does
+            not serialize to JSON, or ``configure(base_url=...)`` /
+            ``COGNEXUS_API_BASE_URL`` names a host other than the one the
+            API key was issued with (see
+            :func:`artzain.credentials.resolve_credentials`). Nothing is sent
+            in any of these cases.
     """
     if kind not in _VALID_KINDS:
         raise ValueError(f"kind must be one of {_VALID_KINDS}, got {kind!r}")
 
+    # The key and the host it may go to are decided together; a host that is
+    # set but did not issue the key refuses the call before anything is sent.
+    try:
+        creds = _resolve()
+    except CredentialConflictError as exc:
+        raise DecisionError(f"decision request not sent: {exc}") from exc
     if not _effective_key():
         return _decide_offline(
             action=action,
@@ -125,7 +136,7 @@ def decide(
         "product": product,
         "context": context or {},
     }
-    url = _effective_base() + "/api/v1/decisions"
+    url = creds.base_url + "/api/v1/decisions"
     try:
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
     except UnicodeEncodeError as exc:
@@ -139,7 +150,7 @@ def decide(
         raise DecisionError(
             f"decision request not sent: it does not serialize to JSON: {exc}"
         ) from exc
-    headers = _api_request_headers(_effective_key())
+    headers = _api_request_headers(creds.api_key)
     headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, method="POST", headers=headers)
     try:
