@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from functools import cached_property, lru_cache
@@ -24,6 +25,11 @@ try:  # Python 3.11 and later: the parser ``re`` compiles patterns with
 except ImportError:  # Python 3.10, where the same parser has its older name
     import sre_constants as _sre_constants
     import sre_parse as _sre_parse
+
+try:  # Optional: the one engine that can be given a deadline mid-search.
+    import regex as _bounded_engine
+except ImportError:  # pure-stdlib install; see ``_search`` for what is lost
+    _bounded_engine = None  # type: ignore[assignment]
 
 # ---------------------------------------------------------------------------
 # Rule model
@@ -87,6 +93,66 @@ _CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
 }
 
 
+class PatternTooCostly(ValueError):
+    """A ``violation_patterns`` entry whose worst case no deadline can excuse.
+
+    Raised where a rule's patterns are compiled, so an uploaded bundle is
+    refused with the reason and a stored one drops the rule (and says so)
+    rather than carrying it onto the decision path.
+    """
+
+
+class PatternBudgetExceeded(RuntimeError):
+    """Screening ran out of its wall-clock budget before it finished.
+
+    Nothing can be said about the text, so the caller must fail closed: in the
+    decision engine this reaches the specialized tier's failure model, which
+    denies unless the bundle's ``failure_policy.fallback`` says otherwise.
+    """
+
+
+def bounded_engine_available() -> bool:
+    """Whether a search can be cut off partway through.
+
+    Without it the deadline is only checked between patterns, and a single
+    pattern runs to completion; :func:`pattern_refusal` is then the only thing
+    keeping a costly shape off the decision path.
+    """
+    return _bounded_engine is not None
+
+
+#: Tenant and document-derived patterns compile with these flags. ``regex``
+#: matches ``re`` under ``VERSION0``; a differential test over every shipped
+#: pattern pins that, because a rule is only as good as what it matches.
+_TENANT_FLAGS = re.IGNORECASE
+
+#: Both engines' "this is not a valid pattern" error. ``regex.error`` does not
+#: derive from ``re.error``, so naming only the latter would let a bad pattern
+#: escape as an unexpected failure.
+_PATTERN_ERRORS: tuple[type[BaseException], ...] = (
+    (re.error, _bounded_engine.error) if _bounded_engine is not None else (re.error,)
+)
+#: What a pattern has to be for a deadline to be handed to it mid-search. A
+#: pattern from anywhere else -- the standard library, or something standing in
+#: for one -- is searched without, because only this type takes the argument.
+_BOUNDED_PATTERN: Optional[type] = (
+    type(_bounded_engine.compile("")) if _bounded_engine is not None else None
+)
+
+
+def _bounded(pat: Any) -> bool:
+    return _BOUNDED_PATTERN is not None and isinstance(pat, _BOUNDED_PATTERN)
+
+
+def _compile_tenant(pattern: str) -> Any:
+    """Compile one ``violation_patterns`` entry with the best available engine."""
+    if _bounded_engine is not None:
+        return _bounded_engine.compile(
+            pattern, _bounded_engine.IGNORECASE | _bounded_engine.VERSION0
+        )
+    return re.compile(pattern, _TENANT_FLAGS)
+
+
 @dataclass(frozen=True)
 class ClientPolicyRule:
     """One enforceable rule derived from a client policy document."""
@@ -107,13 +173,28 @@ class ClientPolicyRule:
         # patterns are skipped exactly as before.
         out: list[re.Pattern[str]] = []
         for raw in self.violation_patterns:
+            # Asked before compiling, and of the standard library's parser
+            # either way, so which engine is installed cannot change the
+            # verdict: the engines do not agree on which faults are a refusal
+            # and which are merely an unusable pattern.
+            refusal = pattern_refusal(raw)
+            if refusal is not None:
+                raise PatternTooCostly(
+                    f"rule {self.rule_id or '?'} pattern {raw[:80]!r} is refused: {refusal}"
+                )
             try:
-                out.append(re.compile(raw, re.IGNORECASE))
-            except re.error:
+                out.append(_compile_tenant(raw))
+            except _PATTERN_ERRORS:
                 continue
         return tuple(out)
 
     def compiled_patterns(self) -> tuple[re.Pattern[str], ...]:
+        """This rule's usable patterns.
+
+        :raises PatternTooCostly: if one of them is a shape that cannot be run
+            on the decision path. Callers that load a bundle catch this per
+            rule; the rule is then refused or dropped, never silently kept.
+        """
         return self._compiled
 
     def to_dict(self) -> dict[str, Any]:
@@ -222,11 +303,44 @@ class PolicyEnforcementConfig:
     #: the runs of approved starts, and otherwise each run of approved starts
     #: inside a longer match that holds another start.
     approval_max_matches: int = 100
+    #: Wall-clock seconds one :meth:`PolicyEnforcementEvaluator.evaluate` call
+    #: may spend matching patterns, when the caller names no deadline of its
+    #: own. A caller screening one payload several ways shares a single
+    #: deadline across them, so the reading count does not multiply the budget.
+    #: Running out raises :class:`PatternBudgetExceeded`: nothing is known
+    #: about the text at that point, so the outcome has to be decided by the
+    #: caller's failure model rather than read as "no violation found".
+    #: 0 allows no matching at all and so refuses any text there are rules for;
+    #: it does not mean "unbounded", for which a large value is the way to ask.
+    #:
+    #: This is a ceiling on the whole call, for a rule set of many moderately
+    #: costly patterns, and is deliberately far above what a large ordinary rule
+    #: set needs: what a costly *single* pattern runs into is
+    #: ``pattern_budget_seconds``, and sizing this one tightly instead would
+    #: refuse a tenant whose rules are merely numerous.
+    screening_budget_seconds: float = 2.0
+    #: Wall-clock seconds any one search may take. This is what a pattern whose
+    #: cost grows faster than the text runs into, and it is the reason the
+    #: ceiling above can be generous: a rule set is normally many cheap patterns
+    #: (hundreds of them measure well under a millisecond each), so a single
+    #: search reaching this is a pattern behaving unlike any of them, not a
+    #: tenant with a lot of rules.
+    pattern_budget_seconds: float = 0.05
 
 
 # ---------------------------------------------------------------------------
 # Extraction helpers (shared with CogNEXUS server guideline builder)
 # ---------------------------------------------------------------------------
+
+
+#: How many of a fragment's words one pattern chains. Each word after the
+#: first adds a gap, and the gaps multiply rather than add: the text between
+#: them can be divided among them in a number of ways that grows with each one,
+#: and every division is tried before the pattern can be ruled out. Three words
+#: is enough to name what a sentence forbids while leaving the cost of screening
+#: a payload proportional to its length. Raising this needs
+#: :func:`pattern_refusal` consulted, which is what draws the line.
+_FRAGMENT_MAX_TOKENS = 3
 
 
 def _fragment_to_regex(fragment: str) -> Optional[str]:
@@ -237,7 +351,7 @@ def _fragment_to_regex(fragment: str) -> Optional[str]:
     ]
     if len(tokens) < 2:
         return None
-    return r".{0,35}".join(re.escape(t) for t in tokens[:6])
+    return r".{0,35}".join(re.escape(t) for t in tokens[:_FRAGMENT_MAX_TOKENS])
 
 
 def violation_patterns_from_sentence(sentence: str) -> list[str]:
@@ -452,6 +566,13 @@ def builtin_conduct_rules() -> list[ClientPolicyRule]:
             severity="high",
         ),
     ]
+
+
+#: The ids :func:`evaluate_conduct` reports its findings under. They are reserved:
+#: a rule supplied under one of them is the caller's own rule, and
+#: :meth:`PolicyEnforcementEvaluator.evaluate` reports its findings under
+#: ``<id>/tenant`` so that they cannot stand in for the conduct finding.
+_CONDUCT_RULE_IDS = frozenset(r.rule_id for r in builtin_conduct_rules())
 
 
 def evaluate_conduct(
@@ -869,11 +990,284 @@ class _ApprovalMarkers:
         return self._run_first[i] if i < len(self._run_first) else None
 
 
+# ---------------------------------------------------------------------------
+# Patterns whose worst case a deadline cannot excuse
+# ---------------------------------------------------------------------------
+# A pattern is matched by trying the ways its parts can divide the text between
+# them, so what one costs is not set by the length of the text alone. A few
+# shapes multiply those ways instead of adding them, and what they cost then
+# grows faster than the text does: screening one payload can occupy a worker
+# far longer than any decision may take, and one payload is enough.
+#
+# Those shapes are refused where a rule's patterns are compiled, so an upload
+# is answered with the reason and a stored bundle drops the rule. A refusal is
+# worth more than a deadline there: a deadline reached partway through says
+# nothing about the text and fails closed, while a refusal names the shape to
+# whoever wrote the rule, before it ever screens anything.
+#
+# The three checks stay narrow deliberately. A refused pattern is a rule that
+# has stopped enforcing, so every pattern this repository ships has to survive
+# them, and a test sweeps all of them to keep that true. Each check fires only
+# on what it can show, never on what it merely cannot rule out, and a shape
+# that slips past one is still held by the deadline.
+
+_MAXREPEAT = _sre_constants.MAXREPEAT
+#: The repeats that backtrack. A possessive repeat gives nothing back, so it
+#: never re-divides the text and never multiplies anything.
+_GREEDY_REPEATS = (_sre_constants.MAX_REPEAT, _sre_constants.MIN_REPEAT)
+#: A counted repeat over a body matching nearly any character re-divides
+#: everything after it, and chaining them multiplies. One or two are ordinary
+#: in a phrase rule; this is set above every pattern shipped here, so what it
+#: refuses costs materially more than anything this repository asks for.
+_GAP_WAYS_LIMIT = 20_000
+#: Ceiling for the running product, so an absurd pattern cannot build a
+#: thousand-digit integer while being refused.
+_GAP_WAYS_CEILING = 1 << 62
+
+
+def _repeated_at_least_twice(hi: Any) -> bool:
+    return hi is _MAXREPEAT or hi >= 2
+
+
+def _parsed_items(seq: Any) -> list[tuple[Any, Any]]:
+    """*seq*'s items, groups unwrapped and the zero-width ones dropped.
+
+    A group only brackets what it holds, and a lookaround or an anchor consumes
+    nothing, so neither changes how the text divides. An atomic group is left
+    whole: it is never re-entered, which is exactly the property being looked
+    for the absence of.
+    """
+    out: list[tuple[Any, Any]] = []
+    for op, av in seq:
+        if op in _ZERO_WIDTH:
+            continue
+        if op is _sre_constants.SUBPATTERN:
+            out.extend(_parsed_items(av[3]))
+        else:
+            out.append((op, av))
+    return out
+
+
+def _is_one_repeat(body: Any) -> bool:
+    """Is *body* nothing but one repeat that can run twice or more?
+
+    Then the enclosing repeat and this one are dividing the same text with
+    nothing in between to fix where one run ends and the next begins, and the
+    number of ways to do so grows with every character added.
+    """
+    items = _parsed_items(body)
+    if len(items) != 1:
+        return False
+    op, av = items[0]
+    return op in _GREEDY_REPEATS and _repeated_at_least_twice(av[1])
+
+
+def _matches_nothing(seq: Any) -> bool:
+    """Can *seq* match without consuming a character?
+
+    An alternative that can is what makes a repeated choice divide text more
+    than one way, and it is also how the parser records one alternative being
+    a prefix of another: the shared opening is lifted out in front of the
+    choice, and what is left of the shorter alternative is nothing at all.
+    """
+    for op, av in _parsed_items(seq):
+        if op in _REPEATS and av[0] == 0:
+            continue  # a repeat that may run no times
+        return False
+    return True
+
+
+def _ambiguous_branch(body: Any) -> bool:
+    """Does *body* offer a choice that can be taken without consuming anything?
+
+    Repeated, such a choice can divide the same text in more than one way:
+    whatever one alternative took, another could have taken as the start of its
+    own run. Alternatives that merely open on the same character are not this
+    (``%a`` beside ``%b`` divides only one way), which is why the empty
+    alternative, not the shared opening, is what is looked for.
+    """
+    for op, av in _parsed_items(body):
+        if op is _sre_constants.BRANCH and any(
+            _matches_nothing(alternative) for alternative in av[1]
+        ):
+            return True
+    return False
+
+
+def _is_wide_gap(body: Any) -> bool:
+    """Does *body* match one character of almost anything?
+
+    Such a gap can hold the text that the parts on either side of it would
+    otherwise match, which is what makes chained gaps multiply. A body limited
+    to digits, or to a handful of listed characters, cannot.
+    """
+    items = _parsed_items(body)
+    if len(items) != 1:
+        return False
+    op, av = items[0]
+    if op is _sre_constants.ANY:
+        return True
+    if op is _sre_constants.NOT_LITERAL:
+        # How the parser records a class excluding one character, ``[^;]``.
+        return True
+    if op is _sre_constants.IN:
+        return any(item_op is _sre_constants.NEGATE for item_op, _ in av)
+    return False
+
+
+def _gap_ways(seq: Any, depth: int = 0) -> int:
+    """How many ways *seq*'s counted wide gaps can divide the text between them."""
+    if depth > 24:
+        return _GAP_WAYS_CEILING
+    ways = 1
+    for op, av in seq:
+        if op in _REPEATS:
+            _lo, hi, body = av
+            inner = _gap_ways(body, depth + 1)
+            if op in _GREEDY_REPEATS and hi is not _MAXREPEAT and _is_wide_gap(body):
+                ways *= hi + 1
+            elif hi is not _MAXREPEAT and inner > 1:
+                ways *= inner ** min(int(hi), 8)
+            else:
+                ways *= inner
+        elif op is _sre_constants.SUBPATTERN:
+            ways *= _gap_ways(av[3], depth + 1)
+        elif op is _sre_constants.BRANCH:
+            ways *= max([_gap_ways(b, depth + 1) for b in av[1]] or [1])
+        elif op in (_sre_constants.ASSERT, _sre_constants.ASSERT_NOT):
+            ways *= _gap_ways(av[1], depth + 1)
+        elif _ATOMIC_GROUP is not None and op is _ATOMIC_GROUP:
+            ways *= _gap_ways(av, depth + 1)
+        if ways >= _GAP_WAYS_CEILING:
+            return _GAP_WAYS_CEILING
+    return ways
+
+
+def _refusal_in(seq: Any, depth: int = 0) -> Optional[str]:
+    """The first shape in *seq* that is refused, said in words, or None."""
+    if depth > 24:
+        return "it nests further than a policy rule ever needs to"
+    for op, av in seq:
+        if op in _GREEDY_REPEATS:
+            _lo, hi, body = av
+            if _repeated_at_least_twice(hi):
+                if _is_one_repeat(body):
+                    return (
+                        "it repeats a group that is itself a repeat, so the same "
+                        "text can be divided between them in more than one way"
+                    )
+                if _ambiguous_branch(body):
+                    return (
+                        "it repeats a choice one of whose alternatives can be "
+                        "taken without consuming anything, so the same text can "
+                        "be divided between the runs in more than one way"
+                    )
+        for part in _sub_sequences(op, av):
+            found = _refusal_in(part, depth + 1)
+            if found:
+                return found
+    return None
+
+
+def _sub_sequences(op: Any, av: Any) -> list[Any]:
+    """The parsed sequences nested inside one item."""
+    if op in _REPEATS:
+        return [av[2]]
+    if op is _sre_constants.SUBPATTERN:
+        return [av[3]]
+    if op is _sre_constants.BRANCH:
+        return list(av[1])
+    if op in (_sre_constants.ASSERT, _sre_constants.ASSERT_NOT):
+        return [av[1]]
+    if _ATOMIC_GROUP is not None and op is _ATOMIC_GROUP:
+        return [av]
+    return []
+
+
+def pattern_refusal(pattern: str) -> Optional[str]:
+    """Why *pattern* is refused as a violation pattern, in words, or None.
+
+    Read with the standard library's parser whichever engine will match it, so
+    one pattern gets one verdict everywhere: a bundle accepted on a deployment
+    that has the deadline-capable engine installed must not be refused on one
+    that has not, or the other way round.
+
+    A pattern that is simply not valid is not refused here: it has its own path
+    (compiling skips it), and reporting it twice in two different ways would
+    only confuse whoever has to fix it. A pattern the parser cannot read for any
+    other reason -- a repeat count too large to hold, nesting too deep to
+    follow -- is refused, because what it would cost is unknown rather than
+    merely unbounded.
+    """
+    try:
+        parsed = _sre_parse.parse(pattern, _TENANT_FLAGS)
+    except re.error:
+        return None  # not a usable pattern; compiling skips it
+    except RecursionError:
+        return "it nests too deeply to read"
+    except Exception as exc:  # noqa: BLE001 - reported, whatever it turns out to be
+        return str(exc) or f"the pattern parser refuses it ({type(exc).__name__})"
+    found = _refusal_in(parsed)
+    if found:
+        return found
+    ways = _gap_ways(parsed)
+    if ways > _GAP_WAYS_LIMIT:
+        return (
+            "it chains open gaps that can divide the text between them in "
+            f"{ways:,} ways, so what it costs grows far faster than the text does"
+        )
+    return None
+
+
 class PolicyEnforcementEvaluator:
     """Screen model or user text against client-specific policy rules."""
 
     def __init__(self, config: PolicyEnforcementConfig | None = None) -> None:
         self.config = config or PolicyEnforcementConfig()
+
+    def _search(
+        self, pat: Any, text: str, pos: int, deadline: float
+    ) -> Optional[Any]:
+        """Find *pat* in *text* from *pos*, under both budgets.
+
+        The call's deadline is checked before every search, and, where the
+        engine allows it, one search is also held to
+        ``pattern_budget_seconds``: a single pattern can otherwise run far past
+        any budget without ever returning to be asked. Running out raises rather
+        than answering "not found", which would read as "nothing to report"
+        about text nobody finished looking at.
+        """
+        return self._find(pat, text, pos, deadline, pat.search)
+
+    def _find(
+        self, pat: Any, text: str, pos: int, deadline: float, method: Any
+    ) -> Optional[Any]:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise PatternBudgetExceeded(
+                "policy screening ran out of its budget before it finished"
+            )
+        if not _bounded(pat):
+            return method(text, pos)
+        # The shorter of what the call has left and what one search may take.
+        allowed = min(remaining, max(0.0, float(self.config.pattern_budget_seconds)))
+        if allowed <= 0:
+            raise PatternBudgetExceeded(
+                "policy screening allows no time for a single pattern"
+            )
+        try:
+            return method(text, pos, timeout=allowed)
+        except TimeoutError:
+            raise PatternBudgetExceeded(
+                f"one policy pattern did not finish within {allowed:.3f}s "
+                f"({pat.pattern[:60]!r})"
+            ) from None
+
+    def _matches_at(
+        self, pat: Any, text: str, pos: int, deadline: float
+    ) -> Optional[Any]:
+        """Whether *pat* matches *text* starting exactly at *pos*, under both budgets."""
+        return self._find(pat, text, pos, deadline, pat.match)
 
     def evaluate(
         self,
@@ -882,11 +1276,19 @@ class PolicyEnforcementEvaluator:
         *,
         client_context: Optional[bool] = None,
         json_string_escapes: bool = False,
+        deadline: Optional[float] = None,
     ) -> PolicyEnforcementReport:
         """Screen *text* against *rules*, and against the conduct rules unless *rules* is empty.
 
         *client_context* is passed to :func:`evaluate_conduct`: ``False`` says
         the client words in *text* name no client.
+
+        A rule of *rules* that reuses a conduct rule's id keeps its own patterns
+        and severity, and its findings are reported under ``<id>/tenant``. The
+        conduct rules' ids are reserved (``_CONDUCT_RULE_IDS``) because a
+        conduct finding is skipped when a finding with the same id is already
+        reported, and a rule's own match is no answer to what the conduct
+        detector found.
 
         *json_string_escapes* is for the as-sent text of a JSON tool call. The
         pattern is still matched on *text*, so a match that runs from one
@@ -898,7 +1300,18 @@ class PolicyEnforcementEvaluator:
         six-character escapes do not stretch the window.
         Quotes and the characters between strings stay, so a marker is not
         moved next to a match.
+
+        *deadline* is a :func:`time.monotonic` reading by which the matching
+        has to be done, for a caller screening one payload several ways to
+        bound all of them together; without one, ``screening_budget_seconds``
+        is allowed from here. Reaching it raises
+        :class:`PatternBudgetExceeded`.
+
+        :raises PatternBudgetExceeded: if the matching does not finish in time.
+        :raises PatternTooCostly: if a rule holds a pattern that must not run.
         """
+        if deadline is None:
+            deadline = time.monotonic() + max(0.0, float(self.config.screening_budget_seconds))
         if not text or not rules:
             return PolicyEnforcementReport(
                 violation_count=0,
@@ -917,12 +1330,22 @@ class PolicyEnforcementEvaluator:
         if json_string_escapes and "\\" in text:
             marker_text, escape_at = _json_string_escapes(text)
         for rule in rules:
+            # A rule under a conduct rule's id is the caller's own rule and is
+            # reported under ``<id>/tenant``: the conduct finding is skipped
+            # when a finding with the same id is already reported, so under the
+            # shared id a weaker match here would stand in for it. The caller's
+            # rules and their ids are untouched; only this report renames.
+            rule_id = (
+                f"{rule.rule_id}/tenant"
+                if rule.rule_id in _CONDUCT_RULE_IDS
+                else rule.rule_id
+            )
             escapable = (
                 self.config.require_approval_escape
                 and "approval" in rule.summary.lower()
             )
             for pat in rule.compiled_patterns():
-                m = pat.search(text)
+                m = self._search(pat, text, 0, deadline)
                 if m:
                     marker = None
                     if escapable:
@@ -932,9 +1355,11 @@ class PolicyEnforcementEvaluator:
                                 self.config.approval_markers,
                                 max(0, int(self.config.approval_window_chars)),
                             )
-                        marker = self._approval_marker(markers, pat, text, m, escape_at)
+                        marker = self._approval_marker(
+                            markers, pat, text, m, escape_at, deadline
+                        )
                     finding = PolicyEnforcementFinding(
-                        rule_id=rule.rule_id,
+                        rule_id=rule_id,
                         rule_title=rule.title,
                         category=rule.category,
                         severity=rule.severity,
@@ -950,6 +1375,8 @@ class PolicyEnforcementEvaluator:
                     break
         conduct = evaluate_conduct(text, client_context=client_context)
         if conduct:
+            # No rule's finding carries a reserved id, so this skips only a
+            # conduct id the conduct findings themselves repeat.
             seen_ids = {f.rule_id for f in findings}
             for f in conduct:
                 if f.rule_id not in seen_ids:
@@ -981,10 +1408,11 @@ class PolicyEnforcementEvaluator:
     def _approval_marker(
         self,
         markers: _ApprovalMarkers,
-        pat: re.Pattern[str],
+        pat: Any,
         text: str,
-        first: re.Match[str],
+        first: Any,
         at: list[int] | None = None,
+        deadline: Optional[float] = None,
     ) -> Optional[str]:
         """The marker that approves *first*, when every match of *pat* is approved.
 
@@ -1019,11 +1447,18 @@ class PolicyEnforcementEvaluator:
             """The first index in *text* past this decoded position."""
             return decoded + 1 if at is None else bisect_right(at, decoded)
 
+        if deadline is None:
+            deadline = time.monotonic() + max(
+                0.0, float(self.config.screening_budget_seconds)
+            )
         limit = int(self.config.approval_max_matches)
         marker = markers.first_near(pos(first.start()))
         if marker is None or limit < 1:
             return None
-        lead = _leading_pattern(pat.pattern, pat.flags)
+        # The flags the rule's patterns compile with, not the compiled object's:
+        # a deadline-capable engine records its own bits there, which the
+        # standard library's parser does not know.
+        lead = _leading_pattern(pat.pattern, _TENANT_FLAGS)
         count, checked = 1, 0
         # The next match one after another starts at `after` or later (past
         # an empty match, one character on); every start before `beyond` is
@@ -1044,12 +1479,12 @@ class PolicyEnforcementEvaluator:
                     if lead_at >= stop:
                         break
                     checked += 1
-                    if checked > limit or pat.match(text, lead_at):
+                    if checked > limit or self._matches_at(pat, text, lead_at, deadline):
                         return None
                     beyond = lead_at + 1
                 beyond = after if stop == after else raw_after(markers.approved_through(pos(stop)))
                 continue
-            m = pat.search(text, min(after, beyond))
+            m = self._search(pat, text, min(after, beyond), deadline)
             if m is None:
                 break
             last = markers.approved_through(pos(m.start()))
@@ -1089,16 +1524,20 @@ def parse_rules_json(raw: str) -> list[ClientPolicyRule]:
 
 __all__ = [
     "ClientPolicyRule",
+    "PatternBudgetExceeded",
+    "PatternTooCostly",
     "PolicyEnforcementConfig",
     "PolicyEnforcementEvaluator",
     "PolicyEnforcementFinding",
     "PolicyEnforcementReport",
+    "bounded_engine_available",
     "builtin_conduct_rules",
     "contains_likely_secrets",
     "evaluate_conduct",
     "extract_rules_from_document",
     "infer_category",
     "parse_rules_json",
+    "pattern_refusal",
     "rules_from_context_items",
     "violation_patterns_from_sentence",
 ]

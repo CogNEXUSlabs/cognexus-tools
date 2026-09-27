@@ -152,10 +152,13 @@ from artzain.kill_switch import (
 )
 from artzain.policy_enforcement import (
     ClientPolicyRule,
+    PatternBudgetExceeded,
+    PatternTooCostly,
     PolicyEnforcementConfig,
     PolicyEnforcementEvaluator,
     PolicyEnforcementFinding,
     PolicyEnforcementReport,
+    pattern_refusal,
 )
 from artzain.prompt_defense import (
     GRADE_THRESHOLDS,
@@ -175,7 +178,7 @@ from artzain.prompt_injection import (
     load_prompt_injection_config,
 )
 
-__version__ = "0.6.29"
+__version__ = "0.6.30"
 
 __all__ = [
     # Version
@@ -255,6 +258,10 @@ __all__ = [
     "PolicyEnforcementReport",
     "PolicyEnforcementFinding",
     "PolicyEnforcementConfig",
+    # Screening a rule's own pattern: what it may cost, and when it did not run
+    "PatternBudgetExceeded",
+    "PatternTooCostly",
+    "pattern_refusal",
     # Core data models — injection detection
     "PromptInjectionDetector",
     "DetectionResult",

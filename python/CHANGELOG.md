@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.6.30
+
+### Fixed
+
+- **A policy rule's own pattern can no longer hold up a decision.** A rule
+  carries `violation_patterns`, and a pattern is matched by trying the ways the
+  text can be divided between its parts. A few shapes multiply those ways
+  rather than adding them, so what one costs grows faster than the text it
+  screens: a single ordinary payload could occupy the screening far longer than
+  a decision may take. Screening now runs under a wall-clock budget
+  (`PolicyEnforcementConfig.screening_budget_seconds`, shared across every way
+  one payload is read) and raises `PatternBudgetExceeded` rather than reporting
+  that it found nothing, so the caller decides the outcome by its own failure
+  model. Two budgets, because a rule set is normally many cheap patterns:
+  ``pattern_budget_seconds`` bounds any one search, which is what a costly
+  pattern runs into, and ``screening_budget_seconds`` is a far looser ceiling on
+  the whole call, so a tenant is never refused merely for having a lot of rules.
+  Those shapes are also refused outright when a rule's patterns are
+  compiled, with `PatternTooCostly` naming the shape: a bundle carrying one is
+  rejected as it is loaded rather than on every decision afterwards.
+  `pattern_refusal()` answers the same question on its own, for a tool checking
+  a bundle before it is uploaded.
+- **Rules read out of a policy document stay proportionate.** A sentence's
+  wording was turned into a pattern chaining up to six of its words, whose gaps
+  multiplied in the same way; it now chains three, which names what a sentence
+  forbids without the cost of screening growing faster than the payload.
+- **A rule that reuses a built-in conduct rule's id no longer answers for it.**
+  Where one of your rules carried the id of a built-in conduct rule (profanity
+  in a client context, insults aimed at the recipient), its finding could take
+  that rule's place in the report: text the conduct detector rates `high` or
+  `critical` was reported at your rule's severity, and `should_block_policy()`
+  did not refuse it. Those ids are now reserved in
+  `PolicyEnforcementEvaluator.evaluate`. Your rule keeps its own patterns and
+  severity and is reported under `<id>/tenant`, and the conduct finding stands
+  beside it at its own severity. This holds for rules from every source —
+  `rules=`, `COGNEXUS_POLICY_RULES_JSON`, `COGNEXUS_POLICY_RULES_PATH`, the
+  platform endpoint, or a list you assemble and hand to the evaluator yourself.
+  Your rules are not modified; the report and the audit row name the moved id.
+- **The rule list screened against holds the built-in conduct rules themselves.**
+  One of your rules carrying a built-in conduct rule's id also kept that rule out
+  of the list, so `load_client_policy_rules()` handed back your copy of it
+  instead — its title, summary and severity, however far they had drifted — and
+  `rules_checked`, on the report and on the audit row, counted the copy. A
+  same-id rule carrying no patterns of its own is now dropped for the built-in
+  rule; one carrying patterns is your own rule, applies exactly as it is
+  written, and is listed beside the built-in rule under the `<id>/tenant` of the
+  entry above. This is the merge the platform's decision engine has always made
+  for an active bundle's rules, so a rule list now means the same thing on either
+  side. The list you pass to `screen_client_policy()` is not modified.
+
+### Changed
+
+- **`regex` is used for rule patterns when it is installed**, as the one engine
+  that accepts a deadline mid-search; `pip install artzain[bounded]` asks for
+  it. Without it the package behaves as before, matching with `re` and checking
+  the budget between patterns, and the refusal above is then the only thing
+  keeping a costly shape from being matched. Both engines are held to the same
+  matches, pattern for pattern, by a test over every pattern shipped here.
+
 ## 0.6.29
 
 ### Fixed

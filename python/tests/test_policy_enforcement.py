@@ -359,8 +359,14 @@ def _bundle(n_rules: int, n_patterns: int) -> list[ClientPolicyRule]:
 
 
 def test_evaluate_does_not_recompile_rule_patterns() -> None:
-    real_compile = re.compile
-    with mock.patch("re.compile", wraps=real_compile) as compile_mock:
+    # Counted at the module's own seam, not at ``re.compile``: which engine
+    # compiles a tenant pattern depends on what is installed, while compiling
+    # it once per rule does not.
+    from artzain import policy_enforcement as pe
+
+    with mock.patch.object(
+        pe, "_compile_tenant", wraps=pe._compile_tenant
+    ) as compile_mock:
         rules = _bundle(12, 6)
         evaluator = PolicyEnforcementEvaluator()
         for k in range(5):
