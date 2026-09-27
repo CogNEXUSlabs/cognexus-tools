@@ -110,7 +110,7 @@ recorded — this changelog starts from the tree as imported that day.
 
 ## 0.1.2
 
-Published 2026-08-22. First release through npm Trusted Publishing (OIDC,
+Published 2026-08-23. First release through npm Trusted Publishing (OIDC,
 Sigstore provenance; `npm audit signatures` verifies it). Registry
 description cleaned up; no runtime change.
 
