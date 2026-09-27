@@ -3,14 +3,23 @@
  * cleared once the headers arrived, so a server that sent them and then
  * stalled mid-body hung the gate for good. These tests run the default global
  * fetch against a local server that does exactly that.
+ *
+ * The deadline runs on a fake clock (setTimeout and clearTimeout only; fetch
+ * and the server do real I/O) that moves only once the client has the
+ * headers and postDecision() is reading the body. On the real clock the
+ * deadline could pass before the headers arrived (a cold runner paying for
+ * the first fetch and connection), and the call then failed as unreachable,
+ * with no status and nothing shown about the body.
  */
 
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DecisionError, postDecision } from "./client.js";
+
+const TIMEOUT_MS = 100;
 
 let server: Server | undefined;
 
@@ -24,7 +33,32 @@ async function stallingServer(status: number): Promise<string> {
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }
 
+/**
+ * Starts `call` with the clock stopped and moves it past the deadline only
+ * once the response headers are in. Resolves with what `call` threw.
+ */
+async function pastTheDeadline(call: () => Promise<unknown>): Promise<unknown> {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const realFetch = globalThis.fetch;
+  let headersIn!: () => void;
+  const headers = new Promise<void>((resolve) => (headersIn = resolve));
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const resp = await realFetch(input, init);
+    headersIn();
+    return resp;
+  });
+  const settled = call().catch((e: unknown) => e);
+  await Promise.race([headers, settled]);
+  // Only microtasks lie between fetch resolving and postDecision() starting
+  // on the body, so a macrotask later it is waiting on the body alone.
+  await new Promise((resolve) => setImmediate(resolve));
+  await vi.advanceTimersByTimeAsync(TIMEOUT_MS);
+  return settled;
+}
+
 afterEach(async () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   if (server) {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server!.close(() => resolve()));
@@ -33,15 +67,17 @@ afterEach(async () => {
 });
 
 async function decideAgainst(baseUrl: string): Promise<unknown> {
-  return postDecision({
-    apiKey: "cnx_test",
-    baseUrl,
-    action: "exec",
-    target: "openclaw:tool:exec",
-    payload: "{}",
-    agentDid: "bot",
-    timeoutMs: 100,
-  }).catch((e) => e);
+  return pastTheDeadline(() =>
+    postDecision({
+      apiKey: "cnx_test",
+      baseUrl,
+      action: "exec",
+      target: "openclaw:tool:exec",
+      payload: "{}",
+      agentDid: "bot",
+      timeoutMs: TIMEOUT_MS,
+    }),
+  );
 }
 
 describe("a body that stalls after the headers", () => {

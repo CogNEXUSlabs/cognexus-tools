@@ -65,6 +65,13 @@ verify = ["cryptography>=41"]
 # and bundle signing happen client-side (private keys never leave your machine).
 policy = ["cryptography>=41"]
 
+# Required only to cut a policy rule's pattern off partway through a search.
+# `re` cannot be interrupted, so without this the screening budget is checked
+# between patterns and one pattern always runs to completion; the refusal in
+# ClientPolicyRule then carries the whole load. Install it wherever rules come
+# from somewhere other than your own code.
+bounded = ["regex>=2024.5.15"]
+
 dev = [
     "pytest>=8.0",
     "ruff>=0.4",

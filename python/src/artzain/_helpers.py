@@ -36,6 +36,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any, Collection, Optional
 
 from artzain.events import record_policy_enforcement_event, record_prompt_defense_event
@@ -699,6 +700,39 @@ def _get_policy_evaluator() -> PolicyEnforcementEvaluator:
     return _policy_evaluator
 
 
+def _with_conduct_rules(rules: list[ClientPolicyRule]) -> list[ClientPolicyRule]:
+    """*rules* plus the built-in conduct rules, whatever the rule source.
+
+    A rule that reuses a conduct rule's id is handled by whether it carries
+    patterns:
+
+    * without patterns it is a copy of the built-in rule (rule sets migrated
+      from document-derived rules carry such copies) and is dropped for it, so
+      the list holds the built-in rule's own title, summary and severity rather
+      than a copy that has since drifted from it;
+    * with patterns it is the caller's own rule, applies as it is written, and
+      is listed under ``<id>/tenant``, beside the built-in rule.
+
+    The platform's decision engine merges an active bundle's rules the same
+    way, so a rule list means the same thing on either side.
+
+    *rules* itself is never modified: it may be the caller's list or the cached
+    one. Merging an already merged list is the same list again, since the
+    built-in rules carry no patterns of their own: each is dropped as a copy of
+    itself and appended again unchanged.
+    """
+    conduct = builtin_conduct_rules()
+    reserved = {r.rule_id for r in conduct}
+    merged: list[ClientPolicyRule] = []
+    for rule in rules:
+        if rule.rule_id in reserved:
+            if not rule.violation_patterns:
+                continue
+            rule = replace(rule, rule_id=f"{rule.rule_id}/tenant")
+        merged.append(rule)
+    return merged + conduct
+
+
 def load_client_policy_rules(*, force_refresh: bool = False) -> list[ClientPolicyRule]:
     """Load tenant-specific rules from cloud, a JSON file, or an env JSON blob.
 
@@ -707,6 +741,10 @@ def load_client_policy_rules(*, force_refresh: bool = False) -> list[ClientPolic
     1. ``COGNEXUS_POLICY_RULES_JSON`` — inline JSON array or ``{"rules": [...]}``
     2. ``COGNEXUS_POLICY_RULES_PATH`` — path to a JSON file with the same shape
     3. :func:`~artzain.cloud.fetch_client_policy_rules` when an API key is set
+
+    The built-in conduct rules are merged in either way
+    (:func:`_with_conduct_rules`), so the returned list is the list that is
+    screened against.
 
     Results are cached in-process unless *force_refresh* is true.
     """
@@ -737,9 +775,7 @@ def load_client_policy_rules(*, force_refresh: bool = False) -> list[ClientPolic
             except Exception:
                 rules = []
 
-        for conduct in builtin_conduct_rules():
-            if not any(r.rule_id == conduct.rule_id for r in rules):
-                rules.append(conduct)
+        rules = _with_conduct_rules(rules)
         _policy_rules_cache = rules
         return list(rules)
 
@@ -762,16 +798,26 @@ def screen_client_policy(
     """Screen text against HR / legal / business policy rules (document-derived).
 
     When *rules* is omitted, :func:`load_client_policy_rules` is used. With no
-    rules configured, returns a clean report without raising.
+    rules configured, returns a clean report without raising. The built-in
+    conduct rules always apply (:func:`_with_conduct_rules`); the list passed in
+    is not modified.
 
     Audit rows use :func:`~artzain.events.record_policy_enforcement_event` and
     mirror to the dashboard when ``COGNEXUS_API_KEY`` is set (same as prompt defense).
+
+    Both exceptions below mean the text was *not* screened, so treat either as a
+    reason to hold the text rather than as a clean report:
+
+    :raises PatternBudgetExceeded: matching did not finish inside
+        ``PolicyEnforcementConfig.screening_budget_seconds``.
+    :raises PatternTooCostly: a rule carries a pattern whose cost grows faster
+        than the text it screens. Check a rule with
+        :func:`~artzain.policy_enforcement.pattern_refusal` before relying on it.
     """
     log = logger or logging.getLogger("artzain.security")
-    effective_rules = list(rules) if rules is not None else load_client_policy_rules()
-    for conduct in builtin_conduct_rules():
-        if not any(r.rule_id == conduct.rule_id for r in effective_rules):
-            effective_rules.append(conduct)
+    effective_rules = _with_conduct_rules(
+        rules if rules is not None else load_client_policy_rules()
+    )
     if not text:
         return PolicyEnforcementReport(
             violation_count=0,
