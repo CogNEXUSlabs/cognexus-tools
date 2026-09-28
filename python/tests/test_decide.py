@@ -138,6 +138,7 @@ def test_offline_injection_denies():
 
 def test_offline_destructive_tool_call_denies():
     out = decide(action="execute_sql", target="db:prod", payload="DROP TABLE users;", kind="tool_call")
+    assert out["offline"] is True
     assert out["outcome"] == "deny"
     names = {v["name"]: v for v in out["contributing_agents"]}
     assert names["destructive-action"]["severity"] == "critical"
@@ -145,6 +146,7 @@ def test_offline_destructive_tool_call_denies():
 
 def test_offline_destructive_skipped_for_user_input():
     out = decide(action="chat", target="assistant", payload="DROP TABLE users;", kind="user_input")
+    assert out["offline"] is True
     names = {v["name"]: v for v in out["contributing_agents"]}
     assert names["destructive-action"]["verdict"] == "allow"
     assert "skipped" in names["destructive-action"]["findings"][0]

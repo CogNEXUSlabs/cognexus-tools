@@ -397,24 +397,27 @@ def test_401_warning_names_the_base_url_source_not_the_url(monkeypatch, caplog):
     monkeypatch.setenv("COGNEXUS_API_BASE_URL", "https://tenant-secret.example.test")
     monkeypatch.setattr(cloud, "_override_base", None)
     with caplog.at_level("WARNING", logger="artzain.cloud"):
-        cloud._log_http_status("post", "decision", 401, b"unauthorized")
+        cloud._log_http_status("post", "decision", 401, b"unauthorized", cloud._base_url_source())
     messages = [r.getMessage() for r in caplog.records]
     assert any("HTTP 401" in m and "base URL from COGNEXUS_API_BASE_URL" in m for m in messages), messages
     assert not any("tenant-secret.example.test" in m for m in messages), messages
 
 
-def test_base_url_source_is_a_label_for_every_origin(monkeypatch):
+def test_base_url_source_is_a_label_for_every_origin(monkeypatch, tmp_path):
     from artzain import cloud
 
-    monkeypatch.delenv("COGNEXUS_API_BASE_URL", raising=False)
+    for name in ("COGNEXUS_API_BASE_URL", "COGNEXUS_API_KEY", "MYAPP_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    profile = tmp_path / "credentials.toml"
+    monkeypatch.setenv("COGNEXUS_CREDENTIALS_PATH", str(profile))
     monkeypatch.setattr(cloud, "_override_base", "https://override.example.test")
     assert cloud._base_url_source() == "configure(base_url=...)"
     monkeypatch.setattr(cloud, "_override_base", None)
     monkeypatch.setenv("COGNEXUS_API_BASE_URL", "https://env.example.test")
     assert cloud._base_url_source() == "COGNEXUS_API_BASE_URL"
     monkeypatch.delenv("COGNEXUS_API_BASE_URL")
-    import artzain.credentials as credentials
-    monkeypatch.setattr(credentials, "profile_base_url", lambda: "https://profile.example.test")
+    # A profile that records a host and holds no key.
+    profile.write_text('[default]\nbase_url = "https://profile.example.test"\n', encoding="utf-8")
     assert cloud._base_url_source() == "credentials profile"
-    monkeypatch.setattr(credentials, "profile_base_url", lambda: None)
+    profile.unlink()
     assert cloud._base_url_source() == "default"

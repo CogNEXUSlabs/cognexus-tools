@@ -248,6 +248,12 @@ class PolicyEnforcementFinding:
 class PolicyEnforcementReport:
     violation_count: int
     findings: list[PolicyEnforcementFinding]
+    #: How many rules the text was screened against: the length of the rule
+    #: list :meth:`PolicyEnforcementEvaluator.evaluate` was handed, whatever
+    #: the text. The conduct detector runs beside any non-empty list and is
+    #: counted through the :func:`builtin_conduct_rules` entries the list
+    #: holds, not on top of them; the policy vote and ``screen_client_policy``
+    #: screen with those entries in the list.
     rules_checked: int
     text_hash: str = ""
     #: Rule patterns the approval escape suppressed, kept for the audit trail:
@@ -1400,7 +1406,11 @@ class PolicyEnforcementEvaluator:
         return PolicyEnforcementReport(
             violation_count=len(findings),
             findings=findings,
-            rules_checked=len(rules) + len(builtin_conduct_rules()),
+            # The length of the list screened, as the empty-text report above
+            # and the audit rows count it. Every caller in the platform and the
+            # SDK hands *rules* with the conduct rules already in it, so adding
+            # ``len(builtin_conduct_rules())`` here counted them twice.
+            rules_checked=len(rules),
             text_hash=_text_hash(text),
             suppressed=suppressed,
         )

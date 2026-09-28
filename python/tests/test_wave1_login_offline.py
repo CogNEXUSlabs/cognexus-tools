@@ -11,15 +11,23 @@ if str(_PKG) not in sys.path:
     sys.path.insert(0, str(_PKG))
 
 
+def _no_key_anywhere(monkeypatch) -> None:
+    """Nothing for ``decide()`` to send: no key configured or in the
+    environment, and (conftest.py) no credentials profile."""
+    from artzain import cloud
+
+    monkeypatch.delenv("COGNEXUS_API_KEY", raising=False)
+    monkeypatch.delenv("MYAPP_API_KEY", raising=False)
+    cloud.configure(api_key=None, base_url=None)
+
+
 def test_offline_warns_once(monkeypatch, capsys):
     import importlib
     decide_mod = importlib.import_module("artzain.decide")
 
     decide_mod._reset_offline_warn_for_tests()
-    monkeypatch.delenv("COGNEXUS_API_KEY", raising=False)
-    monkeypatch.delenv("MYAPP_API_KEY", raising=False)
     monkeypatch.delenv("COGNEXUS_QUIET", raising=False)
-    monkeypatch.setattr(decide_mod, "_effective_key", lambda: None)
+    _no_key_anywhere(monkeypatch)
     monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
 
     r1 = decide_mod.decide(action="noop", target="t", payload="hello", kind="user_input")
@@ -36,7 +44,7 @@ def test_offline_quiet_suppresses(monkeypatch, capsys):
 
     decide_mod._reset_offline_warn_for_tests()
     monkeypatch.setenv("COGNEXUS_QUIET", "1")
-    monkeypatch.setattr(decide_mod, "_effective_key", lambda: None)
+    _no_key_anywhere(monkeypatch)
     monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
     decide_mod.decide(action="noop", target="t", payload="hello", kind="user_input")
     assert "artzain login" not in capsys.readouterr().err

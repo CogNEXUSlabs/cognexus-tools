@@ -5,8 +5,14 @@ review.  Optionally mirrors rows into an external store (e.g. a database) via
 a pluggable ``on_event`` callback so the record can appear in dashboards or
 monitoring pipelines.
 
-No raw user text is stored — only a short redacted preview and a SHA-256 hash
-(privacy-by-design: logging without leakage).
+Each record carries a SHA-256 of the whole input and a short preview of it:
+the text whitespace-collapsed, with the checksum-validated identifiers (SSN,
+card, IBAN, UK NINO) and ``key=value`` secrets replaced by ``[REDACTED...]``
+markers, cut to 96 characters. Text holding none of those is stored as
+written, so the preview is a minimised excerpt rather than an anonymised one:
+keep the events directory, and any sink that reads it, as sensitive as the
+prompts it describes. This is the preview the engine's own writers store
+(``security.prompt_defense_events.redact_preview``).
 
 Quick-start::
 
@@ -46,6 +52,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -54,6 +61,7 @@ from typing import Any, Optional
 
 from artzain._surrogates import replace_unpaired_surrogates, without_unpaired_surrogates
 from artzain.audit_chain import get_chain
+from artzain.pii_detector import redact_text
 from artzain.prompt_injection import DetectionResult
 
 _log = logging.getLogger("artzain.events")
@@ -70,10 +78,36 @@ def _events_path() -> Path:
     return root / "prompt_defense_events.jsonl"
 
 
+# Secrets in ``key=value`` / ``key: value`` form under the key names below;
+# the separator is kept so the key stays readable.
+_SECRET_RE = re.compile(
+    r"((?:api[_-]?key|secret|token|password|passwd|bearer|authorization)\s*[=:]\s*)\S{8,}",
+    re.IGNORECASE,
+)
+# Redaction runs over this many collapsed characters before the cut, so a
+# value that starts just before the preview boundary is still recognised.
+_PREVIEW_SCAN_WINDOW = 512
+
+
 def _redact_preview(text: str, max_len: int = 96) -> str:
-    one_line = " ".join((text or "").split())[:max_len]
-    one_line = replace_unpaired_surrogates(one_line)
-    return one_line + ("\u2026" if len((text or "")) > max_len else "")
+    """A short, redacted preview of user text for the audit trail.
+
+    Whitespace-collapsed, with the checksum-validated identifiers (SSN,
+    card, IBAN, NINO) and ``key=value`` secrets replaced by markers, then cut
+    to *max_len*. The masking runs before the cut, over a window wider than
+    the preview, so a value that starts just before the cut is still
+    recognised. Text holding none of those is previewed as written.
+    """
+    # An unpaired surrogate would make the JSONL line unwritable as UTF-8.
+    one_line = replace_unpaired_surrogates(" ".join((text or "").split()))
+    truncated = len(one_line) > max_len
+    head = one_line[: max(max_len, _PREVIEW_SCAN_WINDOW)]
+    head, _counts = redact_text(head)
+    head = _SECRET_RE.sub(lambda m: m.group(1) + "[REDACTED]", head)
+    if len(head) > max_len:
+        head = head[:max_len]
+        truncated = True
+    return head + ("\u2026" if truncated else "")
 
 
 def _env_falsey(name: str, *, default: bool = True) -> bool:
@@ -131,8 +165,9 @@ def record_prompt_defense_event(
         enforcement_action: Policy outcome applied by the caller.
         user_id: Optional identifier for the end user (any JSON-serialisable
             value). Stored in the JSONL record; useful for filtering.
-        text: The original input text. Only a redacted preview and SHA-256
-            hash are stored — the raw text is **never** written to disk.
+        text: The original input text. The record holds a SHA-256 of it and
+            a redacted preview of up to 96 characters; the module docstring
+            says what the preview masks and what it keeps as written.
         on_event: Optional callback receiving the full record dict.
         latency_ms: Detector wall time in milliseconds, if measured.
         model_id: Optional model or deployment label (not the raw prompt).
@@ -184,7 +219,6 @@ def record_prompt_defense_event(
         "patterns": patterns,
         "input_sha256": payload_hash,
         "preview": _redact_preview(text),
-        "user_prompt": _redact_preview(text),
         "latency_ms": lat,
         "model_id": model_id,
         "policy": pol,
@@ -260,6 +294,10 @@ def record_prompt_defense_event(
             title=title,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
+            # The preview is the screened text. The platform keeps
+            # ``user_prompt`` ahead of it, so the prompt noted for the session
+            # would stand in for what was screened (a model reply, say).
+            _session_prompt=False,
             payload={
                 "defense_record_version": 1,
                 "request_id": rid,
@@ -272,7 +310,6 @@ def record_prompt_defense_event(
                 "model_id": model_id,
                 "input_sha256": payload_hash,
                 "preview": record.get("preview"),
-                "user_prompt": record.get("preview"),
                 "kind": kind,
                 "action": action,
                 "threat": threat,
@@ -401,7 +438,6 @@ def record_policy_enforcement_event(
         "rules_checked": rules_checked or report.rules_checked,
         "input_sha256": payload_hash,
         "preview": _redact_preview(text),
-        "user_prompt": _redact_preview(text),
         "latency_ms": lat,
         "model_id": model_id,
         "policy": "ClientPolicy-DocumentDerived",
@@ -446,6 +482,7 @@ def record_policy_enforcement_event(
             title=title,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
+            _session_prompt=False,  # the preview is the screened text, as above
             payload={
                 "defense_record_version": 1,
                 "request_id": rid,
@@ -458,7 +495,6 @@ def record_policy_enforcement_event(
                 "model_id": model_id,
                 "input_sha256": payload_hash,
                 "preview": record.get("preview"),
-                "user_prompt": record.get("preview"),
                 "action": action,
                 "violation_count": report.violation_count,
                 "rule_ids": rule_ids,

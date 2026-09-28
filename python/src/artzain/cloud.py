@@ -75,7 +75,13 @@ def has_api_key() -> bool:
 
 
 def note_session_user_prompt(text: str) -> None:
-    """Remember the latest end-user prompt for subsequent cloud event rows."""
+    """Remember the latest end-user prompt for subsequent cloud event rows.
+
+    A row posted without a ``user_prompt`` of its own carries it as
+    ``user_prompt``, redacted the way the audit trail's preview is. The
+    prompt-defense and policy rows :mod:`artzain.events` posts do not: their
+    ``preview`` is the screened text itself.
+    """
     global _session_user_prompt
     # A lone surrogate cannot be encoded into the event body, and the prompt
     # rides on every later event, so one would drop them all.
@@ -92,9 +98,16 @@ def session_user_prompt() -> Optional[str]:
 
 
 def _redact_prompt_preview(text: str, max_len: int = 96) -> str:
-    one_line = " ".join((text or "").split())[:max_len]
-    one_line = replace_unpaired_surrogates(one_line)
-    return one_line + ("\u2026" if len((text or "")) > max_len else "")
+    """The audit trail's preview of a prompt, for the events posted here.
+
+    One implementation, in :mod:`artzain.events`: a prompt travels to the
+    dashboard under ``user_prompt``, so it is masked the way the JSONL row
+    is. Imported on call: ``events`` brings in the detectors, which this
+    module does not need.
+    """
+    from artzain.events import _redact_preview
+
+    return _redact_preview(text, max_len)
 
 
 def _key_hint(key: str, keep: int = 14) -> str:
@@ -109,30 +122,43 @@ def _key_hint(key: str, keep: int = 14) -> str:
     return key[:keep] + "\u2026"
 
 
+#: Bumped each time :func:`configure` changes the key or the base URL, after
+#: the change, so a cache of what the previous ones fetched can tell it is stale
+#: (``artzain._helpers.load_client_policy_rules``).
+_credentials_generation = 0
+#: Makes a configure() call one step, so two at once cannot cancel the bump.
+_configure_lock = threading.Lock()
+
+
 def configure(*, api_key: Any = _MISSING, base_url: Any = _MISSING) -> None:
     """Set package-wide defaults (overrides env until cleared).
 
     Pass ``api_key=None`` or ``base_url=None`` to clear an override and fall
     back to environment variables / built-in default base URL.
     """
-    global _override_key, _override_base
-    if api_key is not _MISSING:
-        if api_key is None:
-            _override_key = None
-        else:
-            _override_key = str(api_key).strip() or None
-    if base_url is not _MISSING:
-        if base_url is None:
-            _override_base = None
-        else:
-            _override_base = str(base_url).strip().rstrip("/") or None
+    global _override_key, _override_base, _credentials_generation
+    with _configure_lock:
+        before = (_override_key, _override_base)
+        if api_key is not _MISSING:
+            if api_key is None:
+                _override_key = None
+            else:
+                _override_key = str(api_key).strip() or None
+        if base_url is not _MISSING:
+            if base_url is None:
+                _override_base = None
+            else:
+                _override_base = str(base_url).strip().rstrip("/") or None
+        if (_override_key, _override_base) != before:
+            _credentials_generation += 1
 
 
 def _resolve() -> ResolvedCredentials:
     """The API key and the host it goes to, decided together.
 
     Raises :class:`~artzain.credentials.CredentialConflictError` when a set
-    host is not the one the key was issued with.
+    host is not the one the key was issued with, or when the credentials
+    profile is there but cannot be read.
     """
     return resolve_credentials(api_key=_override_key, base_url=_override_base)
 
@@ -141,18 +167,25 @@ def _resolve() -> ResolvedCredentials:
 _conflicts_warned: set[str] = set()
 
 
-def _resolve_or_warn() -> Optional[ResolvedCredentials]:
-    """:func:`_resolve` for calls that must never raise: ``None`` on a conflict.
+def _warn_conflict(exc: CredentialConflictError) -> None:
+    """Log *exc* at WARNING the first time its message comes up in the process.
 
-    The warning names the settings involved, never their values.
+    Its message names the settings involved, never their values.
+    """
+    message = str(exc)
+    if message not in _conflicts_warned:
+        _conflicts_warned.add(message)
+        _log.warning("cloud: %s", message)
+
+
+def _resolve_or_warn() -> Optional[ResolvedCredentials]:
+    """:func:`_resolve` for calls that must never raise: ``None`` on a conflict,
+    or when the credentials profile cannot be read (see :func:`_warn_conflict`).
     """
     try:
         return _resolve()
     except CredentialConflictError as exc:
-        message = str(exc)
-        if message not in _conflicts_warned:
-            _conflicts_warned.add(message)
-            _log.warning("cloud: %s", message)
+        _warn_conflict(exc)
         return None
 
 
@@ -169,9 +202,11 @@ def _effective_base() -> str:
 
 
 def _base_url_source() -> str:
-    """Which setting decided the base URL in use — a label, never the value.
+    """Which setting decides the base URL now — a label, never the value.
 
-    Log lines use this instead of the URL itself: the profile that can carry
+    It is the ``base_source`` of the credentials resolved now. A failed call's
+    log line gives the ``base_source`` of the credentials that call was made
+    with (:func:`_log_failure`) instead of the URL: the profile that can carry
     ``base_url`` is the same file that carries the API key, and a log entry
     must not be built from anything read out of it.
     """
@@ -490,6 +525,9 @@ class _QueuedPost(NamedTuple):
     body: bytes
     headers: dict[str, str]
     timeout_sec: float
+    #: Where the base of ``url`` came from (``ResolvedCredentials.base_source``),
+    #: for the log line of a failed send.
+    base_source: str
 
 
 class _CloudTransport:
@@ -621,7 +659,7 @@ class _CloudWorker:
             try:
                 _deliver_post(self._transport, item)
             except Exception as exc:  # pragma: no cover - _deliver_post logs its own
-                _log.warning("cloud: %s %s failed: %s", item.op, item.label, exc)
+                _log_failure(f"{item.op} {item.label}", exc, item.base_source)
             finally:
                 with self._idle:
                     self._pending -= 1
@@ -663,10 +701,10 @@ def _deliver_post(transport: _CloudTransport, item: _QueuedPost) -> None:
     try:
         status, body = transport.post(item.url, item.body, item.headers, item.timeout_sec)
     except Exception as exc:
-        _log.warning("cloud: %s %s failed: %s", item.op, item.label, exc)
+        _log_failure(f"{item.op} {item.label}", exc, item.base_source)
         return
     if status >= 400:
-        _log_http_status(item.op, item.label, status, body)
+        _log_http_status(item.op, item.label, status, body, item.base_source)
 
 
 def dropped_cloud_events() -> int:
@@ -685,16 +723,42 @@ def flush_cloud_events(timeout_sec: float = 10.0) -> None:
     _worker.flush(timeout_sec)
 
 
-def _log_http_error(op: str, event_type: str, exc: urllib.error.HTTPError) -> None:
+def _log_failure(what: str, exc: BaseException, source: str) -> None:
+    """Log a cloud call that raised instead of answering.
+
+    The WARNING line gives the exception's type (for a ``URLError`` that wraps
+    an exception, that exception's type) and *source*, where the base URL came
+    from, never the exception's text: a certificate issued for another name
+    puts the host in it, and ``http.client`` quotes a header value it will not
+    send, the API key among them. The text is logged at DEBUG.
+
+    *source* is the ``base_source`` of the credentials the call was made with,
+    so logging a failure reads no settings, and cannot fail on them.
+    """
+    kind = type(exc).__name__
+    if isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, BaseException):
+        kind = type(exc.reason).__name__
+    _log.warning("cloud: %s failed: %s (base URL from %s)", what, kind, source)
+    _log.debug("cloud: %s failed: %s", what, exc)
+
+
+def _log_http_error(op: str, event_type: str, exc: urllib.error.HTTPError, source: str) -> None:
     body = b""
     try:
         body = exc.read()
     except Exception:
         _log.debug("cloud: %s %s HTTP %s body unreadable", op, event_type, exc.code, exc_info=True)
-    _log_http_status(op, event_type, exc.code, body)
+    _log_http_status(op, event_type, exc.code, body, source)
 
 
-def _log_http_status(op: str, event_type: str, code: int, raw: bytes) -> None:
+def _log_http_status(op: str, event_type: str, code: int, raw: bytes, source: str) -> None:
+    """Log a cloud call the API answered with an HTTP error status.
+
+    The WARNING line gives the status and, but for the CDN/WAF hint, *source*
+    (as for :func:`_log_failure`), never the answer: a proxy's error page can
+    name the host, and a page that echoes the request headers holds the API
+    key. The answer is logged at DEBUG.
+    """
     body = ""
     try:
         body = raw.decode("utf-8", errors="replace")[:240]
@@ -708,17 +772,24 @@ def _log_http_status(op: str, event_type: str, code: int, raw: bytes) -> None:
             event_type,
             _sdk_user_agent(),
         )
-        return
-    if code == 401:
+    elif code == 401:
         _log.warning(
             "cloud: %s %s failed HTTP 401 — invalid or revoked API key "
             "(base URL from %s)",
             op,
             event_type,
-            _base_url_source(),
+            source,
         )
-        return
-    _log.warning("cloud: %s %s failed HTTP %s %s", op, event_type, code, body)
+    else:
+        _log.warning(
+            "cloud: %s %s failed HTTP %s (base URL from %s)",
+            op,
+            event_type,
+            code,
+            source,
+        )
+    if body:
+        _log.debug("cloud: %s %s HTTP %s response body: %r", op, event_type, code, body)
 
 
 def ensure_sdk_session_logged() -> None:
@@ -772,8 +843,9 @@ def post_generation_outcome(
         tokens_in: Optional prompt / input token count. Drives the Leaderboard's
             "Total Tokens In" and the Token-to-Outcome (T2O) averages.
         tokens_out: Optional completion / output token count.
-        prompt: Optional end-user prompt for this generation. Only a redacted
-            preview is sent; it lets the prompt defender classify the
+        prompt: Optional end-user prompt for this generation. Only its
+            preview is sent, redacted as the audit trail's is (see
+            :mod:`artzain.events`); it lets the prompt defender classify the
             department / outcome for Token-to-Outcome even when
             :func:`screen_user_input` was not called for this turn.
         latency_ms: Optional wall time in milliseconds.
@@ -828,6 +900,7 @@ def post_sdk_event(
     tokens_out: Optional[int] = None,
     timeout_sec: float = 5.0,
     _skip_session_hook: bool = False,
+    _session_prompt: bool = True,
 ) -> None:
     """POST one row to ``/api/events`` (fire-and-forget via the background worker).
 
@@ -852,7 +925,7 @@ def post_sdk_event(
         ensure_sdk_session_logged()
 
     pl = dict(payload or {})
-    if not pl.get("user_prompt"):
+    if _session_prompt and not pl.get("user_prompt"):
         sp = session_user_prompt()
         if sp:
             pl["user_prompt"] = _redact_prompt_preview(sp)
@@ -885,10 +958,11 @@ def post_sdk_event(
                 body=json.dumps(without_unpaired_surrogates(body_obj), ensure_ascii=False).encode("utf-8"),
                 headers=headers,
                 timeout_sec=float(timeout_sec),
+                base_source=creds.base_source,
             )
         )
     except Exception as exc:
-        _log.warning("cloud: event POST %s failed: %s", event_type, exc)
+        _log_failure(f"event POST {event_type}", exc, creds.base_source)
 
 
 def post_policy_human_decision(
@@ -931,10 +1005,85 @@ def post_policy_human_decision(
                 body=json.dumps(without_unpaired_surrogates(body_obj), ensure_ascii=False).encode("utf-8"),
                 headers=headers,
                 timeout_sec=float(timeout_sec),
+                base_source=creds.base_source,
             )
         )
     except Exception as exc:
-        _log.warning("cloud: policy decision POST failed: %s", exc)
+        _log_failure(f"policy decision POST {v}", exc, creds.base_source)
+
+
+class _PolicyRulesFetchFailed(Exception):
+    """``GET /api/policy-enforcement/rules`` did not end in a rule list.
+
+    Its message says how, in a few words for a log line ("HTTP 503"). It never
+    carries the URL or the key: a caller that needs to know who the fetch was
+    for resolved the credentials itself.
+    """
+
+
+def _fetch_policy_rules(
+    creds: Optional[ResolvedCredentials], *, timeout_sec: float = 12.0, quiet: bool = False
+) -> list[Any]:
+    """The tenant's rule rows, fetched with *creds* (``None``: they conflict).
+
+    ``[]`` is an answer: the tenant has no rules, or no key is configured, so
+    there is no tenant to fetch for. Every other way the fetch can end without a
+    rule list raises :class:`_PolicyRulesFetchFailed`: a key that may not go to
+    the host that is set, a request that cannot be made or fails (an HTTP
+    error, among them the 503 the platform answers while it cannot read the
+    tenant's rules, or a timeout), a body that is not a rule list. Each failure
+    is logged, at DEBUG rather than WARNING when *quiet*: a retry, whose run of
+    failures the caller has already reported.
+    """
+    level = logging.DEBUG if quiet else logging.WARNING
+    if creds is None:
+        raise _PolicyRulesFetchFailed("the API key and the base URL conflict")
+    key = creds.api_key
+    if not key:
+        _log.debug("cloud: skip policy rules fetch — no API key")
+        return []
+    try:
+        req = urllib.request.Request(
+            creds.base_url + "/api/policy-enforcement/rules",
+            method="GET",
+            headers=_api_request_headers(key),
+        )
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as exc:
+        if quiet:
+            _log.debug("cloud: policy rules GET policy-enforcement failed HTTP %s", exc.code)
+        else:
+            _log_http_error("policy rules GET", "policy-enforcement", exc, creds.base_source)
+        raise _PolicyRulesFetchFailed(f"HTTP {exc.code}") from exc
+    except (ValueError, http.client.InvalidURL) as exc:
+        # Raised before anything is sent, by a base URL or an API key that no
+        # request can carry, with a message that quotes it: the log names
+        # where the base URL came from instead.
+        _log.log(
+            level,
+            "cloud: policy rules fetch failed: no request can be made with the base URL "
+            "(from %s) and the API key that are set",
+            creds.base_source,
+        )
+        raise _PolicyRulesFetchFailed("no request can be made with these settings") from exc
+    except Exception as exc:
+        if quiet:
+            _log.debug("cloud: policy rules fetch failed: %s", exc)
+        else:
+            _log_failure("policy rules fetch", exc, creds.base_source)
+        raise _PolicyRulesFetchFailed(type(exc).__name__) from exc
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError) as exc:
+        # RecursionError: JSON nested deeper than the decoder follows.
+        _log.log(level, "cloud: policy rules fetch failed: the answer is not JSON")
+        raise _PolicyRulesFetchFailed("the answer is not JSON") from exc
+    rules = data.get("rules") if isinstance(data, dict) else None
+    if not isinstance(rules, list):
+        _log.log(level, "cloud: policy rules fetch failed: the answer holds no rule list")
+        raise _PolicyRulesFetchFailed("the answer holds no rule list")
+    return list(rules)
 
 
 def fetch_client_policy_rules(
@@ -944,30 +1093,15 @@ def fetch_client_policy_rules(
     """Download tenant policy rules from ``GET /api/policy-enforcement/rules``.
 
     Requires ``COGNEXUS_API_KEY`` (or :func:`configure`). Returns an empty list
-    when no key is configured or the request fails.
+    when no key is configured or the request fails, so an empty list may also
+    mean a failed request. :func:`~artzain.load_client_policy_rules` tells the
+    two apart (it makes the same request itself rather than calling this): it
+    does not cache a failed fetch, and keeps serving the rules it fetched last
+    while a refresh fails.
     """
-    creds = _resolve_or_warn()
-    key = creds.api_key if creds else None
-    if not creds or not key:
-        _log.debug("cloud: skip policy rules fetch — no API key")
-        return []
-    url = creds.base_url + "/api/policy-enforcement/rules"
-    req = urllib.request.Request(
-        url,
-        method="GET",
-        headers=_api_request_headers(key),
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-            body = resp.read().decode("utf-8")
-        data = json.loads(body)
-        rules = data.get("rules") if isinstance(data, dict) else None
-        return list(rules) if isinstance(rules, list) else []
-    except urllib.error.HTTPError as exc:
-        _log_http_error("policy rules GET", "policy-enforcement", exc)
-        return []
-    except Exception as exc:
-        _log.warning("cloud: policy rules fetch failed: %s", exc)
+        return _fetch_policy_rules(_resolve_or_warn(), timeout_sec=timeout_sec)
+    except _PolicyRulesFetchFailed:
         return []
 
 
