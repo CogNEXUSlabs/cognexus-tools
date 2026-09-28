@@ -8,7 +8,9 @@ verdict back, so this blocks for the round-trip.
 three guards locally (prompt-injection, destructive-action, policy-enforcement)
 and synthesises the same response shape with ``audit_block_id=None`` and
 ``offline=True`` — so ``pip install artzain`` yields a first allowed decision
-with zero server setup.
+with zero server setup. The policy guard screens the rules
+:func:`artzain.load_client_policy_rules` loads, as
+:func:`artzain.screen_client_policy` does, without fetching any.
 
 Uses only the standard library (``urllib``) — no new dependencies.
 """
@@ -26,7 +28,6 @@ from typing import Any, Callable, Optional
 
 from artzain.cloud import (
     _api_request_headers,
-    _effective_key,
     _resolve,
 )
 from artzain.credentials import CredentialConflictError
@@ -71,6 +72,17 @@ def decide(
 ) -> dict[str, Any]:
     """Gate a proposed agent action and return the decision.
 
+    With an API key the platform decides, against your team's policy rules;
+    rules configured locally are not sent. Without one the decision is made
+    in-process (``offline=True``), and its policy vote screens the list
+    :func:`artzain.load_client_policy_rules` loads, as
+    :func:`artzain.screen_client_policy` does: the rules in
+    ``COGNEXUS_POLICY_RULES_JSON``, else in the JSON file
+    ``COGNEXUS_POLICY_RULES_PATH`` names, with the built-in conduct rules. It
+    never fetches your team's rules, so an offline decision makes no network
+    call. A list that loads is kept for the process;
+    ``load_client_policy_rules(force_refresh=True)`` reloads it.
+
     Args:
         action: Verb being attempted, e.g. ``"send_email"`` / ``"execute_sql"``.
         target: Target identifier, e.g. ``"crm:contact:123"`` / ``"db:prod"``.
@@ -92,7 +104,10 @@ def decide(
         ``contributing_agents``, ``reasons``, and (offline) ``offline=True``.
         Offline, a payload holding an unpaired surrogate is ``deny``, and a
         guard that raises becomes a ``deny`` vote carrying the error: the
-        offline path returns a decision instead of raising.
+        offline path returns a decision instead of raising. Configured policy
+        rules that cannot be loaded (a missing file, JSON that does not parse
+        or is neither a list nor ``{"rules": [...]}``) are such an error, not
+        a vote on the conduct rules alone.
 
     Raises:
         ValueError: If *kind* is not a valid payload kind.
@@ -100,22 +115,24 @@ def decide(
             or the request cannot be sent: a field holds an unpaired
             surrogate (half of a UTF-16 pair, which ``json.loads`` makes from
             a lone escape and which is not valid Unicode), *context* does
-            not serialize to JSON, or ``configure(base_url=...)`` /
+            not serialize to JSON, ``configure(base_url=...)`` /
             ``COGNEXUS_API_BASE_URL`` names a host other than the one the
-            API key was issued with (see
+            API key was issued with, or the credentials profile is there but
+            cannot be read, which is not the same as no key (see
             :func:`artzain.credentials.resolve_credentials`). Nothing is sent
             in any of these cases.
     """
     if kind not in _VALID_KINDS:
         raise ValueError(f"kind must be one of {_VALID_KINDS}, got {kind!r}")
 
-    # The key and the host it may go to are decided together; a host that is
-    # set but did not issue the key refuses the call before anything is sent.
+    # The key and the host it may go to are decided together, from one reading
+    # of the credentials; a host that is set but did not issue the key refuses
+    # the call before anything is sent.
     try:
         creds = _resolve()
     except CredentialConflictError as exc:
         raise DecisionError(f"decision request not sent: {exc}") from exc
-    if not _effective_key():
+    if not creds.api_key:
         return _decide_offline(
             action=action,
             target=target,
@@ -272,6 +289,7 @@ def _offline_injection_vote(payload: str, kind: str, agent_did: str) -> dict[str
         DetectionConfig,
         PromptInjectionDetector,
         ThreatLevel,
+        markdown_delimiter_lines_as_separators,
     )
     from artzain.tool_call_contract import reads_decoded
 
@@ -283,6 +301,11 @@ def _offline_injection_vote(payload: str, kind: str, agent_did: str) -> dict[str
         from artzain.tool_call_contract import detect_tool_call_injection
 
         result = detect_tool_call_injection(detector, payload, source=agent_did)
+    elif kind == "model_output":
+        # A reply written as text: its Markdown fences, rules and lines of
+        # hashes are line breaks, not delimiters, unless one opens a turn
+        # (``SYSTEM:`` on the next line). The server reads a reply the same way.
+        result = detector.detect(markdown_delimiter_lines_as_separators(payload), source=agent_did)
     else:
         result = detector.detect(payload, source=agent_did)
     if not result.is_injection:
@@ -306,6 +329,7 @@ def _offline_injection_vote(payload: str, kind: str, agent_did: str) -> dict[str
 def _offline_destructive_vote(payload: str, kind: str, *, surface: str) -> dict[str, Any]:
     if kind not in _OUTPUT_KINDS:
         return _vote("destructive-action", "allow", "none", findings=[f"skipped (payload_kind={kind})"])
+    from artzain.destructive_action_guard import combine_screens
     from artzain.tool_call_contract import reads_decoded
 
     if reads_decoded(kind, payload):
@@ -318,6 +342,15 @@ def _offline_destructive_vote(payload: str, kind: str, *, surface: str) -> dict[
         from artzain.destructive_action_guard import screen_action
 
         result = screen_action(payload, surface=surface)
+    # Combined as the platform's vote combines it: most severe match first,
+    # ties in the order they were found, and a guard that failed as a critical
+    # ``guard.error`` match. A plain-text screen lists its matches in rule
+    # order, which is not severity order (``sql.update_no_where``, high, comes
+    # before ``git.push_force``, critical), and ``_decide_offline`` heads each
+    # reason with ``findings[0]``, so a critical vote named a high rule. The
+    # screens of a tool call or a JSON reply are combined already; combining
+    # them again changes nothing.
+    result = combine_screens([result])
     severity = result.severity.value if result.is_destructive else "none"
     verdict = _SEVERITY_VERDICT.get(severity, "allow")
     findings = [f"{m.rule_id}: {m.excerpt}" for m in result.matches[:8]]
@@ -325,14 +358,17 @@ def _offline_destructive_vote(payload: str, kind: str, *, surface: str) -> dict[
 
 
 def _offline_policy_vote(payload: str, kind: str) -> dict[str, Any]:
-    from artzain.policy_enforcement import (
-        PolicyEnforcementEvaluator,
-        builtin_conduct_rules,
-    )
+    from artzain._helpers import _offline_policy_rules
+    from artzain.policy_enforcement import PolicyEnforcementEvaluator
 
     evaluator = PolicyEnforcementEvaluator()
-    # Offline has no tenant rules; the always-on conduct rules still apply.
-    rules = builtin_conduct_rules()
+    # The list screen_client_policy() screens: the user's own rules
+    # (COGNEXUS_POLICY_RULES_JSON, else the file COGNEXUS_POLICY_RULES_PATH
+    # names) with the always-on conduct rules merged in, loaded without the
+    # fetch of the tenant's rules, so an offline decision makes no network
+    # call. Rules that cannot be loaded raise, and _guarded_vote makes that a
+    # deny, not a vote on the conduct rules alone.
+    rules = _offline_policy_rules()
     from artzain.tool_call_contract import reads_decoded
 
     if kind == "tool_call":
@@ -366,7 +402,15 @@ def _offline_policy_vote(payload: str, kind: str) -> dict[str, Any]:
         verdict = "review"
     else:
         verdict = "allow"
-    findings = [f"{f.rule_id}: {f.rule_title}" for f in report.findings[:8]]
+    # Most severe first, ties in the order they were evaluated. The evaluator
+    # appends the conduct findings after every rule finding, so eight matching
+    # rules used to push a critical conduct finding past the cap: the vote still
+    # read critical, while ``_decide_offline`` heads each reason with
+    # ``findings[0]`` and so named a low rule. A tie holds the unpaired-surrogate
+    # finding, which the evaluator puts first, in front. An unknown severity
+    # sorts as ``low``, as it counts above.
+    ordered = sorted(report.findings, key=lambda f: -rank.get(f.severity, 1))
+    findings = [f"{f.rule_id}: {f.rule_title}" for f in ordered[:8]]
     return _vote("policy-enforcement", verdict, worst, findings=findings)
 
 

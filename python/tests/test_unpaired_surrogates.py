@@ -73,9 +73,10 @@ def _isolated(monkeypatch, tmp_path):
     monkeypatch.setenv("COGNEXUS_API_KEY", "")
     monkeypatch.delenv("MYAPP_API_KEY", raising=False)
     monkeypatch.setenv("COGNEXUS_PROMPT_DEFENSE_EVENTS_DIR", str(tmp_path))
-    from artzain import cloud, credentials, kill_switch
+    # The profile's path names no file.
+    monkeypatch.setenv("COGNEXUS_CREDENTIALS_PATH", str(tmp_path / "no-profile.toml"))
+    from artzain import cloud, kill_switch
 
-    monkeypatch.setattr(credentials, "profile_api_key", lambda: None)
     cloud.configure(api_key=None, base_url=None)
     reset_detectors()
     kill_switch._reset_for_tests()

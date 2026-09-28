@@ -63,9 +63,10 @@ def _isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> Any:
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("COGNEXUS_PROMPT_DEFENSE_EVENTS_DIR", str(tmp_path))
-    from artzain import cloud, credentials
+    from artzain import cloud
 
-    monkeypatch.setattr(credentials, "profile_api_key", lambda: None)
+    # No credentials profile either: the path names no file.
+    monkeypatch.setenv("COGNEXUS_CREDENTIALS_PATH", str(tmp_path / "no-profile.toml"))
     cloud.configure(api_key=None, base_url=None)
     # The loaded list is cached for the process; monkeypatch restores it.
     monkeypatch.setattr(_helpers, "_policy_rules_cache", None)

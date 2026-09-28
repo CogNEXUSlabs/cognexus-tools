@@ -36,9 +36,10 @@ Python with zero mandatory dependencies:
     :class:`AgentKilledError` so orchestrators unwind cleanly.
 
 **Audit events** (:mod:`artzain.events`)
-    Append-only JSONL audit trail for every detected injection (no raw
-    text stored).  Pluggable ``on_event`` callback for custom sinks
-    (databases, queues, dashboards).
+    Append-only JSONL audit trail for every detected injection, holding a
+    SHA-256 of the input and a short preview of it (:mod:`artzain.events`
+    says what the preview masks and what it keeps as written).  Pluggable
+    ``on_event`` callback for custom sinks (databases, queues, dashboards).
 
 Quick-start::
 
@@ -178,7 +179,7 @@ from artzain.prompt_injection import (
     load_prompt_injection_config,
 )
 
-__version__ = "0.6.30"
+__version__ = "0.6.31"
 
 __all__ = [
     # Version

@@ -1,5 +1,241 @@
 # Changelog
 
+## 0.6.31
+
+### Fixed
+
+- **An offline decision's reasons name the finding that decided it.** The
+  offline policy vote seals at most eight findings, and
+  `PolicyEnforcementEvaluator.evaluate` appends the conduct findings after every
+  rule finding, so eight matching rules pushed a critical conduct finding past
+  the cap. `decide()` heads each reason with the vote's first finding, so the
+  decision read `critical` while its `reasons` named a low rule: the verdict was
+  right, the reason named the wrong rule. The vote now seals its most severe
+  findings, ties in the order they were evaluated, and an unpaired-surrogate
+  finding still comes first. Until this release offline `decide()` screened
+  only the built-in conduct rules, which carry no patterns of their own, so no
+  offline decision reached the cap; it now screens your own rules as well (see
+  Changed), which can. The order is the one the platform's decision engine
+  seals, so a vote means the same thing on either side. The order changes no
+  verdict or severity; a vote listing findings of several severities now lists
+  them by severity rather than by rule order.
+- **A tool call whose arguments are a document is no longer refused for its
+  shape.** The structural ceilings on a `kind="tool_call"` payload read every
+  nesting level's keys as one total, and allowed eight levels of nesting, so
+  ordinary calls were reviewed as smuggled payloads: a deployment manifest or a
+  search query DSL for nesting, an itemised invoice or a spreadsheet append for
+  its rows' keys. Nesting is now allowed to 32 levels, and the key ceiling
+  counts the keys of one object, where thousands of keys is a dictionary handed
+  over as an argument list rather than an argument list. A call's total size is
+  bounded as before by the payload caps and by the coverage ceiling of the
+  screens that read it, which reports a call carrying more strings than are
+  screened one at a time. Nesting deep enough to exhaust a parser still fails
+  closed.
+
+- **`rules_checked` counts each rule screened once.** `screen_client_policy()`
+  merges the built-in conduct rules into the rules it screens, and
+  `PolicyEnforcementEvaluator.evaluate` then added their number a second time,
+  so the report for any non-empty text counted two rules more than it was
+  screened against, and two more than the audit row written for the same
+  screening. It is now the length of the rule list screened, whatever the text.
+  Audit rows written by `screen_client_policy()` already recorded that number
+  and are unchanged. For a non-empty text, a report's `rules_checked`, the
+  `client_policy` log lines, and a row you record yourself with
+  `record_policy_enforcement_event()` without `rules_checked=` read two lower
+  from this version. A non-empty list you hand the evaluator without the
+  conduct rules is counted as it is, and the conduct detector still runs beside
+  it; an empty list screens nothing, conduct included (`screen_client_policy()`
+  always merges the conduct rules in).
+- **The local audit preview is redacted, as the module always said it was.**
+  `events` promised "No raw user text is stored", but the preview it wrote to
+  `prompt_defense_events.jsonl` was only whitespace-collapsed and cut to 96
+  characters, so shorter prompts were stored as written and were sent to the
+  dashboard that way. The preview now masks the checksum-validated identifiers
+  (SSN, card, IBAN, UK NINO) and `key=value` secrets before the cut, the same
+  as the engine's own audit writers. The module and package docstrings and the
+  README now also state the limit: text holding none of those is still stored
+  as written, so the events directory stays as sensitive as the prompts it
+  describes.
+- **A prompt sent with a generation outcome is redacted too.** The preview
+  helper in `cloud` was a second copy that did not redact, so a prompt passed
+  to `post_generation_outcome()` (whose `prompt` argument documents that "Only
+  a redacted preview is sent"), or noted for the session and attached to later
+  events, travelled unmasked. Both paths now share the one implementation.
+- **A failed dashboard call is logged without what came back.** A failed call
+  to the dashboard (posting an event or a policy decision, fetching the policy
+  rules) was logged at WARNING with the start of the API's answer, or with the
+  text of the error the call raised. Either can name the host, as a proxy's
+  error page or a certificate issued for another name does, or hold the API
+  key: an error page that echoes the request headers does, and so does the
+  error `http.client` raises for a header value it will not send, which quotes
+  the value. The WARNING line now gives the call, the HTTP status or the
+  error's type, and where the base URL came from (`configure(base_url=...)`,
+  `COGNEXUS_API_BASE_URL`, the credentials profile or the default). The answer
+  and the error's text are logged at DEBUG, unmasked: keep the `artzain.cloud`
+  logger above DEBUG wherever its records leave the machine. The hints for an
+  invalid or revoked key (401) and for a CDN or WAF block (403) are unchanged.
+- **`verify_chain()` documents what it actually checks.** The module and
+  function docstrings said that without `COGNEXUS_AUDIT_HMAC_KEY` "only
+  hash-chain integrity (prev_hash / entry_hash) can be verified". There is no
+  such partial pass: every chained entry's signature is checked, so a log
+  written with the per-process key fails in any later process with `HMAC
+  mismatch at seq=1`. The docstrings now say so, and that the key is read once
+  per process, so setting it after the first signature has no effect.
+- **A reply with a Markdown code block is no longer a `review`.** Offline
+  `decide(kind="model_output")` screens a reply with the strict injection
+  preset, where a line of only `---`, `###` or a code fence was a `medium`
+  delimiter finding: the fence closing any code block, a horizontal rule or a
+  line of hashes sent an ordinary reply to review. In a reply that is not
+  JSON such a line now reads as a line break between the text around it. It
+  is still a delimiter finding when the next line that holds anything opens
+  with a chat role's label (`SYSTEM:`, `**User:**`), a turn written into the
+  reply. The platform reads a reply the same way. A reply that is JSON, and
+  the other payload kinds, read these lines as before.
+- **A key configured after the first rules load fetches your team's rules.**
+  With no rules configured and no API key, `load_client_policy_rules()` cached
+  the conduct rules it returned for the rest of the process, so a key
+  configured afterwards (`configure()`, `artzain login`) never fetched the
+  team's rules for `screen_client_policy()`. With nothing to load, nothing is
+  cached now.
+- **An offline destructive-action reason names the most severe match.** A
+  screen lists its matches in the order the guard walks its rules, which is by
+  kind rather than by severity, and the offline destructive-action vote kept
+  that order for a plain-text payload. `decide()` heads each reason with the
+  vote's first finding, so a reply holding an `UPDATE` without `WHERE` (high)
+  and a `git push --force` (critical) was denied as critical with a reason
+  naming the `UPDATE`, and a critical match walked after eight high ones fell
+  past the eight findings a vote keeps. The vote now reads its screen through
+  `combine_screens()`, as the platform's decision engine does and as the vote
+  already did for a tool call or a JSON reply: most severe first, and matches
+  of one severity in the order they were found. A guard that fails internally
+  is named `guard.error` in the findings and the reason, as on the platform;
+  offline, the reason read only `critical`. Verdicts and severities are
+  unchanged.
+- **A failed policy-rules fetch no longer passes for a tenant without rules.**
+  `load_client_policy_rules()` caches the rules it loads for the process. A
+  fetch from `GET /api/policy-enforcement/rules` that failed (an HTTP error,
+  among them the 503 the platform answers while it cannot read your rules, a
+  timeout, an answer that was not a rule list, or an API key that may not be
+  sent to the host that is set) came back as an empty list and was cached as
+  one. The process then screened on the built-in conduct rules alone until it
+  restarted, and a failed `force_refresh=True` swapped your rules for them the
+  same way. A failed fetch is now never cached. A later call makes it again
+  once a short backoff has passed (doubling up to a minute, and kept by
+  `force_refresh=True` too, so a loop does not hammer the API); the call that
+  makes it waits for it, as a first load does, and other callers are served
+  meanwhile. Until a fetch succeeds, the rules fetched last are still served,
+  for up to five minutes from the first failure
+  (`COGNEXUS_BUNDLE_LAST_GOOD_GRACE_SECONDS`, the platform's own bound on a
+  last-known-good copy), and only for the API key and host they were fetched
+  with; otherwise the conduct rules alone apply. A warning says which when a run
+  of failures starts, when what it serves changes, and the first time each kind
+  of failure occurs in the run; the retries in between are logged at DEBUG. An
+  answer with no rules is still an answer, and is cached.
+- **A key or base URL changed with `configure()` now reloads the policy
+  rules.** After `configure()` changed the API key or base URL,
+  `load_client_policy_rules()` kept serving the rules it had fetched for the
+  previous ones until `force_refresh=True`. The next call now loads them again
+  when the key and host in use differ from those the cached rules were fetched
+  with; a `configure()` that leaves them as they were fetches nothing. A
+  process that switches keys with `configure()` for each tenant therefore
+  fetches on each switch: pass `rules=` to screen for several tenants from one
+  process. A key or host changed in the environment or the credentials profile,
+  rather than with `configure()`, is not noticed until the rules are next
+  fetched, by `force_refresh=True` or by a retry after a failed fetch.
+  `load_client_policy_rules()` also makes the request
+  itself rather than through `fetch_client_policy_rules()`, so replacing that
+  function no longer feeds the loader: set `COGNEXUS_POLICY_RULES_JSON` or pass
+  `rules=` instead. `fetch_client_policy_rules()` keeps its signature and still
+  returns `[]` for a failed request, now also for a base URL it cannot make a
+  request from, where it raised `ValueError`.
+- **A credentials profile that cannot be read is no longer a profile without a
+  key.** `read_profile()` answered `{}` for a profile that is not there and for
+  one that is there but cannot be read (another program holds a lock on it,
+  its permissions shut you out, it is not UTF-8 text), so the API key it holds
+  was taken to be unset: `load_client_policy_rules()` put the built-in conduct
+  rules alone in place of your team's rules, events were skipped without a
+  warning, and `decide()` decided offline. `resolve_credentials()` now raises
+  `CredentialConflictError` for such a profile, naming no value, and while it
+  cannot be read no API key is sent, whichever setting holds it, unless a
+  project `.env` sets both the key and its host. Events are held back with a
+  warning, `decide()` raises `DecisionError`, a CLI command stops and says why,
+  and the rules loader counts it as a failed fetch: its backoff applies, and
+  the rules fetched last are still served within the same window, unless a key
+  or host set with `configure()` or in the environment is not the one they were
+  fetched with. `read_profile()`, `profile_api_key()` and `profile_base_url()`
+  still answer `{}` and `None` for it. A profile that is not UTF-8 text made
+  them, and event posting, raise `UnicodeDecodeError`; it now reads as one
+  that cannot be read. What is at the path and is not a file (a directory, a
+  device, a pipe) is still no profile, and is not opened, and so is a profile
+  in another user's directory that you may not search, such as root's home in
+  a container.
+- **The key and host in use come from one reading of the profile.**
+  `resolve_credentials()` reads the profile once, and `decide()` and each CLI
+  command resolve their credentials once per call.
+- **`write_profile()` replaces the profile whole.** It truncated the file and
+  wrote it again, so a process reading the profile while `artzain login` ran
+  could find it empty or half written, and read no key; on Windows, a profile
+  another program held a lock on was left empty. The new profile is now
+  written to a file beside it, which on POSIX only its owner can read from its
+  creation rather than once written, flushed to disk and moved over the old
+  one. A symlink is written through, as before, when you, root or the user
+  `sudo` or `doas` runs for made it. A profile that is another user's is not
+  replaced: the write is refused, as writing it in place was when their file
+  could not be opened, but for root under `sudo` or `doas` with HOME kept
+  writing for that user, who is given the new profile, as they are one made
+  in a directory of theirs. No one else is handed a new key. A device at the
+  profile's path (the null device, to keep no key) is written to as before
+  rather than replaced, and a pipe that nothing reads is refused rather than
+  waited on. On Windows, where a file another program has
+  open cannot be replaced, the move is tried again for a few seconds, and then
+  `artzain login` says the profile could not be saved, leaving the old one as
+  it was. A new file an interrupted write left beside the profile is removed
+  by a later write, once it is old.
+
+### Changed
+
+- **The profile's directory is closed to other users only when it is the
+  SDK's own.** `write_profile()` set the directory the profile is in to mode
+  0700 whichever it was. It now does so for `~/.artzain` and for a directory
+  the write makes; one that `COGNEXUS_CREDENTIALS_PATH` names and that is
+  there already keeps its mode, and the profile in it is still its owner's
+  alone.
+- **Audit records no longer carry the `user_prompt` copy of the preview.**
+  Every record stored the same preview twice, under `preview` and
+  `user_prompt`; the engine's writers dropped that duplicate and the dashboard
+  reads `preview`. Rows written by this version, the records handed to
+  `on_event` and the events posted from it carry `preview` only, so read
+  `preview` wherever you read `user_prompt`. An `on_event` callback that
+  raises is only logged at DEBUG, so a sink that looks up `user_prompt` would
+  stop storing rows without a warning.
+- **Offline `decide()` screens your own policy rules.** With no API key,
+  `screen_client_policy()` screens the rules `load_client_policy_rules()`
+  returns, from `COGNEXUS_POLICY_RULES_JSON` or else the JSON file
+  `COGNEXUS_POLICY_RULES_PATH` names, beside the built-in conduct rules.
+  `decide()`'s offline policy vote screened the conduct rules alone, so text
+  that broke one of your rules was refused by the one and allowed by the other.
+  The vote now screens the same list, and never fetches your team's rules, so
+  an offline decision still makes no network call. A list that loads is kept
+  for the process (`load_client_policy_rules(force_refresh=True)` reloads it).
+  Offline, text matching a `high` or `critical` rule of yours is now `deny`
+  where it was `allow`; a `low` or `medium` match is listed on the policy vote
+  and leaves the outcome as it was. Rules that cannot be loaded (a missing file,
+  JSON that does not parse or is neither a list nor `{"rules": [...]}`) make the
+  vote `deny`, carrying the error, where `screen_client_policy()` raises.
+  Online, the platform decides against your team's rules, and the local ones
+  are not sent.
+
+
+- **A policy bundle can move the two tool-call ceilings per tool.**
+  `max_arg_depth` and `max_arg_keys` beside a tool's `required_args` in
+  `guard_config.tool_contracts` set that tool's ceilings; under `"*"` they set
+  the bundle's, and a tool's own value wins. Either direction: a tool handed a
+  manifest gets more room, and a bundle whose tools all take flat arguments can
+  pin them tighter than the defaults. A value that is not a whole number above
+  zero leaves the default in force, and neither can be set above depth 64 or
+  2000 keys, so the ceilings are adjustable and not removable. A ceiling
+  finding now names the value that applied.
+
 ## 0.6.30
 
 ### Fixed

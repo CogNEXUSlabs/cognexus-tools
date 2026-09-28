@@ -46,6 +46,11 @@
 #   The audit hash encodes with surrogatepass, and the fail-closed handler
 #   in detect() cannot re-raise. The strict UTF-8 audit hash used to raise
 #   UnicodeEncodeError on such text, from inside that handler as well.
+#   markdown_delimiter_lines_as_separators() is CogNEXUS's: the engine and the
+#   SDK's offline decide() read a model_output reply that is not JSON through
+#   it, so a line of only ---, ### or a code fence is a delimiter finding
+#   there only when the next line opens with a chat role's label (SYSTEM:).
+#   The delimiter patterns themselves are upstream's.
 #   Provenance and drift detail: docs/third-party/agent-governance-toolkit.md
 #
 """Prompt Injection Detection — OWASP LLM01 / ASI01.
@@ -760,6 +765,100 @@ def _over_views(
                 seen.add(finding)
                 findings.append(finding)
     return findings
+
+
+# A line of only a Markdown delimiter, as written: three or more "-" or "#", or
+# a code fence (three backticks), then nothing but whitespace. These are the
+# lines the ^-anchored patterns in _DELIMITER_PATTERNS match; its other
+# patterns (END SYSTEM, chat-template tokens) do not take a line of their own.
+_MARKDOWN_DELIMITER_LINE_RE: re.Pattern[str] = re.compile(
+    r"^(?:-{3,}|#{3,}|```)[^\S\n]*$", re.MULTILINE,
+)
+
+# A line that opens a chat turn: a chat role's name (OpenAI's system,
+# developer, user and assistant; Anthropic's Human and Assistant) as a label,
+# followed by a colon. Heading and quote marks, each with any spaces after it,
+# and emphasis marks may come before the name, and emphasis marks after it:
+# "SYSTEM:", "**User:**", "**System**:", "### Assistant:", "> Human:".
+_TURN_LABEL_RE: re.Pattern[str] = re.compile(
+    r"[^\S\n]*(?:[#>][^\S\n]*|[*_])*"
+    r"(?:system|developer|user|assistant|human)"
+    r"[*_]*[^\S\n]*:",
+    re.IGNORECASE,
+)
+
+# A line break and the blank lines after it (spaces, tabs and other whitespace).
+_LINE_BREAKS_RE: re.Pattern[str] = re.compile(r"\n(?:[^\S\n]*\n)*")
+
+# Control characters that are not whitespace. Like the default-ignorable code
+# points (_INVISIBLE_RE, below) they render as nothing.
+_DROP_CONTROLS = dict.fromkeys(
+    (*range(0x00, 0x09), *range(0x0E, 0x1C), *range(0x7F, 0x85), *range(0x86, 0xA0)),
+)
+
+
+def _opens_a_turn(text: str, end: int) -> bool:
+    """Whether the first line after *end* that holds anything opens a chat turn.
+
+    *end* is where a line of *text* ends. Each line is read as the literal
+    checks read it (:func:`_normalise_for_scan`), and without the characters
+    they keep that render as nothing: default-ignorable code points (bidi
+    controls and marks, variation selectors, fillers) and control characters.
+    So a line of only such characters holds nothing, and a label with one
+    before or inside it, in compatibility forms or in tag characters still
+    opens a turn.
+    """
+    while end < len(text):
+        start = _LINE_BREAKS_RE.match(text, end).end()
+        end = text.find("\n", start)
+        if end < 0:
+            end = len(text)
+        line = text[start:end]
+        if line.isascii():
+            views: tuple[str, ...] = (line.translate(_DROP_CONTROLS),)
+        else:
+            views = tuple(_INVISIBLE_RE.sub("", view).translate(_DROP_CONTROLS)
+                          for view in _normalise_for_scan(line).views)
+        if any(view.strip() for view in views):
+            return any(_TURN_LABEL_RE.match(view) for view in views)
+    return False
+
+
+def markdown_delimiter_lines_as_separators(text: str) -> str:
+    """*text* with each Markdown delimiter line that opens no turn written as ``;``.
+
+    A line of only three or more ``-`` or ``#``, or of only a code fence, is
+    what the ``^``-anchored delimiter patterns match, and in a model's reply it
+    is Markdown: the fence that closes a code block, a horizontal rule. The
+    engine and offline ``decide()`` read a ``model_output`` reply that is not
+    JSON through this function, so each such line reads as the ``;`` line the
+    envelope's prompt reading puts between strings. It is no delimiter
+    finding, and the words on either side are still not read as one phrase.
+
+    A delimiter line stays when the next line that holds anything, read as the
+    literal checks read it, opens with a chat role's label (``SYSTEM:``,
+    ``**User:**``, ``> Assistant:``). That is a turn written into the text, the
+    role break the patterns are there for, and they still report it.
+    Chat-template markers and ``END SYSTEM`` / ``BEGIN USER`` do not take a
+    line of their own and are read as before. A line that reads as a delimiter
+    line only once normalised (fullwidth dashes, an invisible character between
+    them) is left as it is, with every character in it.
+
+    Each line is read at most once: a line after a delimiter line is read only
+    until one that holds anything, and a delimiter line holds something.
+    """
+    parts: list[str] = []
+    kept = 0
+    for match in _MARKDOWN_DELIMITER_LINE_RE.finditer(text):
+        if not _opens_a_turn(text, match.end()):
+            parts.append(text[kept:match.start()])
+            parts.append(";")
+            kept = match.end()
+    if not parts:
+        return text
+    parts.append(text[kept:])
+    return "".join(parts)
+
 
 # Base64 detection: 20+ chars of valid base64 alphabet
 _BASE64_PATTERN: re.Pattern[str] = re.compile(

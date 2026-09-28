@@ -13,11 +13,22 @@ aliases.) Beyond shape, a bundle may pin per-tool contracts in
 
     "tool_contracts": {
         "send_email": {"required_args": ["to"], "allowed_args": ["to", "subject", "body"]},
-        "*": {"deny_unknown_tools": true}
+        "apply_manifest": {"max_arg_depth": 48},
+        "*": {"deny_unknown_tools": true, "max_arg_keys": 64}
     }
 
+``max_arg_depth`` and ``max_arg_keys`` move the structural ceilings
+(:data:`MAX_ARG_DEPTH`, :data:`MAX_ARG_KEYS`) for one tool, or under ``"*"``
+for every tool in the bundle: a tool whose arguments are a manifest or a query
+DSL can be given the room it needs without loosening the rest, and a bundle
+whose tools all take flat arguments can pin them tighter than the defaults. A
+tool's own value wins over ``"*"``; anything that is not a whole number above
+zero leaves the default in force, and neither can be set wider than
+:data:`MAX_CONFIGURED_ARG_DEPTH` / :data:`MAX_CONFIGURED_ARG_KEYS`.
+
 Findings never quote argument *values* (they may carry payload data) — only
-tool names and argument key names.
+tool names and argument key names. A ceiling finding names the ceiling that
+applied, which is the bundle's where one is set.
 
 The second half of the module lets the regex screens read a tool call the way
 its tool does (:func:`screen_tool_call_action`,
@@ -90,11 +101,34 @@ __all__ = [
 _NAME_KEYS = ("tool", "name", "function", "tool_name")
 _ARG_KEYS = ("arguments", "args", "params", "parameters", "input")
 
-#: Structural ceilings — a tool call deeper/wider than this is not a tool
+#: Structural ceilings — a tool call deeper or wider than this is not a tool
 #: call, it is a payload smuggled through the tool-call channel.
+#:
+#: Set against the shapes real tools are handed, measured 26 September 2026:
+#: the deepest honest argument object nests 14 levels (a search query DSL; an
+#: orchestration manifest nests 10, a JSON Schema for another tool 11), and the
+#: widest single object in any of them holds 6 keys. So the depth ceiling
+#: leaves better than twice the deepest honest shape, and the key ceiling
+#: counts the keys of *one object*, where a thousand-key object is the smuggled
+#: shape — a dictionary or a document handed over as an argument object —
+#: rather than the keys at every level added together, which an itemised
+#: invoice or a spreadsheet append exceeds by being itemised.
+#:
+#: What bounds a call's total size is elsewhere and unchanged: the payload byte
+#: caps, and the coverage ceiling of the screens that read it
+#: (:data:`MAX_SCREENED_STRINGS` — a call carrying more strings than are
+#: screened one at a time says so in its own finding). Nesting deep enough to
+#: exhaust a parser fails closed in :func:`inspect_tool_call` whatever these
+#: are set to.
 MAX_CALLS = 20
-MAX_ARG_DEPTH = 8
+MAX_ARG_DEPTH = 32
 MAX_ARG_KEYS = 200
+
+#: A bundle may set its own ceilings per tool (see the module docstring),
+#: tighter or wider, but no wider than these: a tenant cannot switch a
+#: structural guard off, so what the ceilings claim holds under every bundle.
+MAX_CONFIGURED_ARG_DEPTH = 64
+MAX_CONFIGURED_ARG_KEYS = 2_000
 
 
 @dataclass
@@ -178,16 +212,53 @@ def _depth(obj: Any, limit: int = MAX_ARG_DEPTH) -> int:
     return deepest
 
 
-def _count_keys(obj: Any) -> int:
-    """Total dict keys at every nesting level of ``obj`` (iterative)."""
-    total = 0
+def _widest_object(obj: Any) -> int:
+    """Keys in the widest single dict at any nesting level of ``obj`` (iterative).
+
+    Not the keys at every level added together: a batch of narrow rows — an
+    invoice's lines, a spreadsheet append — is the shape a real tool is handed,
+    and adding its rows up is what failed it. One object carrying thousands of
+    keys is the shape that is a dictionary rather than an argument list.
+    """
+    widest = 0
     stack: List[Any] = [obj]
     while stack:
         node = stack.pop()
         if isinstance(node, dict):
-            total += len(node)
+            widest = max(widest, len(node))
         stack.extend(_children(node))
-    return total
+    return widest
+
+
+def _configured_ceiling(value: Any, default: int, hard_max: int) -> int:
+    """*value* as a ceiling: the default unless it is a whole number above zero.
+
+    Clamped to *hard_max*. ``bool`` is an ``int`` in Python, and ``true`` in a
+    bundle is a typo for a ceiling rather than the ceiling 1, so it is ignored
+    with every other unusable value.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return default
+    return min(value, hard_max)
+
+
+def _ceilings(contracts: Dict[str, Any], name: str) -> Tuple[int, int]:
+    """The ``(depth, keys)`` ceilings in force for the tool *name*.
+
+    A tool's own contract wins over the ``"*"`` entry, which wins over the
+    module defaults. A bundle may tighten as well as widen; a value wider than
+    the hard maximum is clamped, so a bundle written before a maximum existed
+    cannot leave a ceiling switched off.
+    """
+    depth, keys = MAX_ARG_DEPTH, MAX_ARG_KEYS
+    for source in (contracts.get("*"), contracts.get(name)):
+        if not isinstance(source, dict):
+            continue
+        depth = _configured_ceiling(
+            source.get("max_arg_depth"), depth, MAX_CONFIGURED_ARG_DEPTH)
+        keys = _configured_ceiling(
+            source.get("max_arg_keys"), keys, MAX_CONFIGURED_ARG_KEYS)
+    return depth, keys
 
 
 def inspect_tool_call(
@@ -269,11 +340,13 @@ def _inspect(payload: str, contracts: Optional[Dict[str, Any]]) -> ContractRepor
             continue
         args = args or {}
 
-        if _depth(args) > MAX_ARG_DEPTH:
-            findings.append(f"call[{i}] '{name}': argument nesting exceeds depth {MAX_ARG_DEPTH}")
+        depth_limit, keys_limit = _ceilings(contracts, name)
+        if _depth(args, depth_limit) > depth_limit:
+            findings.append(f"call[{i}] '{name}': argument nesting exceeds depth {depth_limit}")
             _bump("high")
-        if _count_keys(args) > MAX_ARG_KEYS:
-            findings.append(f"call[{i}] '{name}': more than {MAX_ARG_KEYS} argument keys")
+        if _widest_object(args) > keys_limit:
+            findings.append(
+                f"call[{i}] '{name}': more than {keys_limit} keys in one argument object")
             _bump("high")
 
         contract = contracts.get(name)

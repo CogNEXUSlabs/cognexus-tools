@@ -36,7 +36,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Collection, Optional
 
 from artzain.events import record_policy_enforcement_event, record_prompt_defense_event
@@ -687,8 +687,90 @@ def maybe_log_prompt_defense(
 
 
 _policy_evaluator: Optional[PolicyEnforcementEvaluator] = None
-_policy_rules_cache: Optional[list[ClientPolicyRule]] = None
 _policy_rules_lock = threading.Lock()
+_log = logging.getLogger("artzain.security")
+
+
+@dataclass(frozen=True)
+class _PolicyRules:
+    """What :func:`load_client_policy_rules` holds, replaced whole under its lock.
+
+    ``good`` is the last successful load, ``(clock reading, rules)``, and is
+    served as it is while no fetch is failing. ``source`` is the host and key
+    those rules were fetched with (``None`` for a local source or no key), so a
+    fetch that fails for someone else is not answered with them, and
+    ``generation`` is ``cloud._credentials_generation`` when the state was
+    written: after :func:`~artzain.cloud.configure` changes the key or host, a
+    state written before is not served at all.
+
+    While fetches fail, ``failures`` counts the failures in a row and
+    ``retry_at`` is the clock reading before which no fetch is made again,
+    whoever it is for. ``tried`` is the host and key the last one was made
+    with: a run is the failures in a row for one of those, ``failing_since``
+    is when its first ended and ``warned`` holds the reasons it has already
+    logged at WARNING.
+
+    ``source_origin`` and ``tried_origin`` say where the key and the host of
+    ``source`` and ``tried`` came from: the ``(key_source, base_source)``
+    labels of their :class:`~artzain.credentials.ResolvedCredentials`. While
+    the credentials profile cannot be read, they tell whether what is set
+    above it now still gives the same key and host.
+    """
+
+    good: Optional[tuple[float, list[ClientPolicyRule]]]
+    source: Optional[tuple[str, str]] = field(default=None, repr=False)
+    generation: int = 0
+    tried: Optional[tuple[str, str]] = field(default=None, repr=False)
+    failures: int = 0
+    failing_since: float = 0.0
+    retry_at: float = 0.0
+    warned: frozenset[str] = frozenset()
+    source_origin: Optional[tuple[str, str]] = None
+    tried_origin: Optional[tuple[str, str]] = None
+
+
+#: ``None`` until the first load. One value rather than several, so a caller
+#: that reads it without the lock sees a whole state.
+_policy_rules_cache: Optional[_PolicyRules] = None
+
+#: A failed fetch is made again after this many seconds, doubled for each
+#: failure in a row up to ``_POLICY_RULES_RETRY_MAX_SECONDS``: soon enough to
+#: pick up the end of a blip, seldom enough that a process screening in a loop
+#: does not hammer the API while the fetch fails.
+_POLICY_RULES_RETRY_SECONDS = 1.0
+_POLICY_RULES_RETRY_MAX_SECONDS = 60.0
+
+#: How long a failing fetch may be answered from the rules loaded last: the
+#: platform's own bound on a last-known-good copy, under the same setting.
+_DEFAULT_LAST_GOOD_GRACE_SECONDS = 300.0
+
+
+def _last_good_grace_seconds() -> float:
+    raw = (os.environ.get("COGNEXUS_BUNDLE_LAST_GOOD_GRACE_SECONDS") or "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_LAST_GOOD_GRACE_SECONDS
+    return value if value > 0 else _DEFAULT_LAST_GOOD_GRACE_SECONDS
+
+
+def _policy_rules_retry_delay(failures: int) -> float:
+    # The exponent is capped too, so a long run of failures cannot overflow it.
+    return min(
+        _POLICY_RULES_RETRY_MAX_SECONDS,
+        _POLICY_RULES_RETRY_SECONDS * 2 ** min(max(failures - 1, 0), 16),
+    )
+
+
+def _credentials_generation() -> int:
+    from artzain import cloud
+
+    return cloud._credentials_generation
+
+
+def _is_current(state: Optional[_PolicyRules]) -> bool:
+    """*state* was written under the key and host :func:`configure` set now."""
+    return state is not None and state.generation == _credentials_generation()
 
 
 def _get_policy_evaluator() -> PolicyEnforcementEvaluator:
@@ -740,44 +822,407 @@ def load_client_policy_rules(*, force_refresh: bool = False) -> list[ClientPolic
 
     1. ``COGNEXUS_POLICY_RULES_JSON`` — inline JSON array or ``{"rules": [...]}``
     2. ``COGNEXUS_POLICY_RULES_PATH`` — path to a JSON file with the same shape
-    3. :func:`~artzain.cloud.fetch_client_policy_rules` when an API key is set
+    3. ``GET /api/policy-enforcement/rules`` when an API key is set (the rows
+       :func:`~artzain.cloud.fetch_client_policy_rules` returns)
 
     The built-in conduct rules are merged in either way
     (:func:`_with_conduct_rules`), so the returned list is the list that is
-    screened against.
+    screened against, by :func:`screen_client_policy` and, without step 3, by
+    an offline :func:`artzain.decide`.
 
-    Results are cached in-process unless *force_refresh* is true.
+    A list that loads is cached in-process unless *force_refresh* is true, or
+    until :func:`~artzain.cloud.configure` changes the API key or host in use:
+    the next call then loads again. A load that raises caches nothing, so a
+    list loaded before stays in use. With nothing configured and no API key,
+    the conduct rules are returned and nothing is cached (a reload drops the
+    list cached before), so a key configured later in the process fetches the
+    tenant's rules.
+
+    A fetch that fails is not a result either: it is never cached, and a later
+    call makes it again once a short backoff has passed (doubling from a second
+    up to a minute, and kept by *force_refresh* too, so a loop does not hammer
+    the API). The call that makes it waits for it, as a first load does; other
+    callers are served meanwhile. Until a fetch succeeds, the rules loaded last
+    are served, for up to ``COGNEXUS_BUNDLE_LAST_GOOD_GRACE_SECONDS`` (default
+    300) from the first failure, and only for the API key and host they were
+    fetched with (one changed in the environment or the credentials profile
+    rather than with ``configure()`` is not noticed until a fetch is next
+    made); otherwise, or with nothing loaded yet, the built-in conduct rules
+    alone. An answer that holds no rules is still an answer, and is cached.
     """
+    return _load_policy_rules(force_refresh=force_refresh, fetch=True)
+
+
+def _offline_policy_rules() -> list[ClientPolicyRule]:
+    """What an offline :func:`artzain.decide` screens: the list
+    :func:`load_client_policy_rules` loads, without its step 3.
+
+    A decision is offline because no key was configured when it began, and a
+    key configured since must not turn its policy vote into a fetch: an offline
+    decision makes no network call. While a fetch is failing, it screens what
+    a failed fetch serves (:func:`_rules_while_failing`).
+    """
+    return _load_policy_rules(force_refresh=False, fetch=False)
+
+
+def _load_policy_rules(*, force_refresh: bool, fetch: bool) -> list[ClientPolicyRule]:
     global _policy_rules_cache
-    if not force_refresh and _policy_rules_cache is not None:
-        return list(_policy_rules_cache)
+    # Read once, outside the lock: a reload with nothing to load sets the
+    # cache back to None, and a second read could see that after the first
+    # saw a state.
+    state = _policy_rules_cache
+    if state is not None and not fetch and not force_refresh and _is_current(state):
+        # Offline: whatever is loaded, and never a fetch. A state from before
+        # configure() changed the key or host is not the list the online
+        # loader would load now, so it is read as nothing loaded.
+        if state.failures:
+            return _rules_while_failing(state, time.monotonic())
+        if state.good is not None:
+            return list(state.good[1])
+    if (
+        state is not None
+        and state.good is not None
+        and not state.failures
+        and not force_refresh
+        and _is_current(state)
+    ):
+        return list(state.good[1])
+
+    raw_json = (os.environ.get("COGNEXUS_POLICY_RULES_JSON") or "").strip()
+    path = (os.environ.get("COGNEXUS_POLICY_RULES_PATH") or "").strip()
+    if not raw_json and not path:
+        if not fetch:
+            # Offline, with nothing configured: the conduct rules alone.
+            return _with_conduct_rules([])
+        return _load_fetched_policy_rules(force_refresh=force_refresh)
 
     with _policy_rules_lock:
-        if not force_refresh and _policy_rules_cache is not None:
-            return list(_policy_rules_cache)
-
-        raw_json = (os.environ.get("COGNEXUS_POLICY_RULES_JSON") or "").strip()
-        path = (os.environ.get("COGNEXUS_POLICY_RULES_PATH") or "").strip()
-        rules: list[ClientPolicyRule] = []
+        state = _policy_rules_cache
+        if (
+            state is not None
+            and state.good is not None
+            and not state.failures
+            and not force_refresh
+            and (not fetch or _is_current(state))
+        ):
+            return list(state.good[1])
+        generation = _credentials_generation()
 
         if raw_json:
             rules = parse_rules_json(raw_json)
-        elif path:
+        else:
             from pathlib import Path
 
             rules = parse_rules_json(Path(path).read_text(encoding="utf-8"))
-        else:
-            try:
-                from artzain.cloud import fetch_client_policy_rules
-
-                rows = fetch_client_policy_rules()
-                rules = [ClientPolicyRule.from_dict(r) for r in rows if isinstance(r, dict)]
-            except Exception:
-                rules = []
 
         rules = _with_conduct_rules(rules)
-        _policy_rules_cache = rules
+        _policy_rules_cache = _PolicyRules(good=(time.monotonic(), rules), generation=generation)
         return list(rules)
+
+
+def _load_fetched_policy_rules(*, force_refresh: bool) -> list[ClientPolicyRule]:
+    """:func:`load_client_policy_rules` from ``GET /api/policy-enforcement/rules``."""
+    global _policy_rules_cache
+    state = _policy_rules_cache
+    current = _is_current(state)
+    if state is not None and state.failures and (current or not force_refresh):
+        # A fetch has failed. Until it is due again, or while another caller is
+        # making it, serve what a failed fetch serves rather than wait for one,
+        # which can take its whole timeout. After configure() has changed an
+        # override, whose state this is gets settled under the lock.
+        now = time.monotonic()
+        if current and now < state.retry_at:
+            return _rules_while_failing(state, now)
+        if not _policy_rules_lock.acquire(blocking=False):
+            return _rules_while_failing(state, now) if current else _with_conduct_rules([])
+    else:
+        # Nothing to serve yet, a refresh asked for, or overrides that
+        # configure() changed since: wait for a fetch in flight, as a first load
+        # does.
+        _policy_rules_lock.acquire()
+    try:
+        from artzain import cloud, credentials
+
+        # Read before the credentials are, so a configure() in between leaves
+        # this state stale rather than passing someone else's rules as current.
+        generation = cloud._credentials_generation
+        try:
+            creds: Optional[credentials.ResolvedCredentials] = cloud._resolve()
+        except credentials._ProfileUnreadable:
+            # The profile holds the key, or the host a key set elsewhere may
+            # go to: no fetch can be made, and that is a failed fetch, not a
+            # key cleared. What configure() and the environment set can
+            # still be read.
+            return _policy_rules_profile_unreadable(
+                generation,
+                credentials._key_set_above_profile(cloud._override_key)[0],
+                credentials._named_host(cloud._override_base)[0],
+            )
+        except credentials.CredentialConflictError as exc:
+            cloud._warn_conflict(exc)
+            creds = None
+        if creds is not None and not creds.api_key:
+            # Nothing to fetch the tenant's rules with. Not cached, and a
+            # reload drops what was, so that a key configured afterwards is
+            # used and one cleared since is not.
+            _policy_rules_cache = None
+            return _with_conduct_rules([])
+        source = (creds.base_url, creds.api_key) if creds is not None else None
+        origin = (creds.key_source, creds.base_source) if creds is not None else None
+        state = _policy_rules_cache
+        if (
+            state is not None
+            and state.generation != generation
+            and source == (state.tried if state.failures else state.source)
+        ):
+            # configure() changed an override but not the key and host this
+            # state is for: it is still theirs, its copy and its wait included.
+            # Where they come from is what this resolution says now.
+            state = replace(
+                state,
+                generation=generation,
+                source_origin=origin if state.source == source else state.source_origin,
+                tried_origin=origin if state.tried == source else state.tried_origin,
+            )
+            _policy_rules_cache = state
+        if state is not None:
+            current = state.generation == generation
+            if current and state.good is not None and not state.failures and not force_refresh:
+                return list(state.good[1])
+            now = time.monotonic()
+            if state.failures and now < state.retry_at:
+                # The wait holds whoever the next fetch is for, so switching
+                # keys cannot hammer the API; another key's copy is not served.
+                return _rules_while_failing(state, now) if current else _with_conduct_rules([])
+
+        continuing = _continues_run(state, source)
+        try:
+            # A retry within a run is logged at DEBUG: the run is reported already.
+            rows = cloud._fetch_policy_rules(creds, quiet=continuing)
+            if not all(isinstance(r, dict) for r in rows):
+                raise cloud._PolicyRulesFetchFailed("the answer holds a row that is not a rule")
+            rules = _with_conduct_rules([ClientPolicyRule.from_dict(r) for r in rows])
+        except cloud._PolicyRulesFetchFailed as exc:  # a failed fetch is not a tenant without rules
+            return _policy_rules_fetch_failed(state, str(exc), source, generation, origin=origin)
+        except Exception as exc:  # nor is an answer that does not read as rules
+            return _policy_rules_fetch_failed(
+                state, type(exc).__name__, source, generation, origin=origin
+            )
+
+        now = time.monotonic()
+        _policy_rules_cache = _PolicyRules(
+            good=(now, rules), source=source, generation=generation, source_origin=origin
+        )
+        if continuing and state is not None:
+            _log.info(
+                "policy rules fetched again after %d failed attempts over %.0fs",
+                state.failures,
+                now - state.failing_since,
+            )
+        return list(rules)
+    finally:
+        _policy_rules_lock.release()
+
+
+def _policy_rules_profile_unreadable(
+    generation: int, key: Optional[str], host: Optional[str]
+) -> list[ClientPolicyRule]:
+    """A fetch not made because the credentials profile could not be read.
+
+    Called under the lock, with the credentials generation read before the
+    profile was, and the API key and host set above the profile (by
+    :func:`~artzain.cloud.configure` or the environment; ``None`` for each one
+    unset). It fails like any fetch: its backoff holds the next attempt back,
+    and the rules fetched last are served within the window, for the key and
+    host the state was for, while what can still be read says they are the
+    ones in use (:func:`_in_use_while_unread`).
+    """
+    state = _policy_rules_cache
+    now = time.monotonic()
+    current = state is not None and state.generation == generation
+    if state is not None and state.failures and now < state.retry_at:
+        # The wait holds whoever the next fetch is for, as for any failure.
+        return _rules_while_failing(state, now) if current else _with_conduct_rules([])
+    if state is None:
+        held, origin = None, None
+    elif state.failures:
+        held, origin = state.tried, state.tried_origin
+    else:
+        held, origin = state.source, state.source_origin
+    in_use = _in_use_while_unread(held, origin, key, host)
+    return _policy_rules_fetch_failed(
+        state,
+        "the credentials profile could not be read",
+        held if in_use else None,
+        generation,
+        origin=origin if in_use else None,
+        unknown=in_use is None,
+    )
+
+
+def _in_use_while_unread(
+    held: Optional[tuple[str, str]],
+    origin: Optional[tuple[str, str]],
+    key: Optional[str],
+    host: Optional[str],
+) -> Optional[bool]:
+    """Whether *held*, the host and key a state is for, are still the ones in
+    use while the credentials profile cannot be read: ``True``, ``False``, or
+    ``None`` when that cannot be told.
+
+    *origin* says where they came from (see :class:`_PolicyRules`); *key* and
+    *host* are what is set above the profile now. A key set above it is the key
+    in use, and a host set above it names the host. One not set leaves the
+    profile's to decide, which is taken to be as it was when the held key or
+    host came from the profile or the default then too, and cannot be told
+    when it was set above the profile then. That is what serves the rules
+    fetched last while the profile cannot be read; a profile rewritten since by
+    another login is not noticed until a fetch can be made again, as a change
+    to a readable profile is not noticed until the next fetch either.
+    """
+    from artzain import credentials
+
+    if held is None or origin is None:
+        return False
+    key_source, base_source = origin
+    if key is not None:
+        key_same: Optional[bool] = key == held[1]
+    else:
+        key_same = True if key_source == credentials.PROFILE_SOURCE else None
+    if host is not None:
+        host_same: Optional[bool] = credentials._same_host(host, held[0])
+    else:
+        from_profile = (credentials.PROFILE_SOURCE, credentials._DEFAULT_BASE_SOURCE)
+        host_same = True if base_source in from_profile else None
+    if key_same is False or host_same is False:
+        return False
+    if key_same is None or host_same is None:
+        return None
+    return True
+
+
+def _continues_run(state: Optional[_PolicyRules], source: Optional[tuple[str, str]]) -> bool:
+    """A fetch with *source* is the next of *state*'s run of failures.
+
+    A run is the failures in a row for one key and host: after a switch the
+    first failure starts a run of its own, logged at WARNING again. The wait
+    before the next fetch keeps growing across the switch.
+    """
+    return state is not None and state.failures > 0 and state.tried == source
+
+
+def _policy_rules_fetch_failed(
+    state: Optional[_PolicyRules],
+    why: str,
+    source: Optional[tuple[str, str]],
+    generation: int,
+    *,
+    origin: Optional[tuple[str, str]] = None,
+    unknown: bool = False,
+) -> list[ClientPolicyRule]:
+    """Record a failed fetch as a failure, never as an answer, and serve for it.
+
+    Called under the lock, with the state the fetch was made from, the host and
+    key it was made with (*source*, from credentials that came from *origin*)
+    and the credentials generation read before them. The rules loaded last stay
+    in the state for :func:`_rules_while_failing` only while they were fetched
+    with the same host and key, and until the window has passed. The state is
+    recorded before anything is logged, so a log handler that raises cannot
+    lose the backoff. *unknown*: *source* is ``None`` because which host and
+    key are in use cannot be told, which the warning says rather than that
+    they are others.
+    """
+    global _policy_rules_cache
+    now = time.monotonic()
+    grace = _last_good_grace_seconds()
+    continuing = _continues_run(state, source)
+    # The wait grows with every failure in a row, whoever the fetch was for:
+    # the platform is as down for one key as for another. The run, which the
+    # warnings and the copy's window belong to, is one key and host's.
+    failures = state.failures + 1 if state is not None and state.failures else 1
+    if continuing and state is not None:
+        failing_since, warned = state.failing_since, state.warned
+    else:
+        failing_since, warned = now, frozenset()
+    held = state.good if state is not None else None
+    # A copy loaded from a local source, or with no key, is no tenant's rules.
+    held_tenant = held is not None and state is not None and state.source is not None
+    same_source = held_tenant and state is not None and state.source == source
+    good = held if same_source and now - failing_since <= grace else None
+    kept = good is not None and state is not None
+    failed = _PolicyRules(
+        good=good,
+        source=state.source if kept and state is not None else None,
+        generation=generation,
+        tried=source,
+        failures=failures,
+        failing_since=failing_since,
+        retry_at=now + _policy_rules_retry_delay(failures),
+        warned=warned | {why},
+        source_origin=state.source_origin if kept and state is not None else None,
+        tried_origin=origin,
+    )
+    _policy_rules_cache = failed
+
+    # A warning when a run starts, when what it serves changes, and once for
+    # each way it fails; the retries in between log their failures at DEBUG.
+    if good is not None and not continuing:
+        _log.warning(
+            "policy rules fetch failed (%s); serving the rules fetched %.0fs ago for up "
+            "to %.0fs while the fetch is retried",
+            why,
+            now - good[0],
+            grace,
+        )
+    elif held_tenant and good is None and not same_source and unknown:
+        _log.warning(
+            "policy rules fetch failed (%s); which API key and host are in use cannot "
+            "be told, so the rules loaded last are not served: screening on the "
+            "built-in conduct rules alone until a fetch succeeds",
+            why,
+        )
+    elif held_tenant and good is None and not same_source:
+        _log.warning(
+            "policy rules fetch failed (%s); the rules loaded last were fetched with "
+            "another API key or host, so screening on the built-in conduct rules alone "
+            "until a fetch succeeds",
+            why,
+        )
+    elif held_tenant and good is None:
+        _log.warning(
+            "policy rules still cannot be fetched (%s), %.0fs after the first failure; "
+            "screening on the built-in conduct rules alone until a fetch succeeds",
+            why,
+            now - failing_since,
+        )
+    elif not continuing:
+        _log.warning(
+            "policy rules fetch failed (%s); screening on the built-in conduct rules "
+            "alone until a fetch succeeds",
+            why,
+        )
+    elif why not in warned:
+        _log.warning("policy rules fetch still failing, now (%s)", why)
+    return _rules_while_failing(failed, now)
+
+
+def _rules_while_failing(state: _PolicyRules, now: float) -> list[ClientPolicyRule]:
+    """The rules a failing fetch is answered with.
+
+    The rules loaded last, while the fetch has been failing for no longer than
+    the platform bounds its own last-known-good copy
+    (``COGNEXUS_BUNDLE_LAST_GOOD_GRACE_SECONDS``); after that, with nothing
+    loaded, or when the failed fetch was for another host or key than those
+    rules were fetched with (:func:`_policy_rules_fetch_failed` keeps them only
+    then), the built-in conduct rules alone. The platform counts its window
+    from its last successful read, which it makes at least once a minute for a
+    tenant in use; this process never re-reads the rules it cached, so their
+    age says nothing about an outage, and the window counts from the first
+    failed fetch instead.
+    """
+    if state.good is not None and now - state.failing_since <= _last_good_grace_seconds():
+        return list(state.good[1])
+    return _with_conduct_rules([])
 
 
 def should_block_policy(report: PolicyEnforcementReport) -> bool:

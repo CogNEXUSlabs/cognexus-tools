@@ -34,6 +34,39 @@ def _restore_cloud_configure():
     cloud._override_key, cloud._override_base = saved
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_policy_rules(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Offline ``decide()`` and ``screen_client_policy()`` screen the rules the
+    environment configures, and a list that loads is cached for the process: a
+    developer's ``COGNEXUS_POLICY_RULES_*`` must not reach the suite, nor one
+    test's rules the next test."""
+    monkeypatch.delenv("COGNEXUS_POLICY_RULES_JSON", raising=False)
+    monkeypatch.delenv("COGNEXUS_POLICY_RULES_PATH", raising=False)
+    from artzain import _helpers
+
+    monkeypatch.setattr(_helpers, "_policy_rules_cache", None)
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_credentials_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    """The developer's own credentials profile must not reach the suite.
+
+    When neither ``configure()`` nor the environment sets a key, ``decide()``,
+    the event posts and the other calls to the API use the key in the
+    credentials profile, so on a machine that ran ``artzain login`` a test
+    meant to run without a key would send its payload to the API under that
+    key; and a profile held by another program refuses every request. Each
+    test gets a profile path of its own that names a file that does not
+    exist, in place of ``~/.artzain/credentials.toml`` or the file a
+    developer's ``COGNEXUS_CREDENTIALS_PATH`` names; a test that wants a
+    profile sets ``COGNEXUS_CREDENTIALS_PATH`` itself. A credential conflict
+    is warned of once per process, so each test starts with none warned of."""
+    monkeypatch.setenv("COGNEXUS_CREDENTIALS_PATH", str(tmp_path / "no-credentials-profile.toml"))
+    from artzain import cloud
+
+    monkeypatch.setattr(cloud, "_conflicts_warned", set())
+
+
 @pytest.fixture
 def artzain_sync_cloud_threads(monkeypatch: pytest.MonkeyPatch) -> None:
     """Run :func:`artzain.cloud.post_sdk_event` HTTP delivery synchronously (tests only).

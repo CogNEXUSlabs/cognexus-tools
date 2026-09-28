@@ -10,12 +10,18 @@ zero-mandatory-dependency guarantee.
 Key management
 --------------
 ``COGNEXUS_AUDIT_HMAC_KEY``
-    Hex-encoded 32-byte (64 hex char) HMAC signing key.
+    Hex-encoded 32-byte (64 hex char) HMAC signing key. It is read once per
+    process, when the first signature is made or checked; a value set after
+    that has no effect on this process.
 
-    If unset, a random key is generated once per process.  This means the
-    signature is useful for detecting in-session tampering but will **not**
-    survive a process restart.  For persistent cross-restart verification,
-    set this variable to a stable secret and store the key securely.
+    If unset, a random key is generated for this process alone. Every chained
+    entry is signed and :func:`verify_chain` checks every signature, so a log
+    written that way verifies only in the process that wrote it: any other
+    process fails it at the first entry with ``HMAC mismatch``. Give the
+    writer and the verifier the same key for a log that survives a restart,
+    and store that key as you would any other secret. A key that is not valid
+    hex, or shorter than 16 bytes, is ignored with a warning, as if it were
+    unset.
 
 Wire format (fields added to each record)
 -----------------------------------------
@@ -270,9 +276,19 @@ class VerifyResult:
 def verify_chain(path: Path) -> VerifyResult:
     """Verify the hash chain and HMAC signatures in a JSONL audit log.
 
-    Note: HMAC verification requires the same ``COGNEXUS_AUDIT_HMAC_KEY``
-    that was used to sign the entries.  If an ephemeral key was used, only
-    hash-chain integrity (``prev_hash`` / ``entry_hash``) can be verified.
+    Every chained entry is checked in full: ``prev_hash`` and ``entry_hash``
+    have to recompute, and ``sig`` has to verify under the key this process
+    holds. A missing or mismatched signature fails the log rather than
+    leaving the hash chain to stand on its own, because anyone who can write
+    the file can recompute the chain (see the comments below).
+
+    So verification needs the same ``COGNEXUS_AUDIT_HMAC_KEY`` the writer
+    used. Without one each process signs with a random key of its own, so for
+    a log any earlier process wrote this returns ``ok=False`` with ``HMAC
+    mismatch`` at its first chained entry (``seq=1``, unless unsequenced
+    legacy lines precede it); there is no partial pass over the hashes alone.
+    Entries written before the chain began (no ``seq``) are counted without
+    being checked, and only until the first chained entry.
     """
     if not path.exists():
         return VerifyResult(ok=True, entries_checked=0)

@@ -204,7 +204,7 @@ Prompt-only safety is not enough. `artzain` adds the missing layers around the m
 | **Runtime input injection detection** | Screens user input, RAG content, and tabular payloads at request time |
 | **Destructive-action guard** | Screens *model-generated* SQL / shell / git / cloud commands for catastrophic operations before execution |
 | **Agent kill switch** | Cooperative cancellation, automatic trip on CRITICAL signals, manual operator override, pluggable persistence |
-| **Audit events** | Append-only JSONL trail for every detection — no raw text stored |
+| **Audit events** | Append-only JSONL trail for every detection, holding a SHA-256 of the input and a short preview of it (see Security notes) |
 
 ### Static-evaluator coverage
 
@@ -525,7 +525,12 @@ Clean scans are posted when an API key is present. Set
 
 ## Audit events
 
-Detections are automatically written to a JSONL file (no raw input stored):
+`screen_user_input()`, `screen_external_content()`, `screen_tabular_payload()`
+and `screen_client_policy()` write a record to a JSONL file for each non-empty
+text they screen, clean scans included unless
+`COGNEXUS_PROMPT_DEFENSE_JSONL_PASSES=0`. A record holds a SHA-256 of the input
+and a short preview of it; the Security notes section below says what the
+preview keeps:
 
 ```python
 # Events go to $COGNEXUS_PROMPT_DEFENSE_EVENTS_DIR/prompt_defense_events.jsonl
@@ -601,7 +606,23 @@ if should_block_policy(report):
     raise PermissionError("Violates organizational policy")
 ```
 
+With no API key, `decide()`'s policy vote screens the same list: your rules
+from `COGNEXUS_POLICY_RULES_JSON` or `COGNEXUS_POLICY_RULES_PATH`, beside the
+built-in conduct rules, and it never fetches any. A list that loads is kept for
+the process, and `load_client_policy_rules(force_refresh=True)` reloads it.
+Rules that cannot be loaded (a missing file, JSON that does not parse or is
+neither a list nor `{"rules": [...]}`) make that vote `deny`, carrying the
+error. With a key, the platform decides against your team's rules, and the
+local ones are not sent.
+
 Rules also appear under **Guidelines** in the dashboard after a compliance scan.
+
+`load_client_policy_rules()` caches the rules for the process, until
+`configure()` changes the API key or base URL. A fetch that fails is not cached:
+a later call fetches again after a short backoff, and until one succeeds the
+rules fetched last keep applying, for up to five minutes from the first failure
+(`COGNEXUS_BUNDLE_LAST_GOOD_GRACE_SECONDS`) and for the same API key and host;
+otherwise, or with nothing fetched yet, the built-in conduct rules alone.
 
 ---
 
@@ -612,8 +633,9 @@ Rules also appear under **Guidelines** in the dashboard after a compliance scan.
 | `COGNEXUS_API_KEY` | — | Dashboard ingest secret (`MYAPP_API_KEY` also accepted) |
 | `COGNEXUS_API_BASE_URL` | SaaS default | API origin for ``POST /api/events`` |
 | `COGNEXUS_PROMPT_DEFENSE_CLOUD_PASSES` | on when API key set | POST clean scans to the dashboard |
-| `COGNEXUS_POLICY_RULES_PATH` | — | JSON file of rules (offline / CI) |
+| `COGNEXUS_POLICY_RULES_PATH` | — | JSON file of rules for `screen_client_policy()` and offline `decide()` |
 | `COGNEXUS_POLICY_RULES_JSON` | — | Inline JSON rules (overrides path) |
+| `COGNEXUS_BUNDLE_LAST_GOOD_GRACE_SECONDS` | `300` | How long the rules fetched last keep applying while fetches fail |
 | `COGNEXUS_PROMPT_DEFENSE_EVENTS_DIR` | `/tmp` | JSONL audit file directory |
 | `COGNEXUS_PROMPT_INJECTION_LOG` | `1` | Log clean scans at DEBUG |
 | `COGNEXUS_PROMPT_INJECTION_BLOCK` | `0` | Block any injection (not just CRITICAL) |
@@ -639,7 +661,7 @@ python -m pytest tests/test_api_key_integration.py -v
 ## Security notes
 
 - All detection is **pure regex** — deterministic, zero LLM calls, zero network access, < 5 ms per input.
-- Audit records store a **SHA-256 hash** and a **96-character redacted preview** of the input. Raw user text is never written to disk.
+- Audit records store a **SHA-256 hash** of the whole input and a **redacted preview** of up to 96 characters of it: the checksum-validated identifiers (SSN, card, IBAN, UK NINO) and `key=value` secrets are masked. Text holding none of those is stored as written, so keep the events directory as sensitive as the prompts it describes.
 - The destructive-action guard and kill switch are **fail-closed** — internal exceptions escalate to `CRITICAL` so a buggy rule cannot silently allow destruction.
 - The package ships **sample rules** that cover common attack patterns. Review and extend them for your production threat model using `DetectionConfig.custom_patterns`, `DestructiveActionGuardConfig.extra_rules`, or a YAML config file loaded with `load_prompt_injection_config()`.
 
