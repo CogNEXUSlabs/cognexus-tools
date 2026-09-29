@@ -208,7 +208,7 @@ def _isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> Any:
 @pytest.fixture
 def platform(monkeypatch: pytest.MonkeyPatch) -> _Platform:
     stub = _Platform()
-    monkeypatch.setattr(cloud.urllib.request, "urlopen", stub.urlopen)
+    monkeypatch.setattr(cloud, "_urlopen", stub.urlopen)
     # The User-Agent's version lookup reads package metadata on every request,
     # which is most of what a stubbed request costs.
     monkeypatch.setattr(cloud, "_package_version", lambda: "test")

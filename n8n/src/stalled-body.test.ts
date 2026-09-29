@@ -124,6 +124,10 @@ describe("a body that stalls after the headers", () => {
     expect(deny![0]!.json.outcome).toBe("deny");
     expect(String(deny![0]!.json.reasons)).toContain("timeout");
     expect(String(deny![0]!.json.reasons)).toContain("failing closed");
+    expect(deny![0]!.json.reasons).toEqual([
+      "Decision API returned HTTP 200 but its body could not be read: " +
+        "TimeoutError, aborted when the timeout passed — failing closed",
+    ]);
   }, 3_000);
 
   it("Envelope node times out reading the body and fails closed", async () => {
@@ -139,6 +143,10 @@ describe("a body that stalls after the headers", () => {
     expect(out).toHaveLength(1);
     expect(out![0]!.json.outcome).toBe("deny");
     expect(String(out![0]!.json.error)).toContain("timeout");
+    expect(out![0]!.json.error).toBe(
+      "envelope returned HTTP 200 but its body could not be read: " +
+        "TimeoutError, aborted when the timeout passed",
+    );
   }, 3_000);
 });
 

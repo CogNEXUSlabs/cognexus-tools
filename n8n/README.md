@@ -7,7 +7,7 @@ n8n community nodes that wrap CogNEXUS **Decision** (pattern A) and
 
 | Node | What it does |
 |---|---|
-| **CogNEXUS Decision** | `POST /api/v1/decisions`. Three outputs: Allow / Review / Deny. HTTP 503 / 401 / 422 land on **Deny**. Review does **not** wait inside n8n — a human owns it in the dashboard Review Queue. Wire side effects only to Allow. |
+| **CogNEXUS Decision** | `POST /api/v1/decisions`. Three outputs: Allow / Review / Deny. HTTP 503 / 401 / 422 land on **Deny**, and so does a redirect (3xx), which is not followed. Review does **not** wait inside n8n — a human owns it in the dashboard Review Queue. Wire side effects only to Allow. |
 | **CogNEXUS Envelope** | `POST /api/v1/envelope/v1/chat/completions` with a `cnxe_…` key. Screens model traffic. It does **not** gate a later Stripe/Gmail node. |
 
 ## Request ID (Decision node)
@@ -61,4 +61,6 @@ npm ci && npm run build
 ```
 
 Credential for Decision: Header `X-Api-Key` = sandbox key from `/get-a-key`.
-**Not** a dashboard JWT. Envelope uses `Authorization: Bearer cnxe_…`.
+**Not** a dashboard JWT. Envelope uses `Authorization: Bearer cnxe_…`. Neither
+node follows a redirect, and the Decision credential's **Test** fails on one,
+naming the status: set Base URL to the address the API answers on.

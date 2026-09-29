@@ -83,10 +83,15 @@ export function routeHttpDecision(status: number, body: unknown): RoutedDecision
     if (outcome === "review") return { branch: "review", json: rec };
     if (outcome === "deny") return { branch: "deny", json: rec };
   }
+  // A redirect is not followed (fetchWithTimeout), so a 3xx lands here. Its
+  // body is the redirecting server's page, not an engine refusal: the reason
+  // names the status instead.
   const detail =
-    body && typeof body === "object" && "detail" in body
-      ? String((body as { detail: unknown }).detail)
-      : `HTTP ${status}`;
+    status >= 300 && status < 400
+      ? `HTTP ${status}, a redirect, which is not followed: check the credential's Base URL`
+      : body && typeof body === "object" && "detail" in body
+        ? String((body as { detail: unknown }).detail)
+        : `HTTP ${status}`;
   return {
     branch: "deny",
     json: {

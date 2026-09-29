@@ -3,7 +3,7 @@ import {
   DECIDE_TIMEOUT_MS,
   postDecision,
   resolveApiKey,
-  resolveBaseUrl,
+  resolveBaseUrlSetting,
   type DecisionResponse,
   type FetchLike,
 } from "./client.js";
@@ -21,7 +21,7 @@ export interface PluginConfig extends AnnounceConfig {
 /** Announce fires from the first gated call — the register hook never
  * sees plugin config, the tool path does. It is fire-and-forget: gating
  * NEVER waits on it, and its failure never blocks. Delivery is
- * attempt-once per process for successes and config refusals (4xx);
+ * attempt-once per process for successes and config refusals (3xx, 4xx);
  * TRANSIENT failures (network, 5xx, 429) re-arm so a later gated call
  * retries — a laptop whose first tool call happens offline still
  * announces once the network is back. Enroll is the same contract and
@@ -153,9 +153,11 @@ export async function handleBeforeToolCall(
   const agentDid = ctx.agentId || cfg.agentDid || "openclaw-gateway";
 
   try {
+    const base = resolveBaseUrlSetting(cfg.baseUrl);
     const decision: DecisionResponse = await postDecision({
       apiKey,
-      baseUrl: resolveBaseUrl(cfg.baseUrl),
+      baseUrl: base.url,
+      baseSource: base.source,
       action: toolName,
       target: `openclaw:tool:${toolName}`,
       payload: payloadFor(toolName, event.params),

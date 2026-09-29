@@ -21,6 +21,9 @@
 #   constrain. Evaluate deliberately.
 #   CogNEXUS also normalises the text before the regex pass (NFKC, and
 #   zero-width / soft-hyphen characters stripped) — see _normalise_for_scan.
+#   A run of non-starters longer than the UAX #15 stream-safe limit is broken
+#   first, so that normalisation stays linear. Ordinary text, and a keyword in
+#   a compatibility form or split by an invisible character, is read as before.
 #   Upstream matches the raw string, so one zero-width space inside a keyword
 #   defeats every pattern there (open-items §9.3). Text in Unicode tag
 #   characters (U+E0000-E007F) is decoded and scanned too, and its presence is
@@ -659,7 +662,9 @@ class _ScanText:
             blocklist, canary check and custom patterns read it as well, so an
             entry written in tag characters still matches.
         invisible_removed: Zero-width / soft-hyphen characters stripped.
-        nfkc_changed: Whether NFKC changed any reading.
+        nfkc_changed: Whether a reading differs from the stripped text. NFKC
+            does that, and so does breaking a non-starter run so NFKC stays
+            bounded.
         hidden_tag_chars: Tag characters that are not part of an RGI flag or of
             a piece of one cut off at either end of the text.
     """
@@ -691,6 +696,81 @@ def _cut_flag_ends(text: str) -> tuple[str, str, str]:
     return head, rest[:len(rest) - len(tail)], tail
 
 
+# UAX #15: a string is stream-safe when normalising it to NFKD would not leave
+# a run of more than this many non-starters (canonical combining class other
+# than 0). Past it, canonical reordering grows with the square of the run
+# where the interpreter still sorts that run by insertion.
+_STREAM_SAFE_LIMIT = 30
+# COMBINING GRAPHEME JOINER. Combining class 0, so it ends a non-starter run
+# and is not itself reordered into that run.
+_CGJ = "\u034f"
+
+
+@functools.lru_cache(maxsize=8192)
+def _nfkd_nonstarter_span(ch: str) -> tuple[int, int]:
+    """How *ch* extends a run of non-starters once it is NFKD-decomposed.
+
+    The first value is how many non-starters that decomposition starts with.
+    The second is how many it ends with, or negative when it holds no starter:
+    then every code point in it is a non-starter and the magnitude is its
+    length. A starter with no decomposition is ``(0, 0)`` and ends a run.
+    """
+    mapping = unicodedata.decomposition(ch)
+    if not mapping and unicodedata.combining(ch) == 0:
+        return (0, 0)
+    if not mapping:
+        return (1, -1)
+    decomp = unicodedata.normalize("NFKD", ch)
+    length = len(decomp)
+    leading = 0
+    while leading < length and unicodedata.combining(decomp[leading]):
+        leading += 1
+    if leading == length:
+        return (length, -1)
+    trailing = 0
+    while trailing < length - leading and unicodedata.combining(decomp[length - 1 - trailing]):
+        trailing += 1
+    return (leading, trailing)
+
+
+def _stream_safe(text: str) -> str:
+    """*text* in UAX #15 Stream-Safe Text Format.
+
+    Where the NFKD of the next character would make a run of non-starters
+    longer than :data:`_STREAM_SAFE_LIMIT`, a combining grapheme joiner is
+    inserted before that character. Ordinary text has no such run and is
+    returned as it was given. The joiner is what keeps the following NFKC
+    linear in the length of the text.
+    """
+    if text.isascii():
+        return text
+    count = 0
+    pieces: list[str] | None = None
+    start = 0
+    for index, ch in enumerate(text):
+        leading, trailing = _nfkd_nonstarter_span(ch)
+        if count + leading > _STREAM_SAFE_LIMIT:
+            if pieces is None:
+                pieces = []
+            pieces.append(text[start:index])
+            pieces.append(_CGJ)
+            start = index
+            count = 0
+        if trailing < 0:
+            count += leading
+        else:
+            count = trailing
+    if pieces is None:
+        return text
+    pieces.append(text[start:])
+    return "".join(pieces)
+
+
+def _nfkc_for_scan(text: str) -> str:
+    """NFKC of *text* after :func:`_stream_safe` has bounded its non-starter runs."""
+    return unicodedata.normalize("NFKC", _stream_safe(text))
+
+
 def _normalise_for_scan(text: str) -> _ScanText:
     """Return the readings of *text* that the literal checks run over.
 
@@ -708,9 +788,17 @@ def _normalise_for_scan(text: str) -> _ScanText:
     with the hidden runs joined. A hidden character therefore cannot split a
     visible keyword, and hidden text next to visible letters is also read
     without them. Without tag characters there is one reading, as before.
+
+    Before that NFKC, a run of non-starters longer than the stream-safe limit
+    is broken (:func:`_stream_safe`). Reordering a longer run grows with the
+    square of its length where the interpreter still sorts it by insertion,
+    and one screened text can hold such a run. Ordinary text has no such run,
+    so its reading is the NFKC it had before. A keyword split by an invisible
+    character, or written in a compatibility form, still reaches the checks,
+    including when a long run sits beside it.
     """
     stripped, removed = _INVISIBLE_CHARS_RE.subn("", text)
-    normalised = unicodedata.normalize("NFKC", stripped)
+    normalised = _nfkc_for_scan(stripped)
     if not _TAG_CHARS_RE.search(stripped):
         return _ScanText((normalised,), normalised, normalised, removed, normalised != stripped, 0)
     head, body, tail = _cut_flag_ends(stripped)
@@ -736,7 +824,7 @@ def _normalise_for_scan(text: str) -> _ScanText:
     decoded.append(tail)
     visible.append(tail)
     readings = ["".join(decoded), "".join(visible), "".join(hidden)]
-    normalised_readings = [unicodedata.normalize("NFKC", reading) for reading in readings]
+    normalised_readings = [_nfkc_for_scan(reading) for reading in readings]
     views = tuple(dict.fromkeys(r for r in normalised_readings if r)) or ("",)
     return _ScanText(
         views, normalised_readings[1], normalised, removed,

@@ -10,7 +10,6 @@ import shutil
 import subprocess
 import sys
 import urllib.error
-import urllib.request
 from pathlib import Path
 
 import pytest
@@ -19,7 +18,7 @@ _PKG = Path(__file__).resolve().parents[1] / "src"
 if str(_PKG) not in sys.path:
     sys.path.insert(0, str(_PKG))
 
-from artzain import gui  # noqa: E402
+from artzain import cloud, gui  # noqa: E402
 
 
 class _Resp(io.BytesIO):
@@ -39,7 +38,7 @@ def _patch_upstream(monkeypatch, payload: dict):
         seen["api_key"] = req.get_header("X-api-key")
         return _Resp(json.dumps(payload).encode())
 
-    monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
+    monkeypatch.setattr(cloud, "_urlopen", _urlopen)
     return seen
 
 
@@ -70,7 +69,7 @@ def test_bootstrap_returns_none_on_rejected_key(monkeypatch):
     def _urlopen(req, timeout=None):
         raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, None)
 
-    monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
+    monkeypatch.setattr(cloud, "_urlopen", _urlopen)
     assert gui._try_bootstrap("https://api.example.test", "bad") is None
 
 
@@ -90,7 +89,7 @@ def _refuse(monkeypatch, body: bytes, code: int = 403) -> list:
             {"Content-Type": "application/json"}, io.BytesIO(body),
         )
 
-    monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
+    monkeypatch.setattr(cloud, "_urlopen", _urlopen)
     return calls
 
 
@@ -158,9 +157,13 @@ const shown = [];
 const ctx = {
   bootSub: { textContent: '' },
   loginError: { textContent: '' },
-  fetch: async (url) => url === '/gui/bootstrap'
-    ? { ok: true, json: async () => input.bootstrap }
-    : { ok: false, json: async () => ({}) },
+  fetch: async (url, opts) => {
+    if (url === '/gui/bootstrap') ctx.bootstrapHeaders = (opts && opts.headers) || null;
+    return url === '/gui/bootstrap'
+      ? { ok: input.status === undefined || input.status < 400, json: async () => input.bootstrap }
+      : { ok: false, json: async () => ({}) };
+  },
+  launchHeaders: () => ({ 'X-Artzain-Launch': 'from-the-fragment' }),
   setToken() {}, setEmail() {}, clearAuth() {},
   getToken: () => null, getEmail: () => '', authHeaders: () => ({}),
   showChat() { shown.push('chat'); },
@@ -172,6 +175,7 @@ vm.createContext(ctx);
 vm.runInContext(input.boot, ctx);
 ctx.boot().then(() => process.stdout.write(JSON.stringify({
   bootSub: ctx.bootSub.textContent, loginError: ctx.loginError.textContent, shown,
+  bootstrapHeaders: ctx.bootstrapHeaders,
 })));
 """
 
@@ -183,7 +187,7 @@ def _page_boot_source() -> str:
     return page[start:end]
 
 
-def _run_boot(tmp_path, bootstrap: dict) -> dict:
+def _run_boot(tmp_path, bootstrap: dict, status: int | None = None) -> dict:
     node = shutil.which("node")
     if node is None:
         if os.environ.get("CI"):
@@ -193,7 +197,7 @@ def _run_boot(tmp_path, bootstrap: dict) -> dict:
     harness.write_text(_BOOT_HARNESS, encoding="utf-8")
     proc = subprocess.run(
         [node, str(harness)],
-        input=json.dumps({"boot": _page_boot_source(), "bootstrap": bootstrap}),
+        input=json.dumps({"boot": _page_boot_source(), "bootstrap": bootstrap, "status": status}),
         capture_output=True, text=True, encoding="utf-8", timeout=60, check=False,
     )
     assert proc.returncode == 0, proc.stderr
@@ -220,3 +224,16 @@ def test_page_without_a_key_says_so(tmp_path):
     assert out["shown"] == ["login"]
     assert out["bootSub"].startswith("No API key found")
     assert out["loginError"] == ""
+
+
+def test_page_sends_the_launch_secret_to_bootstrap(tmp_path):
+    out = _run_boot(tmp_path, {"token": None, "error": "No API key configured."})
+    assert out["bootstrapHeaders"] == {"X-Artzain-Launch": "from-the-fragment"}
+
+
+def test_page_opened_without_the_launch_address_says_where_to_go(tmp_path):
+    out = _run_boot(tmp_path, {"token": None, "launch_required": True,
+                               "error": gui._LAUNCH_REQUIRED_ERROR}, status=403)
+    assert out["shown"] == ["login"]
+    assert out["bootSub"].startswith("Open the address artzain gui printed")
+    assert out["loginError"] == gui._LAUNCH_REQUIRED_ERROR

@@ -21,6 +21,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from artzain._private_files import private_dir, write_private
+
 _PRIV_NAME = "policy_signing_key.pem"
 _PUB_NAME = "policy_signing_key.pub.pem"
 
@@ -66,7 +68,8 @@ def generate_keypair(out_dir: Path) -> tuple[str, str]:
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if not out_dir.exists():
+        private_dir(out_dir)
     priv_path = out_dir / _PRIV_NAME
     pub_path = out_dir / _PUB_NAME
     if priv_path.exists():
@@ -83,12 +86,14 @@ def generate_keypair(out_dir: Path) -> tuple[str, str]:
         encoding=serialization.Encoding.PEM,
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     ).decode("ascii")
-    priv_path.write_bytes(priv_pem)
-    pub_path.write_text(pub_pem, encoding="ascii")
+    # 0600 from the moment it exists, never world-readable for a moment
+    # before a chmod (survey 25 Sep 2026, row 37); created exclusively, so a
+    # key that appeared since the check above is not overwritten either.
     try:
-        priv_path.chmod(0o600)
-    except OSError:
-        pass
+        write_private(priv_path, priv_pem, exclusive=True)
+    except FileExistsError:
+        raise PolicySigningError(f"refusing to overwrite existing key at {priv_path}") from None
+    pub_path.write_text(pub_pem, encoding="ascii")
     return key_id_for_pem(pub_pem), pub_pem
 
 

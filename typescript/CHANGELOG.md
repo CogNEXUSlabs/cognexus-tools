@@ -4,6 +4,52 @@ All notable changes to `@cognexuslabs/artzain`. Headings are the bare
 version (`## 0.1.5`): the mirror's `publish-npm.yml` cuts the GitHub release
 notes for tag `sdk-ts-v<version>` from the matching section.
 
+## 0.1.9
+
+### Fixed
+
+- **A redirect no longer takes the API key to another host.** `decide()`,
+  `fetchApiKeyIdentity()` and `postSdkEvent()` let `fetch` follow redirects,
+  and `fetch` sends the request again, key included, to wherever a redirect
+  points, another host included (after a 307 or 308, with its body). The
+  calls no longer follow one: a 3xx fails the call with its status
+  (`DecisionError` with `status` and a message that names the redirect;
+  `postSdkEvent()` returns `false`), and nothing is sent anywhere else. A
+  base URL the server redirects, `http://` to `https://` say, now fails that
+  way: set it to the address the API answers on. With 0.1.8 this completes
+  the rule that a key goes only to the host it was issued with.
+- **A failed request is reported without its error's text.** When a request
+  failed, `decide()` and `fetchApiKeyIdentity()` threw a `DecisionError`
+  whose message quoted the error `fetch` rejected with. That text can carry
+  what a log must not: `fetch` quotes a header value it refuses, so an API
+  key with a line break in it was quoted in full, and it quotes a base URL
+  that holds a user name and password. The message now names the error's
+  kind and where the base URL came from, as in `Decision API unreachable:
+  Error [ECONNREFUSED] (base URL from COGNEXUS_API_BASE_URL)`. For `fetch`'s
+  "fetch failed" the kind is its cause's, whose text is left out too: a
+  certificate issued for another name puts the host in it. When `timeoutMs`
+  passes the kind reads `TimeoutError, aborted when the timeout passed`. The
+  error is not kept as the `DecisionError`'s `cause`, which a logger prints
+  too, and the SDK has no logger to put its text in: to see it, pass a
+  `fetchImpl` that wraps `fetch` and records what it rejects with.
+- A 2xx answer that is not JSON is reported as `… returned HTTP 200 with a
+  non-JSON body`, without the parser's text, which quotes the body; a body
+  that could not be read is named by the error's kind.
+- `decide()` serializes the request before sending it, so a `context` that
+  does not serialize (a `BigInt`, a cycle) throws `Decision request not sent:
+  it does not serialize to JSON: …` where it said `Decision API
+  unreachable`.
+
+### Changed
+
+- `FetchLike`, the type of the `fetchImpl` option, now has a required
+  `redirect: "manual"` in its request options, which every call passes.
+  Code that calls a `FetchLike` itself must pass it too, and a transport you
+  pass must not follow redirects.
+- `postSdkEvent()` ends the request when the answer is a refusal, whose body
+  it never reads, so a large body no longer holds the connection until
+  garbage collection.
+
 ## 0.1.8
 
 ### Fixed

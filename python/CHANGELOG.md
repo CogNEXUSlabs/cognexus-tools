@@ -1,5 +1,116 @@
 # Changelog
 
+## 0.6.33
+
+### Fixed
+
+- **Screening a payload stays bounded when the text holds a long run of combining marks.** The check that folds compatibility forms normalised the whole text in one step, and that step can take time that grows with the square of such a run, long enough for one request to hold a worker. A run past the usual limit is broken before that fold, so the time grows with the length of the text. A keyword written in a compatibility form, or split by an invisible character, is still caught when a long run sits beside it. Ordinary text is read as before.
+- **`configure()` changes the API key and the base URL together.** A call
+  that read them while `configure(api_key=..., base_url=...)` was changing
+  them could take the new key with the previous base URL, or the previous key
+  with the new one, and send the key to a host it was not configured for.
+  While the credentials profile could not be read, the policy-rules loader
+  could pair them the same way and serve rules fetched with another key. Only
+  an application that calls `configure()` and sends at the same time, on two
+  threads or with one of the two in a signal handler, could see this. The
+  two are now kept as one value that `configure()` replaces in one step and a
+  call reads in one step, so a call gets them as one `configure()` left them,
+  never a mix of two. A `configure()` that raises, for a value that cannot be
+  turned into text, now changes neither; it could leave the new key with the
+  previous base URL.
+- **`artzain gui` hands the session it opens with the API key only to the
+  page it opened.** The local server handed that session to any request that
+  reached its port. It now answers only requests addressed to `127.0.0.1` or
+  `localhost`, refuses requests another site sends, grants no other origin
+  access to its responses, and opens the session only for a tab opened from
+  the address it opens and prints, which carries a code for this run after
+  `#`. Opened without that code, the page asks for that address or a
+  password sign-in. With `--no-browser`, open the printed address.
+- **An API key no longer follows a redirect to another host.** `urllib`
+  copies a request's headers onto the request it makes to the host a
+  redirect names, so an answer that was a redirect sent the key there: from
+  `decide()`, the policy-rules fetch, the key check behind `artzain
+  quickstart`, the CLI's commands and `artzain gui`'s key exchange. The
+  `artzain gui` proxy passed on the browser's session token the same way.
+  The API answers none of these requests with a redirect, and they now follow
+  none: `decide()` raises `DecisionError` with its status, the CLI commands
+  that send the key report it as a refusal, and the proxy relays its status
+  to the browser without its `Location`. The event and policy-decision posts
+  never followed one; they now log one as a failed send, as they do any other
+  status that is not a success. These requests go through the SDK's own
+  opener, so one an application installs with
+  `urllib.request.install_opener()` no longer applies to them, nor does a
+  test double patched over `urllib.request.urlopen`. Their proxies are still
+  the ones urllib would use
+  (the environment's, or the system's on Windows and macOS), for `http` and
+  `https` only: a proxy set for another scheme was sent a request for it,
+  key included, over plain HTTP.
+- **A base URL must be an `http://` or `https://` URL that names a host.** The
+  event and policy-decision posts went over plain HTTP for any scheme other
+  than `https`, so a mistyped scheme sent them, API key included,
+  unencrypted, and a base URL without a scheme was dialled with no host at
+  all. A key is now sent to no other base URL, nor to one with white space,
+  a control character, a user or a password in it, in its host
+  percent-encoded or not: nothing is sent, and the error or log line names
+  the setting that holds the URL (`configure(base_url=...)`,
+  `COGNEXUS_API_BASE_URL`, the credentials profile or a project `.env`),
+  never the URL. As for a key and a host that do not belong together,
+  commands that read the key stop with that message, `artzain gui`, `init`
+  and `local activate` among them, and `has_api_key()` is false. The licence
+  commands refuse a deployment URL (`--base-url`, `COGNEXUS_LOCAL_URL`) of
+  any other form too, naming the setting. `http://` is still accepted, for
+  any host: a deployment on this machine, such as the one `artzain local`
+  runs, uses it, and over it the key travels unencrypted, as before.
+- **The MCP scaffold runs on the MCP SDK 2.x.** The file
+  `artzain init --framework mcp` writes registered its handlers with the 1.x
+  server's `list_tools()` and `call_tool()` decorators, which MCP SDK 2.0
+  removed, so 0.6.32 pinned its install line to `mcp<2`, while
+  `pip install mcp` installs 2.x. It now uses the 2.x low-level server, which
+  takes the handlers in its constructor (`on_list_tools=`, `on_call_tool=`):
+  `call_tool` stays the one handler every tool call reaches, so the gate still
+  covers every tool. The install line reads `pip install artzain "mcp>=2,<3"`,
+  and on the 1.x SDK the file exits saying what to install. A call it did not
+  run (`review`, `deny`, or an outcome it does not recognise) now comes back as
+  a failed tool call (`isError`), so a client does not take the refusal for
+  the tool's output, and a call that sends no arguments is gated with `{}`. A
+  call to a tool the server does not list is refused as a failed call without
+  a decision; it was decided on and answered as the tool's output. A call that
+  raises comes back as a failed call, with the traceback on stderr; otherwise,
+  over the 2025 protocol, the 2.x server answers with an error that carries
+  the exception's text, which can quote a password or a key. A file generated
+  by an earlier version still needs `mcp<2`; to run it on 2.x, regenerate it
+  with `artzain init --framework mcp --force`, which overwrites the file.
+- **Files the SDK writes are its user's alone from the moment they exist.**
+  `artzain local` wrote the stack's `.env` and `artzain policy keygen` the
+  signing key readable by other users until a later `chmod`, and the
+  pre-upgrade database dumps were never restricted, in a workspace folder any
+  user could list. They are now created new, `0600`, never written into a
+  file that was there before, and the workspace, its `backups` folder and a
+  new key folder are `0700`, whatever the umask. A workspace folder
+  (`COGNEXUS_LOCAL_HOME`) that is another user's is refused.
+- **Prompt-defence events no longer default to a shared `/tmp`.** With neither
+  `COGNEXUS_PROMPT_DEFENSE_EVENTS_DIR` nor `REPORTS_DIR` set, the events and
+  their tamper-evident chain went to `/tmp` (`\tmp` on the current drive on
+  Windows), where other users could read the previews and change the chain.
+  They now go to a folder only you can read: `~/.artzain/events`, or
+  `%LOCALAPPDATA%\artzain\events` on Windows; on a host with no writable
+  home, or where that folder is another user's, `artzain-events-<uid>` in the
+  temp folder, refused unless it is a folder of your own. Events already in
+  `/tmp` stay there, readable by other users: move or delete
+  `prompt_defense_events.jsonl` and `prompt_defense_events.chain_state`
+  there, or set `COGNEXUS_PROMPT_DEFENSE_EVENTS_DIR` to a folder of your own
+  and move them to it.
+- **An event or a human decision is posted to the dashboard once.** The posts
+  share one kept-alive connection, and any failure on it was retried on a
+  fresh one, so an answer that was slow, cut short or never came, after the
+  server had read the request, stored the event, or an approve/deny verdict,
+  twice. A post is now sent again only when sending it failed. A kept
+  connection is replaced before a post goes out on it when the server's close
+  has reached it, or when it has been idle for a minute, in case a NAT or a
+  firewall on the way has dropped it. A post whose answer never arrives, or
+  that meets a connection closed on its way, is logged as failed rather than
+  sent again.
+
 ## 0.6.32
 
 ### Fixed

@@ -19,7 +19,6 @@ never their values.
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import logging
 
@@ -39,8 +38,7 @@ def clean(tmp_path, monkeypatch):
     for name in ("COGNEXUS_API_KEY", "MYAPP_API_KEY", "COGNEXUS_API_BASE_URL"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("COGNEXUS_CREDENTIALS_PATH", str(tmp_path / "credentials.toml"))
-    monkeypatch.setattr(cloud, "_override_key", None)
-    monkeypatch.setattr(cloud, "_override_base", None)
+    monkeypatch.setattr(cloud, "_overrides", (None, None))
     work = tmp_path / "work"
     work.mkdir()
     monkeypatch.chdir(work)
@@ -97,8 +95,8 @@ class _Resp:
 
 
 def _capture_decide(monkeypatch) -> list[tuple[str, str]]:
-    # The package re-exports the decide() function under the module's name.
-    decide_mod = importlib.import_module("artzain.decide")
+    # decide() sends through artzain.cloud._urlopen.
+    from artzain import cloud
 
     calls: list[tuple[str, str]] = []
 
@@ -107,7 +105,7 @@ def _capture_decide(monkeypatch) -> list[tuple[str, str]]:
         return _Resp({"outcome": "allow", "decision_id": "d", "audit_block_id": "b",
                       "contributing_agents": [], "reasons": []})
 
-    monkeypatch.setattr(decide_mod.urllib.request, "urlopen", _urlopen)
+    monkeypatch.setattr(cloud, "_urlopen", _urlopen)
     return calls
 
 
@@ -196,7 +194,7 @@ def test_decide_refuses_a_profile_key_for_a_configured_host(clean, monkeypatch):
     from artzain.decide import DecisionError
 
     _profile()
-    monkeypatch.setattr(cloud, "_override_base", OTHER)
+    monkeypatch.setattr(cloud, "_overrides", (None, OTHER))
     calls = _capture_decide(monkeypatch)
     with pytest.raises(DecisionError):
         _decide()
@@ -223,8 +221,7 @@ def test_decide_pairs_a_configured_key_with_the_configured_host(clean, monkeypat
     from artzain import cloud
 
     _profile()
-    monkeypatch.setattr(cloud, "_override_key", "cnx_configured_key_0123")
-    monkeypatch.setattr(cloud, "_override_base", OTHER)
+    monkeypatch.setattr(cloud, "_overrides", ("cnx_configured_key_0123", OTHER))
     calls = _capture_decide(monkeypatch)
     _decide()
     assert calls == [(OTHER + "/api/v1/decisions", "cnx_configured_key_0123")]

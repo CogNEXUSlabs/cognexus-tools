@@ -26,6 +26,7 @@ import urllib.request
 import uuid
 from typing import Any, Callable, Optional
 
+from artzain import cloud
 from artzain.cloud import (
     _api_request_headers,
     _resolve,
@@ -111,14 +112,16 @@ def decide(
 
     Raises:
         ValueError: If *kind* is not a valid payload kind.
-        DecisionError: If the online call fails (non-2xx or transport error),
-            or the request cannot be sent: a field holds an unpaired
+        DecisionError: If the online call fails (non-2xx, a redirect among
+            them, which is not followed; or a transport error), or the
+            request cannot be sent: a field holds an unpaired
             surrogate (half of a UTF-16 pair, which ``json.loads`` makes from
             a lone escape and which is not valid Unicode), *context* does
             not serialize to JSON, ``configure(base_url=...)`` /
             ``COGNEXUS_API_BASE_URL`` names a host other than the one the
-            API key was issued with, or the credentials profile is there but
-            cannot be read, which is not the same as no key (see
+            API key was issued with, the base URL is not an ``http://`` or
+            ``https://`` URL that names a host, or the credentials profile is
+            there but cannot be read, which is not the same as no key (see
             :func:`artzain.credentials.resolve_credentials`). Nothing is sent
             in any of these cases.
     """
@@ -171,7 +174,9 @@ def decide(
     headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, method="POST", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+        # A redirect is not followed: its status is the error, and the key
+        # stays with the host it was issued with.
+        with cloud._urlopen(req, timeout=timeout_sec) as resp:
             raw = resp.read().decode("utf-8")
         return json.loads(raw) if raw.strip() else {}
     except urllib.error.HTTPError as exc:

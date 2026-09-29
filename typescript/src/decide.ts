@@ -6,7 +6,7 @@
  */
 
 import { resolveCredentials, type ResolvedCredentials } from "./config.js";
-import { DecisionError } from "./errors.js";
+import { DecisionError, failureKind } from "./errors.js";
 
 export type PayloadKind =
   | "user_input"
@@ -66,6 +66,14 @@ export type FetchLike = (
     headers: Record<string, string>;
     body?: string;
     signal?: AbortSignal;
+    /**
+     * Always `"manual"`. The request carries the API key, and following a
+     * redirect sends it again to wherever `Location` points, which may be
+     * another host. `fetch` hands back the 3xx instead, and the call treats
+     * it as the error status it is. A custom transport must not follow
+     * redirects either.
+     */
+    redirect: "manual";
   },
 ) => Promise<{
   ok: boolean;
@@ -135,6 +143,17 @@ export async function decide(options: DecideOptions): Promise<DecisionResponse> 
     product: options.product ?? null,
     context: options.context ?? {},
   };
+  // Serialized before the request, so that a context that does not serialize
+  // (a BigInt, a cycle) is reported as the caller's data, not as the API.
+  // The text describes that data (the SDK puts no setting in the body).
+  let requestBody: string;
+  try {
+    requestBody = JSON.stringify(body);
+  } catch (err) {
+    throw new DecisionError(
+      `Decision request not sent: it does not serialize to JSON: ${(err as Error)?.message ?? failureKind(err)}`,
+    );
+  }
 
   // One deadline for the request and for reading the response: the timer is
   // cleared only once the body has been read, so a server that sends its
@@ -156,14 +175,33 @@ export async function decide(options: DecideOptions): Promise<DecisionResponse> 
           "Content-Type": "application/json",
           "X-Api-Key": apiKey,
         },
-        body: JSON.stringify(body),
+        body: requestBody,
         signal: controller.signal,
+        redirect: "manual",
       });
     } catch (err) {
-      throw new DecisionError(`Decision API unreachable: ${(err as Error).message}`);
+      // The error's text can quote the API key or name the host (see
+      // failureKind), so the message names its kind and where the base URL
+      // came from, and the error is not kept as a cause, which loggers print.
+      throw new DecisionError(
+        `Decision API unreachable: ${failureKind(err, controller.signal)} ` +
+          `(base URL from ${creds.baseSource})`,
+      );
     }
 
     // lockstep:begin decision-response
+    if (resp.status >= 300 && resp.status < 400) {
+      // A redirect is not followed (see FetchLike), so the 3xx itself lands
+      // here. Its body is the redirecting server's, not an engine refusal,
+      // and is left unread: ending the request releases the connection,
+      // which a large unread body would hold until garbage collection.
+      controller.abort();
+      throw new DecisionError(
+        `Decision API returned HTTP ${resp.status}, a redirect, which is not followed: ` +
+          "check the base URL",
+        { status: resp.status },
+      );
+    }
     if (!resp.ok) {
       let detail: unknown;
       try {
@@ -186,13 +224,14 @@ export async function decide(options: DecideOptions): Promise<DecisionResponse> 
       // A 2xx that is not JSON (a proxy or captive portal answering HTML)
       // surfaced as a bare SyntaxError, outside the DecisionError contract.
       // A body that could not be read at all (the timeout passed while it
-      // was arriving, the connection dropped) is not a JSON problem.
-      const problem =
-        (err as Error)?.name === "SyntaxError"
-          ? "with a non-JSON body"
-          : "but its body could not be read";
+      // was arriving, the connection dropped) is not a JSON problem. Neither
+      // message quotes the error: a SyntaxError quotes the body, which can
+      // echo the request's headers.
+      const kind = failureKind(err, controller.signal);
       throw new DecisionError(
-        `Decision API returned HTTP ${resp.status} ${problem}: ${(err as Error).message}`,
+        kind === "SyntaxError"
+          ? `Decision API returned HTTP ${resp.status} with a non-JSON body`
+          : `Decision API returned HTTP ${resp.status} but its body could not be read: ${kind}`,
         { status: resp.status },
       );
     }

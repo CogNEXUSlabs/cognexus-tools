@@ -11,12 +11,17 @@
  * Enroll is on unless `enroll: false`. It is telemetry, not a gate: it
  * never blocks tool gating, and failures are logged and swallowed.
  * Transient failures (network, 5xx, 429) retry on a later gated call; a
- * refusal (4xx) is a config problem and is not retried until the process
+ * refusal (3xx or 4xx) is a config problem and is not retried until the process
  * restarts. The OpenClaw body omits `source` (the server defaults to
  * openclaw).
  */
 
-import { resolveApiKey, resolveBaseUrl, type FetchLike } from "./client.js";
+import {
+  failureKind,
+  resolveApiKey,
+  resolveBaseUrlSetting,
+  type FetchLike,
+} from "./client.js";
 
 export const ENROLL_TIMEOUT_MS = 10_000;
 const MAX_AGENTS = 50;
@@ -110,9 +115,13 @@ export async function enrollInstance(
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ENROLL_TIMEOUT_MS);
+  // Named if the request fails; a baseUrl that is not a string fails first.
+  let baseSource = "plugin config baseUrl";
   try {
+    const base = resolveBaseUrlSetting(cfg.baseUrl);
+    baseSource = base.source;
     const resp = await impl(
-      `${resolveBaseUrl(cfg.baseUrl)}/api/v1/registry/enroll`,
+      `${base.url}/api/v1/registry/enroll`,
       {
         method: "POST",
         headers: {
@@ -121,9 +130,13 @@ export async function enrollInstance(
         },
         body: JSON.stringify(body),
         signal: controller.signal,
+        redirect: "manual",
       },
     );
     if (!resp.ok) {
+      // The refusal's body is not read: end the request, or a large one
+      // holds the connection until garbage collection.
+      controller.abort();
       const retryable = resp.status >= 500 || resp.status === 429;
       log(`artzain enroll refused: HTTP ${resp.status}` +
         (retryable ? " (will retry on a later gated call)" : ""));
@@ -157,9 +170,12 @@ export async function enrollInstance(
     log(`artzain enroll ok: adapter ${adapterPrimary}${extra}`);
     return { ok: true, status: resp.status, adapter, decision, envelope };
   } catch (err) {
-    log(`artzain enroll failed: ${(err as Error).message} ` +
+    // The error's text can quote the API key or name the host (see
+    // failureKind): the line and the reason give its kind instead.
+    const kind = failureKind(err, controller.signal);
+    log(`artzain enroll failed: ${kind} (base URL from ${baseSource}) ` +
       "(will retry on a later gated call)");
-    return { ok: false, reason: (err as Error).message, retryable: true };
+    return { ok: false, reason: kind, retryable: true };
   } finally {
     clearTimeout(timer);
   }

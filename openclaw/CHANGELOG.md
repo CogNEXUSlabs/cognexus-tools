@@ -4,6 +4,45 @@ All notable changes to `@cognexuslabs/openclaw-artzain`. Headings are the
 bare version (`## 0.2.2`): the mirror's `publish-npm.yml` cuts the GitHub
 release notes for tag `openclaw-v<version>` from the matching section.
 
+## 0.2.7
+
+### Changed
+
+- A base URL the server redirects, `http://` to `https://` say, now blocks
+  every gated tool call, where a 307 or 308 used to be followed once the key
+  had gone out in cleartext: set it to the address the API answers on.
+- Announce and enroll end the request on a refusal, whose body they do not
+  read, so a large body no longer holds the connection until garbage
+  collection.
+
+### Fixed
+
+- **A redirect no longer takes the Decision API key to another host.** The
+  gate's Decision call, announce and enroll let `fetch` follow redirects,
+  and `fetch` sends the request again, key included, to wherever a redirect
+  points, another host included (after a 307 or 308, with its body). They
+  no longer follow one. A 3xx on the Decision call blocks the tool call
+  (fail closed) with a reason that names the status and the redirect;
+  announce and enroll log it as a refusal and do not retry until the process
+  restarts. Same fix as `@cognexuslabs/artzain` 0.1.9, whose request types
+  `client.ts` remains a verbatim copy of.
+- **A failed request is reported without its error's text.** The gate's
+  block reason, `postDecision()`'s `DecisionError`, and the announce and
+  enroll log lines and results quoted the error `fetch` rejected with. That
+  text can carry what a log must not: `fetch` quotes a header value it
+  refuses, so an API key with a line break in it was quoted in full, and it
+  quotes a base URL that holds a user name and password. They now name the
+  error's kind (for `fetch`'s "fetch failed", its cause's, whose text is
+  left out too: a certificate issued for another name puts the host in it)
+  and where the base URL came from (plugin config `baseUrl`,
+  `COGNEXUS_API_BASE_URL` or the default), as in `decision unavailable
+  (Decision API unreachable: Error [ECONNREFUSED] (base URL from plugin
+  config baseUrl)) — failing closed`. A 2xx answer that is not JSON is
+  reported without the parser's text, which quotes the body, and a body
+  that could not be read by the error's kind. Same fix as
+  `@cognexuslabs/artzain` 0.1.9, whose response handling and `failureKind`
+  `client.ts` copies verbatim.
+
 ## 0.2.6
 
 ### Changed

@@ -165,7 +165,7 @@ def _serve(monkeypatch: pytest.MonkeyPatch, status: int, page: Page) -> None:
         raise urllib.error.HTTPError(req.full_url, status, "error", {}, io.BytesIO(body))  # type: ignore[arg-type]
 
     monkeypatch.setattr(cloud.http.client, "HTTPSConnection", _Connection)
-    monkeypatch.setattr(cloud.urllib.request, "urlopen", _urlopen)
+    monkeypatch.setattr(cloud, "_urlopen", _urlopen)
 
 
 CDN_HINT = (
@@ -320,7 +320,7 @@ def _fail(monkeypatch: pytest.MonkeyPatch, error: Callable[[str], OSError]) -> N
         raise urllib.error.URLError(error(req.host))
 
     monkeypatch.setattr(cloud.http.client, "HTTPSConnection", _Connection)
-    monkeypatch.setattr(cloud.urllib.request, "urlopen", _urlopen)
+    monkeypatch.setattr(cloud, "_urlopen", _urlopen)
 
 
 @pytest.mark.parametrize(("send", "call"), RAISED)
@@ -385,7 +385,7 @@ def test_a_url_error_whose_reason_names_the_host_is_logged_by_its_type(
     def _urlopen(req: Any, timeout: Any = None) -> Any:
         raise urllib.error.URLError(f"Tunnel connection to {req.host} failed")
 
-    monkeypatch.setattr(cloud.urllib.request, "urlopen", _urlopen)
+    monkeypatch.setattr(cloud, "_urlopen", _urlopen)
     with caplog.at_level(logging.DEBUG, logger="artzain.cloud"):
         _get_rules()
 
@@ -404,7 +404,7 @@ def test_a_host_no_request_can_be_made_with_is_named_by_its_setting(
         _settings_become_unreadable(monkeypatch)
         raise http.client.InvalidURL(f"URL can't contain control characters. {req.host!r}")
 
-    monkeypatch.setattr(cloud.urllib.request, "urlopen", _urlopen)
+    monkeypatch.setattr(cloud, "_urlopen", _urlopen)
     with caplog.at_level(logging.DEBUG, logger="artzain.cloud"):
         _get_rules()
 

@@ -57,6 +57,10 @@ export class ArtzainEnvelope implements INodeType {
     const creds = await this.getCredentials("artzainEnvelopeApi");
     const apiKey = creds.apiKey || "";
     const baseUrl = creds.baseUrl || "https://app.cognexuslabs.ai";
+    const label = {
+      what: "envelope",
+      baseSource: creds.baseUrl ? "the credential's Base URL" : "default",
+    };
     const out: INodeExecutionData[] = [];
 
     for (let i = 0; i < items.length; i++) {
@@ -66,7 +70,7 @@ export class ArtzainEnvelope implements INodeType {
         const timeoutMs = resolveTimeoutMs(
           this.getNodeParameter("timeoutMs", i, DEFAULT_TIMEOUT_MS),
         );
-        const json = await fetchWithTimeout(
+        const { status, text } = await fetchWithTimeout(
           envelopeCompletionsUrl(baseUrl),
           {
             method: "POST",
@@ -77,14 +81,20 @@ export class ArtzainEnvelope implements INodeType {
             }),
           },
           timeoutMs,
-          async (resp) => {
-            if (envelopeFailedClosed(resp.status)) {
-              const detail = await resp.text();
-              throw new Error(`envelope HTTP ${resp.status}: ${detail} — failing closed`);
-            }
-            return (await resp.json()) as Record<string, unknown>;
-          },
+          label,
         );
+        // A redirect is not followed (fetchWithTimeout), and its page is not
+        // the envelope's answer: the error names the status alone.
+        if (status >= 300 && status < 400) {
+          throw new Error(
+            `envelope HTTP ${status}, a redirect, which is not followed: ` +
+              "check the credential's Base URL — failing closed",
+          );
+        }
+        if (envelopeFailedClosed(status)) {
+          throw new Error(`envelope HTTP ${status}: ${text} — failing closed`);
+        }
+        const json = JSON.parse(text) as Record<string, unknown>;
         out.push({ json, pairedItem: { item: i } });
       } catch (error) {
         if (this.continueOnFail()) {

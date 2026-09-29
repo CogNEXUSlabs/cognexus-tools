@@ -22,12 +22,19 @@ import re
 import sys
 import threading
 import types
+from pathlib import Path
 
 import pytest
 
 import artzain
 from artzain import cli
 from artzain.tool_call_contract import inspect_tool_call
+from tests.scaffold_install_line import (
+    PYTHON_FRAMEWORKS,
+    parse_install_line,
+    requirements,
+    without_artzain,
+)
 
 FRAMEWORKS = sorted(cli._SCAFFOLDS)
 BASE_URL = "https://engine.example.com"
@@ -79,16 +86,14 @@ def decisions(monkeypatch) -> list[dict]:
 
 
 class _StubMCPServer:
-    """The decorator surface of ``mcp.server.Server`` that the scaffold uses."""
+    """``mcp.server.Server`` as the MCP SDK 2.x shapes it: the handlers go in
+    the constructor (``on_list_tools=``, ``on_call_tool=``), and there are no
+    registration decorators. The keywords are kept, so a test calls the
+    handlers the server was given."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, **options) -> None:
         self.name = name
-
-    def list_tools(self):
-        return lambda fn: fn
-
-    def call_tool(self):
-        return lambda fn: fn
+        self.options = options
 
 
 def _framework_stubs(framework: str) -> dict[str, types.ModuleType]:
@@ -102,10 +107,15 @@ def _framework_stubs(framework: str) -> dict[str, types.ModuleType]:
     if framework == "mcp":
         server = types.ModuleType("mcp.server")
         server.Server = _StubMCPServer
+        server.ServerRequestContext = object
         stdio = types.ModuleType("mcp.server.stdio")
         stdio.stdio_server = None
         mcp_types = types.ModuleType("mcp.types")
-        mcp_types.TextContent = mcp_types.Tool = dict
+        # The results and blocks the scaffold builds, kept keyword for keyword.
+        for name in ("CallToolResult", "ListToolsResult", "TextContent", "Tool"):
+            setattr(mcp_types, name, types.SimpleNamespace)
+        # Named only in the handlers' annotations.
+        mcp_types.CallToolRequestParams = mcp_types.PaginatedRequestParams = object
         return {
             "mcp": types.ModuleType("mcp"),
             "mcp.server": server,
@@ -125,6 +135,8 @@ def _load_scaffold(monkeypatch, framework: str) -> types.ModuleType:
 
     Neither CrewAI nor the MCP SDK is a test dependency. The stubs replace only
     the framework, so the guard code that runs is the code a developer gets.
+    Stubs cannot see a change in the framework's own API, so
+    test_scaffolds_real_frameworks.py runs the same files on the real ones.
     """
     for name, stub in _framework_stubs(framework).items():
         monkeypatch.setitem(sys.modules, name, stub)
@@ -134,13 +146,23 @@ def _load_scaffold(monkeypatch, framework: str) -> types.ModuleType:
     return module
 
 
+def _mcp_call(guard: types.ModuleType, name: str, arguments: dict | None):
+    """Call the handler the MCP scaffold gave its server for ``tools/call``, the
+    way the 2.x server calls it: with the request context and the request's
+    params, whose ``arguments`` a client may leave out."""
+    call_tool = guard.app.options["on_call_tool"]
+    params = types.SimpleNamespace(name=name, arguments=arguments)
+    return asyncio.run(call_tool(None, params))
+
+
 def _send_email(monkeypatch, framework: str, body: str) -> str:
     """Invoke the scaffold's guarded send_email the way its framework would."""
     guard = _load_scaffold(monkeypatch, framework)
     if framework == "crewai":
         return guard.send_email(body=body)  # CrewAI passes tool arguments by keyword
-    (content,) = asyncio.run(guard.call_tool("send_email", {"contact_id": "123", "body": body}))
-    return content["text"]
+    result = _mcp_call(guard, "send_email", {"contact_id": "123", "body": body})
+    (content,) = result.content
+    return content.text
 
 
 # ── every scaffold ───────────────────────────────────────────────────────────
@@ -233,6 +255,95 @@ def test_scaffold_declares_its_install_line(scaffold):
     assert framework in src
 
 
+@pytest.mark.parametrize("framework", PYTHON_FRAMEWORKS)
+def test_scaffold_exit_guidance_matches_its_install_line(framework):
+    """Without its framework (or with a version it cannot use) a scaffold exits
+    saying what to install. That must be the install line's own requirements,
+    or a developer is told two different things."""
+    src = cli.scaffold_contents(framework, BASE_URL)
+    messages = [
+        node.exc.args[0].value
+        for node in ast.walk(ast.parse(src))
+        if isinstance(node, ast.Raise)
+        and isinstance(node.exc, ast.Call)
+        and ast.unparse(node.exc.func) == "SystemExit"
+        and node.exc.args
+        and isinstance(node.exc.args[0], ast.Constant)
+    ]
+    assert messages, "the scaffold never says what to install"
+    for message in messages:
+        assert "pip install " in message, message
+        named = parse_install_line("pip install " + message.split("pip install ", 1)[1])
+        assert named == requirements(framework), message
+
+
+@pytest.mark.parametrize(
+    ("line", "names"),
+    [
+        ('pip install artzain "mcp>=2,<3"', ["artzain", "mcp>=2,<3"]),
+        ("pip install artzain langgraph  # the graph library", ["artzain", "langgraph"]),
+        ("pip install 'artzain[verify]>=0.6.33' crewai", ["artzain[verify]>=0.6.33", "crewai"]),
+    ],
+)
+def test_install_line_is_read_as_a_shell_reads_it(line, names):
+    """CI installs what this reads, so it must read what a developer's shell
+    would run: quotes kept together, a comment dropped."""
+    assert parse_install_line(line) == names
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "pip install artzain mcp>=2,<3",  # a shell redirects on the > and <
+        "pip install artzain mcp | tee install.log",
+        "pip install artzain[verify] crewai",  # zsh: no matches found
+        "pip install artzain mcp==2.*",
+        "pip install artzain $FRAMEWORK",
+        "python -m pip install artzain mcp",
+    ],
+)
+def test_install_line_a_shell_would_not_run_as_written_is_refused(line):
+    with pytest.raises(ValueError):
+        parse_install_line(line)
+
+
+def test_artzain_is_recognised_with_extras_or_a_version():
+    assert without_artzain(["artzain[verify]>=0.6.33", "crewai"]) == ["crewai"]
+    with pytest.raises(ValueError):
+        without_artzain(["crewai", "crewai-tools"])
+
+
+def test_every_python_scaffold_has_its_install_line_read():
+    """PYTHON_FRAMEWORKS is the list the real-framework tests and their CI
+    legs cover; a Python scaffold missing from it would be run by neither."""
+    python_scaffolds = sorted(
+        framework for framework, (template, _) in cli._SCAFFOLDS.items() if template.endswith(".py.tpl")
+    )
+    assert list(PYTHON_FRAMEWORKS) == python_scaffolds
+
+
+def test_ci_runs_a_leg_for_every_python_scaffold():
+    """The scaffold job lists its frameworks by hand: in the engine's workflow
+    and the mirror's seed template here, and in the seeded copy on the mirror."""
+    root = Path(__file__).resolve().parents[2]
+    workflows = [
+        path
+        for path in (
+            root / ".github" / "workflows" / "tests.yml",
+            root / "scripts" / "cognexus-tools-seed" / "workflows" / "tests.yml",
+        )
+        if path.is_file()
+    ]
+    if not workflows:
+        pytest.skip("no workflow beside this checkout")
+    for workflow in workflows:
+        text = workflow.read_text(encoding="utf-8")
+        legs = re.findall(r"^\s+framework: \[([^\]]*)\]\s*$", text, re.MULTILINE)
+        assert [[name.strip() for name in leg.split(",")] for leg in legs] == [
+            list(PYTHON_FRAMEWORKS)
+        ], workflow
+
+
 def test_scaffold_serializes_json_without_ascii_escapes(scaffold):
     """Every ``json.dumps`` passes ``ensure_ascii=False`` (see NON_LATIN)."""
     framework, src = scaffold
@@ -308,8 +419,13 @@ def test_tool_call_with_non_latin_arguments_is_not_denied(framework, monkeypatch
 # ── only an explicit allow runs the tool ─────────────────────────────────────
 
 def _decide_answers(monkeypatch, decision: dict) -> None:
-    """Make ``artzain.decide`` return *decision*, whatever it is asked."""
-    monkeypatch.setattr(artzain, "decide", lambda **_kwargs: dict(decision))
+    """Make ``artzain.decide`` return *decision*, whatever it is asked.
+
+    Each answer is decoded from JSON, as an online decision is, so its strings
+    are new objects: a guard comparing ``outcome is "allow"`` would not match.
+    """
+    wire = json.dumps(decision)
+    monkeypatch.setattr(artzain, "decide", lambda **_kwargs: json.loads(wire))
 
 
 def _call_guarded_tool(monkeypatch, framework: str) -> tuple[str, list[str]]:
@@ -332,8 +448,11 @@ def _call_guarded_tool(monkeypatch, framework: str) -> tuple[str, list[str]]:
         return "Sent email."
 
     monkeypatch.setattr(guard, "run_tool", run_tool)
-    (content,) = asyncio.run(guard.call_tool("send_email", {"contact_id": "123", "body": "Hi"}))
-    return content["text"], ran
+    result = _mcp_call(guard, "send_email", {"contact_id": "123", "body": "Hi"})
+    (content,) = result.content
+    # The model reads a call that did not run as a failed one, not as the tool's output.
+    assert result.is_error is (ran == []), (result.is_error, ran)
+    return content.text, ran
 
 
 @pytest.mark.parametrize("framework", TOOL_CALL_FRAMEWORKS)
@@ -396,9 +515,11 @@ def test_mcp_decides_off_the_event_loop(monkeypatch):
         return {"outcome": "allow", "decision_id": "dec-1", "reasons": []}
 
     monkeypatch.setattr(artzain, "decide", blocking_decide)
+    call_tool = guard.app.options["on_call_tool"]
+    params = types.SimpleNamespace(name="send_email", arguments={"contact_id": "1", "body": "Hi"})
 
     async def serve() -> None:
-        call = asyncio.create_task(guard.call_tool("send_email", {"contact_id": "1", "body": "Hi"}))
+        call = asyncio.create_task(call_tool(None, params))
         # This coroutine can only run while decide() waits if decide() is not
         # holding the loop's thread. It stops waiting if the call ends without
         # reaching decide(), so a broken gate fails rather than hangs.
@@ -473,23 +594,193 @@ def test_mcp_prints_its_note_to_stderr_not_the_protocol_stream(monkeypatch, caps
 
 
 def test_mcp_names_the_sdk_version_it_needs(monkeypatch):
-    """The example uses the 1.x server's decorators. MCP SDK 2.x registers
-    handlers in the ``Server`` constructor instead, so on 2.x the file must
-    say what to install rather than fail with an AttributeError."""
+    """The example uses the MCP SDK 2.x server, which takes its handlers in the
+    ``Server`` constructor. The 1.x SDK registers them with decorators, and its
+    ``mcp.server`` has no ``ServerRequestContext``; there the file must say
+    what to install rather than fail with a TypeError."""
 
-    class _Server2x:
-        def __init__(self, name: str, **handlers) -> None:
+    class _Server1x:
+        def __init__(self, name: str, version=None, instructions=None) -> None:
             self.name = name
 
+        def list_tools(self):
+            return lambda fn: fn
+
+        def call_tool(self):
+            return lambda fn: fn
+
     stubs = _framework_stubs("mcp")
-    stubs["mcp.server"].Server = _Server2x
+    stubs["mcp.server"].Server = _Server1x
+    del stubs["mcp.server"].ServerRequestContext
     for name, stub in stubs.items():
         monkeypatch.setitem(sys.modules, name, stub)
     source = cli.scaffold_contents("mcp", BASE_URL)
     with pytest.raises(SystemExit) as exited:
         exec(compile(source, "artzain_mcp_guard.py", "exec"), {"__name__": "artzain_mcp_guard"})
-    assert 'pip install "mcp<2"' in str(exited.value)
-    assert 'pip install artzain "mcp<2"' in source
+    assert 'pip install "mcp>=2,<3"' in str(exited.value)
+    assert 'pip install artzain "mcp>=2,<3"' in source
+
+
+def test_mcp_gives_its_server_both_handlers(monkeypatch):
+    """2.x has no decorators to register a handler after the fact: a handler
+    not passed to the constructor is never called."""
+    guard = _load_scaffold(monkeypatch, "mcp")
+    assert guard.app.options["on_list_tools"] is guard.list_tools
+    assert guard.app.options["on_call_tool"] is guard.call_tool
+
+
+def test_mcp_lists_its_tools(monkeypatch):
+    """The 2.x handler returns the whole result, not a bare list of tools, and
+    the SDK's field for a tool's argument schema is ``input_schema``."""
+    guard = _load_scaffold(monkeypatch, "mcp")
+    result = asyncio.run(guard.app.options["on_list_tools"](None, None))
+    assert {
+        tool.name: (sorted(tool.input_schema["properties"]), sorted(tool.input_schema["required"]))
+        for tool in result.tools
+    } == {
+        "send_email": (["body", "contact_id"], ["body", "contact_id"]),
+        "execute_sql": (["query"], ["query"]),
+    }
+    assert all(tool.input_schema["type"] == "object" for tool in result.tools)
+
+
+def test_mcp_gates_a_call_that_sends_no_arguments(monkeypatch, decisions):
+    """A client may send ``tools/call`` without ``arguments``. The 1.x server
+    passed ``{}`` for it; 2.x passes the params as they came, so the scaffold
+    supplies ``{}`` itself, and the call is gated rather than crashing."""
+    guard = _load_scaffold(monkeypatch, "mcp")
+    result = _mcp_call(guard, "send_email", None)
+
+    (sent,) = decisions
+    assert json.loads(sent["payload"]) == {"tool": "send_email", "arguments": {}}
+    assert len(result.content) == 1
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments", "target"),
+    [
+        ("send_email", {"contact_id": "42", "body": "Hi"}, "crm:contact:42"),
+        ("execute_sql", {"query": "select 1"}, "db:analytics"),
+    ],
+)
+def test_mcp_decides_on_the_resource_the_call_touches(tool, arguments, target, monkeypatch, decisions):
+    guard = _load_scaffold(monkeypatch, "mcp")
+    _mcp_call(guard, tool, arguments)
+    (sent,) = decisions
+    assert (sent["action"], sent["target"]) == (tool, target)
+
+
+def _recording_mcp_guard(monkeypatch, decision: dict | None = None):
+    """The MCP scaffold with ``decide()`` answering *decision* and ``run_tool``
+    recorded; returns the guard, the actions decided on and the tools run."""
+    guard = _load_scaffold(monkeypatch, "mcp")
+    asked: list[str] = []
+    ran: list[str] = []
+    wire = json.dumps(decision or {"outcome": "allow", "decision_id": "dec-1", "reasons": []})
+
+    def decide(**kwargs):
+        asked.append(kwargs["action"])
+        return json.loads(wire)
+
+    def run_tool(name: str, arguments: dict) -> str:
+        ran.append(name)
+        return f"ran {name}"
+
+    monkeypatch.setattr(artzain, "decide", decide)
+    monkeypatch.setattr(guard, "run_tool", run_tool)
+    return guard, asked, ran
+
+
+def test_mcp_refuses_a_tool_it_does_not_list(monkeypatch):
+    """The 2.x server hands ``call_tool`` any name a client sends. A tool the
+    server does not list is refused as a failed call, with no decision asked
+    for and nothing run."""
+    guard, asked, ran = _recording_mcp_guard(monkeypatch)
+    result = _mcp_call(guard, "drop_table", {"table": "users"})
+    assert (asked, ran) == ([], [])
+    assert result.is_error is True
+    assert [block.text for block in result.content] == ["Unknown tool 'drop_table'."]
+
+
+@pytest.mark.parametrize("outcome", ["deny", "allow"])
+def test_mcp_gates_a_tool_added_to_its_list(outcome, monkeypatch):
+    """The gate is in ``call_tool``, not in each tool: a tool added to the list
+    later is decided on before it runs, like the two the file ships with."""
+    guard, asked, ran = _recording_mcp_guard(
+        monkeypatch, {"outcome": outcome, "decision_id": "dec-1", "reasons": ["no"]}
+    )
+    added = types.SimpleNamespace(name="delete_rows", input_schema={"type": "object"})
+    monkeypatch.setattr(guard, "TOOLS", [*guard.TOOLS, added])
+
+    result = _mcp_call(guard, "delete_rows", {"table": "orders"})
+
+    assert asked == ["delete_rows"]
+    assert ran == (["delete_rows"] if outcome == "allow" else [])
+    assert result.is_error is (outcome != "allow")
+
+
+def test_mcp_fails_a_listed_tool_it_has_no_code_for(monkeypatch, caplog):
+    """A tool added to TOOLS but not to ``run_tool``: once allowed, the call
+    comes back failed, not as output that reads like the tool's."""
+    guard = _load_scaffold(monkeypatch, "mcp")
+    _decide_answers(monkeypatch, {"outcome": "allow", "decision_id": "dec-1", "reasons": []})
+    added = types.SimpleNamespace(name="delete_rows", input_schema={"type": "object"})
+    monkeypatch.setattr(guard, "TOOLS", [*guard.TOOLS, added])
+
+    with caplog.at_level("ERROR"):
+        result = _mcp_call(guard, "delete_rows", {"table": "orders"})
+
+    assert result.is_error is True
+    assert result.content[0].text.startswith("FAILED"), result.content[0].text
+
+
+def test_mcp_reports_a_tool_that_raises_as_a_failed_call(monkeypatch, caplog):
+    """The 2.x server answers an exception with a protocol error that carries
+    its text, which for a real tool can quote a password or a key. The client
+    gets a failed call without that text; the traceback goes to the log."""
+    guard, asked, _ran = _recording_mcp_guard(monkeypatch)
+
+    def run_tool(name: str, arguments: dict) -> str:
+        raise RuntimeError("relay smtp://mailer:not-a-real-secret@mail.example refused")
+
+    monkeypatch.setattr(guard, "run_tool", run_tool)
+    with caplog.at_level("ERROR"):
+        result = _mcp_call(guard, "send_email", {"contact_id": "1", "body": "Hi"})
+
+    assert asked == ["send_email"]
+    assert result.is_error is True
+    (block,) = result.content
+    assert block.text.startswith("FAILED"), block.text
+    assert "not-a-real-secret" not in block.text
+    assert any(
+        record.exc_info and "not-a-real-secret" in str(record.exc_info[1])
+        for record in caplog.records
+    ), "the traceback was not logged"
+
+
+@pytest.mark.parametrize(
+    "gate_failure",
+    [RuntimeError("socket closed"), None],
+    ids=["decide-raises", "decide-returns-no-dict"],
+)
+def test_mcp_does_not_run_the_tool_when_the_gate_fails(gate_failure, monkeypatch, caplog):
+    """An error other than ``DecisionError`` inside the gate, or a decision
+    that is not a mapping, still leaves the tool unrun, and comes back as a
+    failed call rather than a protocol error."""
+    guard, _asked, ran = _recording_mcp_guard(monkeypatch)
+
+    def decide(**_kwargs):
+        if gate_failure is not None:
+            raise gate_failure
+        return None
+
+    monkeypatch.setattr(artzain, "decide", decide)
+    with caplog.at_level("ERROR"):
+        result = _mcp_call(guard, "execute_sql", {"query": "select 1"})
+
+    assert ran == []
+    assert result.is_error is True
+    assert result.content[0].text.startswith("FAILED"), result.content[0].text
 
 
 # ── seam-specific: each framework is gated in the right place ────────────────
@@ -505,7 +796,8 @@ def test_langgraph_gates_on_the_edge_not_in_the_action():
 
 def test_mcp_gates_inside_call_tool():
     src = cli.scaffold_contents("mcp", BASE_URL)
-    assert "@app.call_tool()" in src
+    # The one handler every tool call reaches, given to the server the 2.x way.
+    assert "on_call_tool=call_tool" in src
     # The gate must precede the tool body, not follow it.
     assert src.index("to_thread(gate, name, arguments)") < src.index("run_tool(name, arguments)")
     # Structured calls screen as tool_call, not as prose.

@@ -33,7 +33,10 @@ function configFromEnv(args: string[]): SkillConfig {
   const agents = env("GROKBOT_ANNOUNCE_AGENTS");
   return {
     apiKey: flag(args, "--api-key") || env("COGNEXUS_API_KEY"),
-    baseUrl: flag(args, "--base-url") || env("COGNEXUS_API_BASE_URL"),
+    // Unset without the flag: the gate reads COGNEXUS_API_BASE_URL itself and
+    // names it, not the flag, when a request fails.
+    baseUrl: flag(args, "--base-url") || undefined,
+    baseUrlSource: "--base-url",
     agentDid: flag(args, "--agent-did") || env("GROKBOT_AGENT_ID") || env("COGNEXUS_AGENT_DID"),
     instance: flag(args, "--instance") || env("GROKBOT_INSTANCE"),
     announce: has(args, "--announce") || env("GROKBOT_ANNOUNCE") === "true",

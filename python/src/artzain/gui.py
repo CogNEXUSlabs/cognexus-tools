@@ -29,9 +29,15 @@ Usage::
 
 from __future__ import annotations
 
+import hmac
+import html as html_lib
 import json
 import logging
+import os
+import secrets
+import shutil
 import socket
+import tempfile
 import threading
 import time
 import urllib.error
@@ -39,8 +45,10 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
+from artzain import cloud
 from artzain.cloud import _sdk_headers
 
 _log = logging.getLogger("artzain.gui")
@@ -531,6 +539,7 @@ _GUI_HTML_TEMPLATE = """\
 
   const TOKEN_KEY = 'artzain_gui_token';
   const EMAIL_KEY = 'artzain_gui_email';
+  const LAUNCH_KEY = 'artzain_gui_launch';
 
   function getToken()  { try { return localStorage.getItem(TOKEN_KEY) || ''; }  catch { return ''; } }
   function setToken(t) { try { localStorage.setItem(TOKEN_KEY, t); }             catch {} }
@@ -540,6 +549,20 @@ _GUI_HTML_TEMPLATE = """\
   function authHeaders() {
     const t = getToken();
     return t ? { 'Authorization': 'Bearer ' + t } : {};
+  }
+  function launchHeaders() {
+    // artzain gui opens this page with its launch secret in the fragment,
+    // which no server sees. Keep it for this tab, take it out of the address
+    // bar, and send it to /gui/bootstrap, which needs it for the token.
+    const m = /(?:^#|&)launch=([^&]+)/.exec(location.hash || '');
+    let s = '';
+    if (m) {
+      try { s = decodeURIComponent(m[1]); } catch { s = m[1]; }
+      try { sessionStorage.setItem(LAUNCH_KEY, s); } catch {}
+      try { history.replaceState(null, '', location.pathname + location.search); } catch {}
+    }
+    if (!s) { try { s = sessionStorage.getItem(LAUNCH_KEY) || ''; } catch {} }
+    return s ? { 'X-Artzain-Launch': s } : {};
   }
 
   // DOM refs
@@ -1005,23 +1028,24 @@ _GUI_HTML_TEMPLATE = """\
 
   async function boot() {
     // 1. Try API-key bootstrap (no login needed)
-    let mfaNotice = '', keyNotice = '';
+    let mfaNotice = '', keyNotice = '', launchNotice = '';
     try {
-      const res = await fetch('/gui/bootstrap');
-      if (res.ok) {
-        const d = await res.json();
-        if (d.token) {
-          setToken(d.token); setEmail(d.email || d.display_name || '');
-          showChat(d.display_name || d.email || '');
-          await ensureConversation(); return;
-        }
-        // The key was accepted but the account has TOTP enabled: the
-        // platform issued an MFA challenge instead of a session.
-        if (d.mfa_required) mfaNotice = d.error || 'Two-factor authentication required \u2014 please sign in.';
-        // The platform will not open a session with this key (one bound
-        // to an agent, for instance); its reason says what to use instead.
-        else if (d.key_refused) keyNotice = d.error || 'This API key cannot open a session \u2014 please sign in.';
+      const res = await fetch('/gui/bootstrap', { headers: launchHeaders() });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok && d.token) {
+        setToken(d.token); setEmail(d.email || d.display_name || '');
+        showChat(d.display_name || d.email || '');
+        await ensureConversation(); return;
       }
+      // The key was accepted but the account has TOTP enabled: the
+      // platform issued an MFA challenge instead of a session.
+      if (d.mfa_required) mfaNotice = d.error || 'Two-factor authentication required \u2014 please sign in.';
+      // The platform will not open a session with this key (one bound
+      // to an agent, for instance); its reason says what to use instead.
+      else if (d.key_refused) keyNotice = d.error || 'This API key cannot open a session \u2014 please sign in.';
+      // Opened by hand, or from an earlier run: the token goes only to the
+      // address artzain gui printed.
+      else if (d.launch_required) launchNotice = d.error || 'Open the address artzain gui printed, or sign in.';
     } catch {}
 
     // 2. Try stored token
@@ -1042,8 +1066,9 @@ _GUI_HTML_TEMPLATE = """\
     // 3. Fall back to login form
     bootSub.textContent = mfaNotice ? 'Two-factor authentication required \u2014 please sign in.'
                         : keyNotice ? 'This API key cannot open a session \u2014 please sign in.'
+                        : launchNotice ? 'Open the address artzain gui printed to use the API key \u2014 or sign in.'
                                     : 'No API key found \u2014 please sign in.';
-    const notice = mfaNotice || keyNotice;
+    const notice = mfaNotice || keyNotice || launchNotice;
     setTimeout(() => { showLogin(); if (notice) loginError.textContent = notice; }, 600);
   }
 
@@ -1063,6 +1088,56 @@ def _find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+#: The request header that carries the per-launch secret to ``/gui/bootstrap``.
+_LAUNCH_HEADER = "X-Artzain-Launch"
+
+
+def _new_launch_secret() -> str:
+    """A fresh secret for one run of the local server."""
+    return secrets.token_urlsafe(32)
+
+
+def _launch_url(port: int, secret: str) -> str:
+    """The address ``artzain gui`` opens and prints. The secret sits in the
+    fragment, which a browser never sends to a server, so only a page opened
+    from this address holds it; the page the server sends does not."""
+    return f"http://127.0.0.1:{port}/#launch={secret}"
+
+
+def _write_redirect_file(url: str) -> Path | None:
+    """A page, readable only by this user, that sends the browser on to *url*.
+
+    The browser is started with this file's address instead of *url*, so the
+    launch code in *url*'s fragment is not on a command line. None when the
+    file cannot be written."""
+    target = html_lib.escape(url, quote=True)
+    page = ("<!doctype html><meta charset=\"utf-8\"><title>Artzain Chat</title>"
+            f"<meta http-equiv=\"refresh\" content=\"0;url={target}\">"
+            f"<p><a href=\"{target}\">Open Artzain Chat</a></p>\n")
+    try:
+        directory = Path(tempfile.mkdtemp(prefix="artzain-gui-"))
+        path = directory / "open.html"
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(page)
+        return path
+    except OSError:
+        return None
+
+
+def _open_browser_later(target: str) -> None:
+    time.sleep(0.5)
+    webbrowser.open(target)
+
+
+#: Shown when ``/gui/bootstrap`` is asked without this run's launch secret:
+#: the page was opened by hand, or from an earlier run.
+_LAUNCH_REQUIRED_ERROR = (
+    "To use the API key, open the address artzain gui printed when it "
+    "started; or sign in."
+)
 
 
 #: Shown when ``/api/auth/token`` answers with an MFA challenge instead of a
@@ -1113,7 +1188,8 @@ def _try_bootstrap(upstream: str, api_key: str) -> dict[str, Any] | None:
     headers["Content-Type"] = "application/json"
     req      = urllib.request.Request(url, data=b"{}", headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        # A redirect is not followed, so the key goes to *upstream* only.
+        with cloud._urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode())
             if data.get("token"):
                 return data
@@ -1122,9 +1198,9 @@ def _try_bootstrap(upstream: str, api_key: str) -> dict[str, Any] | None:
     except urllib.error.HTTPError as exc:
         if exc.code == 403:
             return {"token": None, "key_refused": True, "error": _refusal_detail(exc)}
-        _log.debug("token bootstrap against %s failed", url, exc_info=True)
+        _log.debug("token bootstrap failed: HTTP %s", exc.code)
     except Exception:  # noqa: BLE001
-        _log.debug("token bootstrap against %s failed", url, exc_info=True)
+        _log.debug("token bootstrap failed", exc_info=True)
     return None
 
 
@@ -1149,8 +1225,18 @@ def _screen_message(content: str) -> dict[str, Any]:
         return {"is_injection": False, "should_block": False, "threat_level": "none", "explanation": "", "injection_type": ""}
 
 
-def _make_handler(base_url: str, html_bytes: bytes, api_key: str) -> type[BaseHTTPRequestHandler]:
-    """Return a request-handler class closed over the server configuration."""
+def _make_handler(base_url: str, html_bytes: bytes, api_key: str, *,
+                  launch_secret: str | None = None) -> type[BaseHTTPRequestHandler]:
+    """Return a request-handler class closed over the server configuration.
+
+    Every request must name this server (``127.0.0.1`` or ``localhost`` and
+    the port it listens on) and come from its own origin, so a page whose name
+    was made to resolve to the loopback address cannot use it. The session
+    token ``/gui/bootstrap`` hands out also needs *launch_secret*, which only
+    the page opened from :func:`_launch_url` holds, so another local user who
+    can reach the port cannot read it either. Without a secret, bootstrap
+    hands out nothing.
+    """
     upstream = base_url.rstrip("/")
 
     # Cached bootstrap result shared across all handler instances.
@@ -1169,6 +1255,9 @@ def _make_handler(base_url: str, html_bytes: bytes, api_key: str) -> type[BaseHT
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(html_bytes)))
             self.send_header("Cache-Control", "no-store")
+            # No other page may frame it.
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
             self.end_headers()
             self.wfile.write(html_bytes)
 
@@ -1182,6 +1271,39 @@ def _make_handler(base_url: str, html_bytes: bytes, api_key: str) -> type[BaseHT
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
+
+        # ── Who may ask ───────────────────────────────────────────────────
+
+        def _refused(self, *, page: bool = False) -> bool:
+            """Refuse (403) a request that does not name this server
+            (``127.0.0.1`` or ``localhost``, on whatever port a forward or the
+            default hides), or that another site sends; True when it was
+            refused. With *page*, a browser's top-level navigation to the page
+            is served from any site: the page holds no secret and cannot be
+            framed, and following a link to the printed address arrives
+            cross-site."""
+            host = (self.headers.get("Host") or "").strip().lower()
+            name, _, port = host.partition(":")
+            origin = self.headers.get("Origin")
+            site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+            navigation = (page and (self.headers.get("Sec-Fetch-Mode") or "").lower() == "navigate"
+                          and (self.headers.get("Sec-Fetch-Dest") or "").lower() == "document")
+            if (name not in ("127.0.0.1", "localhost") or (port and not port.isdigit())
+                    or (origin is not None and origin.strip().lower() != "http://" + host)
+                    or (site not in ("", "same-origin", "none") and not navigation)):
+                body = b"Forbidden"
+                self.send_response(403)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return True
+            return False
+
+        def _launched(self) -> bool:
+            """Whether the request carries this run's launch secret."""
+            given = (self.headers.get(_LAUNCH_HEADER) or "").strip()
+            return bool(launch_secret) and hmac.compare_digest(given.encode(), launch_secret.encode())
 
         # ── API proxy ─────────────────────────────────────────────────────
 
@@ -1201,12 +1323,15 @@ def _make_handler(base_url: str, html_bytes: bytes, api_key: str) -> type[BaseHT
 
             req = urllib.request.Request(url, data=body, headers=fwd, method=method)
             try:
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                # A redirect is not followed, so the browser's Authorization
+                # header goes upstream only; its status is relayed below.
+                with cloud._urlopen(req, timeout=timeout) as resp:
                     self.send_response(resp.status)
+                    # The page is this server's own origin, so it needs no
+                    # CORS grant; none is sent, and none is passed on.
                     for k, v in resp.headers.items():
-                        if k.lower() not in _HOP_BY_HOP:
+                        if k.lower() not in _HOP_BY_HOP and not k.lower().startswith("access-control-"):
                             self.send_header(k, v)
-                    self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
                     if is_sse:
                         while chunk := resp.read(256):
@@ -1269,7 +1394,14 @@ def _make_handler(base_url: str, html_bytes: bytes, api_key: str) -> type[BaseHT
         # ── HTTP verb handlers ────────────────────────────────────────────
 
         def do_GET(self) -> None:
+            if self._refused(page=not self.path.startswith(("/gui/", "/api/"))):
+                return
             if self.path == "/gui/bootstrap":
+                # With no key there is nothing to hand out, and the page says so.
+                if api_key and not self._launched():
+                    self._serve_json(403, {"token": None, "launch_required": True,
+                                           "error": _LAUNCH_REQUIRED_ERROR})
+                    return
                 self._handle_gui_bootstrap()
             elif self.path.startswith("/dashboard"):
                 # The hosted dashboard is not served here — send the browser
@@ -1283,6 +1415,8 @@ def _make_handler(base_url: str, html_bytes: bytes, api_key: str) -> type[BaseHT
                 self._proxy("GET")
 
         def do_POST(self) -> None:
+            if self._refused():
+                return
             length = int(self.headers.get("Content-Length", 0))
             body   = self.rfile.read(length) if length else b""
             if self.path == "/gui/screen":
@@ -1291,18 +1425,24 @@ def _make_handler(base_url: str, html_bytes: bytes, api_key: str) -> type[BaseHT
                 self._proxy("POST", body)
 
         def do_DELETE(self) -> None:
+            if self._refused():
+                return
             self._proxy("DELETE")
 
         def do_PUT(self) -> None:
+            if self._refused():
+                return
             length = int(self.headers.get("Content-Length", 0))
             body   = self.rfile.read(length) if length else b""
             self._proxy("PUT", body)
 
         def do_OPTIONS(self) -> None:
+            # The page never needs a preflight (it is this server's origin),
+            # and no other origin is granted anything.
+            if self._refused():
+                return
             self.send_response(204)
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, PUT, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+            self.send_header("Allow", "GET, POST, DELETE, PUT, OPTIONS")
             self.end_headers()
 
     return _Handler
@@ -1339,9 +1479,12 @@ def launch_gui(
         port = _find_free_port()
 
     html_bytes = _GUI_HTML_TEMPLATE.replace("__COGNEXUS_ORIGIN__", base_url).encode("utf-8")
-    handler_cls = _make_handler(base_url, html_bytes, api_key)
+    # The session token is handed only to a page opened from this run's
+    # address, which carries the secret in its fragment.
+    launch_secret = _new_launch_secret()
+    handler_cls = _make_handler(base_url, html_bytes, api_key, launch_secret=launch_secret)
     server      = ThreadingHTTPServer(("127.0.0.1", port), handler_cls)
-    local_url   = f"http://127.0.0.1:{port}"
+    local_url   = _launch_url(port, launch_secret)
 
     from artzain.cloud import _key_hint  # lazy \u2014 keeps GUI import on stdlib only
 
@@ -1359,11 +1502,14 @@ def launch_gui(
     print("  Press Ctrl-C to quit.")
     print()
 
+    # The browser is opened through a private redirect file, so the launch
+    # code is not on its command line; without one, the plain address opens
+    # and the page asks for the printed one.
+    redirect = None
     if not no_browser:
-        def _open() -> None:
-            time.sleep(0.5)
-            webbrowser.open(local_url)
-        threading.Thread(target=_open, daemon=True).start()
+        redirect = _write_redirect_file(local_url)
+        target = redirect.as_uri() if redirect else f"http://127.0.0.1:{port}/"
+        threading.Thread(target=_open_browser_later, args=(target,), daemon=True).start()
 
     try:
         server.serve_forever()
@@ -1371,3 +1517,5 @@ def launch_gui(
         print("\n  Artzain Chat stopped.")
     finally:
         server.shutdown()
+        if redirect is not None:
+            shutil.rmtree(redirect.parent, ignore_errors=True)

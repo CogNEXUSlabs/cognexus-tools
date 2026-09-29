@@ -245,7 +245,7 @@ def test_fetch_api_key_identity_valid(monkeypatch):
                 b'"key_prefix":"cnx_testkey12","key_label":"quickstart"}'
             )
 
-    monkeypatch.setattr(cloud.urllib.request, "urlopen", lambda *a, **k: _Resp())
+    monkeypatch.setattr(cloud, "_urlopen", lambda *a, **k: _Resp())
     info = fetch_api_key_identity()
     assert info["valid"] is True
     assert info["email"] == "dev@example.com"
@@ -289,7 +289,7 @@ def test_fetch_api_key_identity_falls_back_on_405(monkeypatch):
             )
         return _Events200()
 
-    monkeypatch.setattr(cloud.urllib.request, "urlopen", _urlopen)
+    monkeypatch.setattr(cloud, "_urlopen", _urlopen)
     info = fetch_api_key_identity()
     assert info["valid"] is True
     assert info["verified_via"] == "events"
@@ -395,7 +395,7 @@ def test_401_warning_names_the_base_url_source_not_the_url(monkeypatch, caplog):
     from artzain import cloud
 
     monkeypatch.setenv("COGNEXUS_API_BASE_URL", "https://tenant-secret.example.test")
-    monkeypatch.setattr(cloud, "_override_base", None)
+    monkeypatch.setattr(cloud, "_overrides", (cloud._overrides[0], None))
     with caplog.at_level("WARNING", logger="artzain.cloud"):
         cloud._log_http_status("post", "decision", 401, b"unauthorized", cloud._base_url_source())
     messages = [r.getMessage() for r in caplog.records]
@@ -410,9 +410,10 @@ def test_base_url_source_is_a_label_for_every_origin(monkeypatch, tmp_path):
         monkeypatch.delenv(name, raising=False)
     profile = tmp_path / "credentials.toml"
     monkeypatch.setenv("COGNEXUS_CREDENTIALS_PATH", str(profile))
-    monkeypatch.setattr(cloud, "_override_base", "https://override.example.test")
+    key = cloud._overrides[0]
+    monkeypatch.setattr(cloud, "_overrides", (key, "https://override.example.test"))
     assert cloud._base_url_source() == "configure(base_url=...)"
-    monkeypatch.setattr(cloud, "_override_base", None)
+    monkeypatch.setattr(cloud, "_overrides", (key, None))
     monkeypatch.setenv("COGNEXUS_API_BASE_URL", "https://env.example.test")
     assert cloud._base_url_source() == "COGNEXUS_API_BASE_URL"
     monkeypatch.delenv("COGNEXUS_API_BASE_URL")
