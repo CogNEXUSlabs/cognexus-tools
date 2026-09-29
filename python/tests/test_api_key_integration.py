@@ -1,8 +1,8 @@
 """API-key integration tests against artzain screening layers and cloud ingest.
 
 Requires ``COGNEXUS_API_KEY`` (and optionally ``MYAPP_API_KEY``). Cloud POSTs are captured
-via a test ``urllib`` shim — set ``COGNEXUS_API_BASE_URL`` and pass a real ``base_url``
-only when using ``configure()`` yourself outside these tests.
+through fake ``http.client`` connections — set ``COGNEXUS_API_BASE_URL`` and pass a real
+``base_url`` only when using ``configure()`` yourself outside these tests.
 
 Run::
 
@@ -45,8 +45,16 @@ from artzain.cloud import configure as cloud_configure
 from artzain.destructive_action_guard import ActionSeverity, screen_action
 from artzain.kill_switch import _reset_for_tests
 
+#: The key these tests run with, read once, when the module is imported:
+#: conftest.py clears the key variables for the rest of the session, so that a
+#: key exported for this module reaches no other test. As in the SDK, a blank
+#: ``COGNEXUS_API_KEY`` falls back to ``MYAPP_API_KEY``.
+_API_KEY = (os.environ.get("COGNEXUS_API_KEY") or "").strip() or (
+    os.environ.get("MYAPP_API_KEY") or ""
+).strip()
+
 pytestmark = pytest.mark.skipif(
-    not (os.environ.get("COGNEXUS_API_KEY") or os.environ.get("MYAPP_API_KEY")),
+    not _API_KEY,
     reason="Set COGNEXUS_API_KEY (or MYAPP_API_KEY) to run integration tests.",
 )
 
@@ -59,17 +67,16 @@ def integration_env(
     tmp_path,
     artzain_events_capture,
 ):
-    """Configure artzain with env API key and urllib-captured cloud payloads."""
+    """Configure artzain with the key read at import, and capture its cloud posts."""
 
     events_dir = tmp_path / "events"
     events_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("COGNEXUS_PROMPT_DEFENSE_EVENTS_DIR", str(events_dir))
 
     captured = artzain_events_capture
-    api_key = (os.environ.get("COGNEXUS_API_KEY") or os.environ.get("MYAPP_API_KEY") or "").strip()
-    assert api_key
+    assert _API_KEY
 
-    cloud_configure(api_key=api_key, base_url="http://127.0.0.1:1")
+    cloud_configure(api_key=_API_KEY, base_url="http://127.0.0.1:1")
     reset_detectors()
     _reset_for_tests()
 

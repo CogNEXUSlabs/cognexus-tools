@@ -14,6 +14,10 @@ of damage already done.
                                       ├── review ──► returns "queued"
                                       └── deny   ──► returns the reasons
 
+Only `allow` runs the tool, and `review` queues it. `deny`, or any outcome this
+code does not know (missing, misspelt, or added in a later release), refuses
+it.
+
 The agent sees the refusal as a normal tool result and can reason about it,
 which is usually what you want: it re-plans instead of crashing.
 
@@ -95,13 +99,12 @@ def governed(action: str, target: str) -> Callable:
                 # unavailable or kill switch). Fail closed.
                 return f"REFUSED: decision unavailable ({exc}) — failing closed."
 
-            outcome = d.get("outcome", "deny")
+            outcome = d.get("outcome")
             decision_id = d.get("decision_id", "")
 
-            if outcome == "deny":
-                reasons = "; ".join(d.get("reasons", [])) or "policy denied this action"
-                # Returned as a tool result, not raised: the agent can re-plan.
-                return f"REFUSED: {reasons} (decision {decision_id})"
+            if outcome == "allow":
+                result = fn(*args, **kwargs)
+                return f"{result} (sealed as {decision_id})"
 
             if outcome == "review":
                 return (
@@ -109,8 +112,14 @@ def governed(action: str, target: str) -> Callable:
                     f"runs. Do not retry. (decision {decision_id})"
                 )
 
-            result = fn(*args, **kwargs)
-            return f"{result} (sealed as {decision_id})"
+            # deny, and any outcome this code does not know: never run the
+            # tool on it. Returned as a tool result, not raised: the agent
+            # can re-plan.
+            if outcome == "deny":
+                reasons = "; ".join(d.get("reasons") or []) or "policy denied this action"
+            else:
+                reasons = f"unrecognised outcome {outcome!r} — failing closed"
+            return f"REFUSED: {reasons} (decision {decision_id})"
 
         return wrapper
 

@@ -14,7 +14,9 @@ routes on its verdict:
                      └── deny   ──► refused
 
 That shape means the action node is only ever reached on `allow`, and the
-routing decision itself is the sealed record.
+routing decision itself is the sealed record. Any other outcome, including one
+this code does not know (missing, misspelt, or added in a later release),
+routes to `refused` as well.
 
 Install::
 
@@ -81,29 +83,39 @@ def guard(state: AgentState) -> AgentState:
             "reasons": [f"decision unavailable ({exc}) — failing closed"],
         }
 
+    outcome = d.get("outcome")
+    reasons = list(d.get("reasons") or [])
+    if outcome not in ("allow", "review", "deny"):
+        reasons.append(f"unrecognised outcome {outcome!r} — failing closed")
     return {
         **state,
-        "outcome": d["outcome"],
+        "outcome": outcome,
         "decision_id": d.get("decision_id", ""),
         "audit_block_id": d.get("audit_block_id") or "",
-        "reasons": d.get("reasons", []),
+        "reasons": reasons,
     }
 
 
 def route(state: AgentState) -> str:
-    """Conditional edge — the only way into `act` is an allow."""
-    return state.get("outcome", "deny")
+    """Conditional edge — the only way into `act` is an allow.
+
+    `allow` and `review` route to their nodes; everything else, `deny` or an
+    outcome this code does not know, routes to `refused`.
+    """
+    outcome = state.get("outcome")
+    return outcome if outcome in ("allow", "review") else "deny"
 
 
 # ── The nodes the verdict routes to ──────────────────────────────────────────
 
 
 def plan(state: AgentState) -> AgentState:
+    """Draft the work. Whatever the caller supplied is kept; the rest is filled in."""
     return {
-        **state,
         "action": "send_email",
         "target": "crm:contact:123",
         "draft": "Following up on our meeting — here is the summary you asked for.",
+        **state,
     }
 
 

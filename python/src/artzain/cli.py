@@ -61,6 +61,7 @@ _SCAFFOLDS: dict[str, tuple[str, str]] = {
     "mcp":       ("mcp.py.tpl",       "artzain_mcp_guard.py"),
     "crewai":    ("crewai.py.tpl",    "artzain_crewai_guard.py"),
     "openclaw":  ("openclaw.ts.tpl",  "artzain_openclaw_guard.ts"),
+    "openshell": ("openshell.yaml.tpl", "artzain_openshell_policy.yaml"),
 }
 
 # Representative Token-to-Outcome (T2O) examples. Each prompt is written so the
@@ -819,6 +820,10 @@ def cmd_init(args: argparse.Namespace) -> None:
         print("     (worked example, not a ClawHub plugin)")
         step += 1
         print(f"  {step}. set COGNEXUS_API_KEY on the Gateway process")
+    elif framework == "openshell":
+        print(f"  {step}. pin {out.name} beside the OpenShell gateway")
+        print("     the agent proposes a policy.local rule and waits")
+        print("     it does not approve its own rule")
     else:
         print(f"  {step}. python {out.name}")
 
@@ -1963,7 +1968,7 @@ def main(argv: list[str] | None = None) -> None:
     rl = registry_sub.add_parser("list", help="List catalog entries.")
     rl.add_argument("--q", help="Search name / external id / framework.")
     rl.add_argument("--source", choices=["engine", "mcp", "kubernetes", "cicd", "microsoft",
-                                         "openai", "code_scan", "langgraph", "anthropic", "foundry", "agentforce", "n8n", "openclaw", "google", "a2a", "grokbot"],
+                                         "openai", "code_scan", "langgraph", "anthropic", "foundry", "agentforce", "n8n", "openclaw", "google", "a2a", "grokbot", "openshell"],
                     help="Filter by origin.")
     rl.add_argument("--lifecycle", choices=["discovered", "sanctioned", "deprecated", "retired"],
                     help="Filter by lifecycle state.")
@@ -1974,7 +1979,7 @@ def main(argv: list[str] | None = None) -> None:
     re_ = registry_sub.add_parser("export", help="Download the catalog as CSV.")
     re_.add_argument("--q", help="Search filter applied to the export.")
     re_.add_argument("--source", choices=["engine", "mcp", "kubernetes", "cicd", "microsoft",
-                                          "openai", "code_scan", "langgraph", "anthropic", "foundry", "agentforce", "n8n", "openclaw", "google", "a2a", "grokbot"])
+                                          "openai", "code_scan", "langgraph", "anthropic", "foundry", "agentforce", "n8n", "openclaw", "google", "a2a", "grokbot", "openshell"])
     re_.add_argument("--lifecycle", choices=["discovered", "sanctioned", "deprecated", "retired"])
     re_.add_argument("--out", help="Output CSV path (default: ./agent-catalog-<date>.csv).")
     re_.set_defaults(func=cmd_registry_export)

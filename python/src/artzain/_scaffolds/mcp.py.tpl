@@ -13,13 +13,22 @@ every transport, and it is the one place the *arguments* are known.
                                     ├── review ──► return "queued", do nothing
                                     └── deny   ──► return the reasons
 
+Only `allow` runs the tool, and `review` queues it. `deny`, or any outcome this
+code does not know (missing, misspelt, or added in a later release), refuses
+it. `decide()` blocks on the network, so the gate runs in a worker thread and
+the server keeps answering other requests while it waits.
+
 Note the payload kind: `tool_call`. That selects the tool-contract and
 destructive-action guards, which is what you want for a structured call —
 `model_output` would skip the tool-contract check.
 
+This file uses the MCP SDK 1.x server API (the `list_tools()` and
+`call_tool()` decorators). The 2.x SDK registers handlers in the `Server`
+constructor instead.
+
 Install::
 
-    pip install artzain mcp
+    pip install artzain "mcp<2"
 
 Run::
 
@@ -28,8 +37,10 @@ Run::
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import sys
 from typing import Any
 
 import artzain
@@ -39,7 +50,10 @@ try:
     from mcp.server.stdio import stdio_server
     from mcp.types import TextContent, Tool
 except ImportError:  # pragma: no cover - scaffold guidance, not library code
-    raise SystemExit("This example needs the MCP SDK:  pip install mcp")
+    raise SystemExit('This example needs the MCP SDK:  pip install "mcp<2"')
+
+if not hasattr(Server, "call_tool"):
+    raise SystemExit('This example uses the MCP SDK 1.x API:  pip install "mcp<2"')
 
 
 AGENT_DID = os.environ.get("COGNEXUS_AGENT_DID", "mcp-demo-server")
@@ -119,16 +133,16 @@ def gate(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
-    d = gate(name, arguments)
-    outcome = d.get("outcome", "deny")
+    # decide() blocks on the network: run the gate in a worker thread so the
+    # event loop keeps serving other requests while it waits.
+    d = await asyncio.to_thread(gate, name, arguments)
+    outcome = d.get("outcome")
     decision_id = d.get("decision_id", "")
 
-    if outcome == "deny":
-        reasons = "; ".join(d.get("reasons", [])) or "policy denied this call"
-        return [TextContent(
-            type="text",
-            text=f"REFUSED: {reasons}\n(decision {decision_id})",
-        )]
+    if outcome == "allow":
+        # Only now does the tool actually execute.
+        result = run_tool(name, arguments)
+        return [TextContent(type="text", text=f"{result}\n(sealed as {decision_id})")]
 
     if outcome == "review":
         # Do not act yet — a human owns this one now.
@@ -140,9 +154,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             ),
         )]
 
-    # allow — and only now does the tool actually execute.
-    result = run_tool(name, arguments)
-    return [TextContent(type="text", text=f"{result}\n(sealed as {decision_id})")]
+    # deny, and any outcome this code does not know: never run the tool on it.
+    if outcome == "deny":
+        reasons = "; ".join(d.get("reasons") or []) or "policy denied this call"
+    else:
+        reasons = f"unrecognised outcome {outcome!r} — failing closed"
+    return [TextContent(
+        type="text",
+        text=f"REFUSED: {reasons}\n(decision {decision_id})",
+    )]
 
 
 def run_tool(name: str, arguments: dict[str, Any]) -> str:
@@ -156,9 +176,11 @@ def run_tool(name: str, arguments: dict[str, Any]) -> str:
 
 async def main() -> None:
     if not os.environ.get("COGNEXUS_API_KEY"):
+        # stderr: stdout carries the JSON-RPC stream a stdio client reads.
         print(
             "Note: no COGNEXUS_API_KEY set — calls run against the local guard "
             "library and are not sealed. `artzain login` takes ~15s.",
+            file=sys.stderr,
             flush=True,
         )
     async with stdio_server() as (read, write):
@@ -166,6 +188,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    import asyncio
-
     asyncio.run(main())
