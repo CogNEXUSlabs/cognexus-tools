@@ -9,7 +9,6 @@ Run integration tests (see ``tests/test_api_key_integration.py`` docstring)::
 
     cd pypi-package
     export COGNEXUS_API_KEY="your-key"
-    export COGNEXUS_API_BASE_URL="https://your-staging-host"   # optional
     python -m pytest tests/test_api_key_integration.py -v
 
 Environment variables
