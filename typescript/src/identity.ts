@@ -1,7 +1,7 @@
 /** `fetchApiKeyIdentity()` — validate the configured key (`GET /api/api-keys/me`). */
 
 import { resolveCredentials, type ResolvedCredentials } from "./config.js";
-import { DecisionError } from "./errors.js";
+import { DecisionError, failureKind } from "./errors.js";
 import type { FetchLike } from "./decide.js";
 
 export interface ApiKeyIdentity {
@@ -44,9 +44,26 @@ export async function fetchApiKeyIdentity(options?: {
         method: "GET",
         headers: { "X-Api-Key": apiKey },
         signal: controller.signal,
+        redirect: "manual",
       });
     } catch (err) {
-      throw new DecisionError(`Key validation unreachable: ${(err as Error).message}`);
+      // Named by its kind and where the base URL came from, as in decide().
+      throw new DecisionError(
+        `Key validation unreachable: ${failureKind(err, controller.signal)} ` +
+          `(base URL from ${creds.baseSource})`,
+      );
+    }
+    // A redirect is not followed (see FetchLike). An http:// base URL that
+    // the server redirects to https:// ends here, so the message names the
+    // redirect rather than suggest the key is bad. Its body is left unread,
+    // so the request is ended to release the connection.
+    if (resp.status >= 300 && resp.status < 400) {
+      controller.abort();
+      throw new DecisionError(
+        `Key validation returned HTTP ${resp.status}, a redirect, which is not followed: ` +
+          "check the base URL",
+        { status: resp.status },
+      );
     }
     if (!resp.ok) {
       throw new DecisionError(`Key validation failed (HTTP ${resp.status}).`, {
@@ -57,12 +74,11 @@ export async function fetchApiKeyIdentity(options?: {
     try {
       parsed = await resp.json();
     } catch (err) {
-      const problem =
-        (err as Error)?.name === "SyntaxError"
-          ? "with a non-JSON body"
-          : "but its body could not be read";
+      const kind = failureKind(err, controller.signal);
       throw new DecisionError(
-        `Key validation returned HTTP ${resp.status} ${problem}: ${(err as Error).message}`,
+        kind === "SyntaxError"
+          ? `Key validation returned HTTP ${resp.status} with a non-JSON body`
+          : `Key validation returned HTTP ${resp.status} but its body could not be read: ${kind}`,
         { status: resp.status },
       );
     }

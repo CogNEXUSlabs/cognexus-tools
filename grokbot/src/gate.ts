@@ -14,7 +14,7 @@ import {
   DECIDE_TIMEOUT_MS,
   postDecision,
   resolveApiKey,
-  resolveBaseUrl,
+  resolveBaseUrlSetting,
   type DecisionResponse,
   type FetchLike,
 } from "./client.js";
@@ -139,9 +139,11 @@ export async function gateToolCall(
   const agentDid = input.agentDid || cfg.agentDid || "grokbot-agent";
 
   try {
+    const base = resolveBaseUrlSetting(cfg.baseUrl, cfg.baseUrlSource);
     const decision: DecisionResponse = await postDecision({
       apiKey,
-      baseUrl: resolveBaseUrl(cfg.baseUrl),
+      baseUrl: base.url,
+      baseSource: base.source,
       action: toolName,
       target: input.target || `grokbot:tool:${toolName}`,
       payload: input.payload || payloadFor(toolName, input.params),

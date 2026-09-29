@@ -42,7 +42,11 @@ export async function postSdkEvent(options: SdkEventOptions): Promise<boolean> {
         payload: options.payload ?? {},
       }),
       signal: controller.signal,
+      redirect: "manual",
     });
+    // A refusal's body (a redirect's included) is not read: end the request,
+    // or a large one holds the connection until garbage collection.
+    if (!resp.ok) controller.abort();
     return resp.ok;
   } catch {
     return false;

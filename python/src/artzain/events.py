@@ -36,7 +36,10 @@ Quick-start::
 Environment variables
 ---------------------
 ``COGNEXUS_PROMPT_DEFENSE_EVENTS_DIR``
-    Directory for the JSONL file. Falls back to ``REPORTS_DIR``, then ``/tmp``.
+    Directory for the JSONL file. Falls back to ``REPORTS_DIR``, then to a
+    folder only the user can read: ``%LOCALAPPDATA%\\artzain\\events`` on
+    Windows, ``~/.artzain/events`` elsewhere (``<tmp>/artzain-events-<uid>``,
+    also the user's alone, on a host with no writable home).
 ``COGNEXUS_PROMPT_DEFENSE_JSONL_PASSES``
     When ``0`` / ``false``, clean scans are not appended to JSONL (detections
     are always written). Default: include passes in JSONL.
@@ -48,33 +51,91 @@ Environment variables
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
 import os
 import re
+import sys
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from artzain._private_files import private_dir, private_temp_dir
 from artzain._surrogates import replace_unpaired_surrogates, without_unpaired_surrogates
-from artzain.audit_chain import get_chain
+from artzain.audit_chain import AuditLogWriteError, get_chain
 from artzain.pii_detector import redact_text
 from artzain.prompt_injection import DetectionResult
 
 _log = logging.getLogger("artzain.events")
 
 
+def _default_events_dir() -> Path:
+    """The user's own folder for events: ``%LOCALAPPDATA%\\artzain\\events``
+    on Windows, ``~/.artzain/events`` elsewhere."""
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / "artzain" / "events"
+    return Path.home() / ".artzain" / "events"
+
+
+def _give_to_invoking_user(sdk_dir: Path) -> None:
+    """``~/.artzain``, just made by root under ``sudo`` or ``doas`` in the
+    invoking user's home, is theirs, as ``artzain login`` leaves it: kept
+    root's, it refused them their credentials profile."""
+    from artzain.credentials import _invoking_user
+
+    invoker = _invoking_user()
+    if invoker is None:
+        return
+    with contextlib.suppress(OSError):
+        if os.stat(sdk_dir.parent).st_uid == invoker[0]:
+            os.chown(sdk_dir, *invoker)
+
+
+def _user_events_dir() -> Path:
+    """:func:`_default_events_dir`, made private; on a POSIX host with no
+    writable home (a function sandbox, a container user without one), a
+    ``0700`` folder of the user's own in the temp folder instead, as when
+    the folder there is another user's."""
+    try:
+        folder = _default_events_dir()
+        sdk_dir = folder.parent
+        made_sdk_dir = not os.path.lexists(sdk_dir)
+        private_dir(folder)
+        if made_sdk_dir:
+            _give_to_invoking_user(sdk_dir)
+        return folder
+    except (OSError, RuntimeError, KeyError) as exc:
+        # RuntimeError / KeyError: Path.home() with no home to name.
+        if sys.platform == "win32":
+            failure: BaseException = exc
+        else:
+            try:
+                return private_temp_dir("artzain-events")
+            except OSError as temp_exc:
+                failure = temp_exc
+    raise AuditLogWriteError(
+        f"no private folder for prompt-defense events ({failure}); "
+        "set COGNEXUS_PROMPT_DEFENSE_EVENTS_DIR to a folder of your own"
+    ) from failure
+
+
 def _events_path() -> Path:
-    base = (
-        os.environ.get("COGNEXUS_PROMPT_DEFENSE_EVENTS_DIR")
-        or os.environ.get("REPORTS_DIR")
-        or "/tmp"
-    )
-    root = Path(base)
-    root.mkdir(parents=True, exist_ok=True)
+    configured = (os.environ.get("COGNEXUS_PROMPT_DEFENSE_EVENTS_DIR")
+                  or os.environ.get("REPORTS_DIR"))
+    if configured:
+        root = Path(configured)
+        root.mkdir(parents=True, exist_ok=True)
+    else:
+        # Previews of screened prompts and their chain: the user's alone. A
+        # shared /tmp (\tmp on the current drive on Windows, which any
+        # signed-in user may change) let others read the previews and rewrite
+        # the chain (survey 25 Sep 2026, row 38).
+        root = _user_events_dir()
     return root / "prompt_defense_events.jsonl"
 
 
@@ -348,7 +409,10 @@ def read_recent_events(
     if events_dir is not None:
         path = Path(events_dir) / "prompt_defense_events.jsonl"
     else:
-        path = _events_path()
+        try:
+            path = _events_path()
+        except OSError:
+            return []  # no folder of the user's own: nothing was written there
 
     if not path.is_file():
         return []

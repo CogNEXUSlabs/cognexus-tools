@@ -534,7 +534,8 @@ preview keeps:
 
 ```python
 # Events go to $COGNEXUS_PROMPT_DEFENSE_EVENTS_DIR/prompt_defense_events.jsonl
-# (falls back to $REPORTS_DIR, then /tmp)
+# (falls back to $REPORTS_DIR, then ~/.artzain/events, or
+# %LOCALAPPDATA%\artzain\events on Windows: a folder only you can read)
 
 from artzain.events import read_recent_events
 
@@ -636,7 +637,7 @@ otherwise, or with nothing fetched yet, the built-in conduct rules alone.
 | `COGNEXUS_POLICY_RULES_PATH` | — | JSON file of rules for `screen_client_policy()` and offline `decide()` |
 | `COGNEXUS_POLICY_RULES_JSON` | — | Inline JSON rules (overrides path) |
 | `COGNEXUS_BUNDLE_LAST_GOOD_GRACE_SECONDS` | `300` | How long the rules fetched last keep applying while fetches fail |
-| `COGNEXUS_PROMPT_DEFENSE_EVENTS_DIR` | `/tmp` | JSONL audit file directory |
+| `COGNEXUS_PROMPT_DEFENSE_EVENTS_DIR` | `$REPORTS_DIR`, else `~/.artzain/events` (`%LOCALAPPDATA%\artzain\events` on Windows) | JSONL audit file directory |
 | `COGNEXUS_PROMPT_INJECTION_LOG` | `1` | Log clean scans at DEBUG |
 | `COGNEXUS_PROMPT_INJECTION_BLOCK` | `0` | Block any injection (not just CRITICAL) |
 | `COGNEXUS_PROMPT_INJECTION_USER_SENSITIVITY` | `balanced` | User-input preset |

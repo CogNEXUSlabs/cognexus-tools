@@ -45,6 +45,8 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, Callable
 
+from artzain._private_files import open_private, private_dir, write_private
+
 __all__ = [
     "DEFAULT_MANIFEST_URL",
     "LocalError",
@@ -117,11 +119,16 @@ def backups_dir() -> Path:
     return workspace_dir() / "backups"
 
 
-def _write_atomic(path: Path, text: str) -> None:
+def _write_atomic(path: Path, text: str, *, private: bool = False) -> None:
     """Never hand a half-written file to a concurrent reader (compose runs
-    ``-f`` on these)."""
+    ``-f`` on these). With *private*, the file is ``0600`` from the moment it
+    exists, so a secret in it is never readable by another user, not even
+    between the write and a chmod (survey 25 Sep 2026, row 37)."""
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
+    if private:
+        write_private(tmp, text.encode("utf-8"))
+    else:
+        tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
 
 
@@ -134,7 +141,7 @@ def _workspace_lock():
     install nothing short of ``--purge`` recovers. O_EXCL is the portable
     atomic primitive; the lock file names its holder for the stale case.
     """
-    workspace_dir().mkdir(parents=True, exist_ok=True)
+    private_dir(workspace_dir())
     lock = workspace_dir() / ".lock"
     try:
         fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -309,18 +316,15 @@ def ensure_workspace(manifest: dict[str, Any],
     in, so a hand-created .env (or one from an interrupted run) cannot
     leave the stack without a Postgres password.
     """
-    ws = workspace_dir()
-    ws.mkdir(parents=True, exist_ok=True)
-    backups_dir().mkdir(parents=True, exist_ok=True)
+    # The workspace holds the stack's secrets and database dumps: its user's
+    # alone, folders and files from the moment they exist.
+    ws = private_dir(workspace_dir())
+    private_dir(backups_dir())
 
     existing = read_env()
     env_text, env_changed = _render_env(existing, ui_port_choice)
     if env_changed or not _env_path().is_file():
-        _write_atomic(_env_path(), env_text)
-        try:  # POSIX only; harmless elsewhere
-            _env_path().chmod(0o600)
-        except OSError:
-            pass
+        _write_atomic(_env_path(), env_text, private=True)
 
     _write_atomic(_compose_path(), render_compose(manifest))
     pins = applied_pins() or {}
@@ -731,7 +735,7 @@ def _predump(out=None) -> Path:
     in RAM besides.
     """
     out = out or sys.stdout
-    backups_dir().mkdir(parents=True, exist_ok=True)
+    private_dir(backups_dir())
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     target = backups_dir() / f"pre-upgrade-{stamp}.sql.gz"
     cmd = _compose_cmd(["exec", "-T", "postgres", "pg_dump", "-U", "cognexus",
@@ -740,7 +744,9 @@ def _predump(out=None) -> Path:
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE)
-        with gzip.open(target, "wb") as fh:
+        # The whole database: 0600 from the moment the file exists.
+        with os.fdopen(open_private(target), "wb") as raw, \
+                gzip.GzipFile(filename=target.name, mode="wb", fileobj=raw) as fh:
             assert proc.stdout is not None
             while True:
                 chunk = proc.stdout.read(256 * 1024)

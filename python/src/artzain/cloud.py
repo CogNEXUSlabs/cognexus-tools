@@ -12,6 +12,7 @@ Environment variables
     Fallback secret name (same semantics as ``COGNEXUS_API_KEY``).
 ``COGNEXUS_API_BASE_URL``
     API origin, e.g. ``https://app.cognexuslabs.ai`` — **no trailing slash required**.
+    An ``http://`` or ``https://`` URL; with any other, no key is sent.
 ``COGNEXUS_SDK_BROWSER_HEADERS``
     ``"1"`` (default for now) makes the CLI and GUI send browser-like headers
     so the CDN/WAF lets them through; ``"0"`` sends the honest
@@ -28,6 +29,8 @@ import logging
 import os
 import platform
 import queue
+import select
+import ssl
 import sys
 import threading
 import time
@@ -46,8 +49,11 @@ from artzain.credentials import (
 
 _log = logging.getLogger("artzain.cloud")
 
-_override_key: Optional[str] = None
-_override_base: Optional[str] = None
+#: What :func:`configure` set: the API key and the base URL, ``None`` for one
+#: not set. One value that configure() replaces whole, so a call that reads it
+#: without the lock gets the pair as one configure() call left it, never a mix
+#: of two.
+_overrides: tuple[Optional[str], Optional[str]] = (None, None)
 _session_lock = threading.Lock()
 _session_logged = False
 _session_user_prompt: Optional[str] = None
@@ -126,7 +132,8 @@ def _key_hint(key: str, keep: int = 14) -> str:
 #: the change, so a cache of what the previous ones fetched can tell it is stale
 #: (``artzain._helpers.load_client_policy_rules``).
 _credentials_generation = 0
-#: Makes a configure() call one step, so two at once cannot cancel the bump.
+#: Makes a configure() call one step, so two at once cannot drop each other's
+#: change to the pair or cancel the bump. Readers of the pair do not take it.
 _configure_lock = threading.Lock()
 
 
@@ -135,21 +142,29 @@ def configure(*, api_key: Any = _MISSING, base_url: Any = _MISSING) -> None:
 
     Pass ``api_key=None`` or ``base_url=None`` to clear an override and fall
     back to environment variables / built-in default base URL.
+
+    A call made meanwhile, on another thread or from a signal handler, uses
+    the key and base URL as they were before this call or as it leaves them,
+    never one of each.
     """
-    global _override_key, _override_base, _credentials_generation
+    global _overrides, _credentials_generation
     with _configure_lock:
-        before = (_override_key, _override_base)
+        key, base = _overrides
         if api_key is not _MISSING:
             if api_key is None:
-                _override_key = None
+                key = None
             else:
-                _override_key = str(api_key).strip() or None
+                key = str(api_key).strip() or None
         if base_url is not _MISSING:
             if base_url is None:
-                _override_base = None
+                base = None
             else:
-                _override_base = str(base_url).strip().rstrip("/") or None
-        if (_override_key, _override_base) != before:
+                base = str(base_url).strip().rstrip("/") or None
+        if (key, base) != _overrides:
+            # One assignment, after both values are known: a call that reads
+            # the settings meanwhile gets the previous pair or this one, and a
+            # value that raises above changes neither.
+            _overrides = (key, base)
             _credentials_generation += 1
 
 
@@ -160,7 +175,10 @@ def _resolve() -> ResolvedCredentials:
     host is not the one the key was issued with, or when the credentials
     profile is there but cannot be read.
     """
-    return resolve_credentials(api_key=_override_key, base_url=_override_base)
+    # One read, so a configure() on another thread cannot land between the
+    # key and the base URL.
+    api_key, base_url = _overrides
+    return resolve_credentials(api_key=api_key, base_url=base_url)
 
 
 #: Conflict messages already logged, so fire-and-forget callers warn once.
@@ -302,6 +320,74 @@ def _api_request_headers(api_key: Optional[str] = None) -> dict[str, str]:
     return headers
 
 
+#: The last opener :func:`_api_opener` built, with the settings it was built
+#: for.
+_api_opener_built: Optional[tuple[Any, urllib.request.OpenerDirector]] = None
+
+
+def _api_opener() -> urllib.request.OpenerDirector:
+    """The handlers ``urlopen`` uses, for ``http`` and ``https`` only, and
+    without its redirect handler.
+
+    That handler copies a request's headers, the API key or a session token
+    among them, onto the request it sends wherever ``Location`` points,
+    another host included. None of the routes the SDK calls answers with a
+    redirect, so here a 3xx is raised as the ``HTTPError`` it is, like any
+    other status the call did not expect, and nothing is sent anywhere else.
+
+    The proxies are the ones ``urlopen`` would use (the environment's, or the
+    system's on Windows and macOS), read for each request, but only those for
+    ``http`` and ``https``: a proxy set for another scheme, as Windows sets
+    its one system proxy for every scheme, would take a request for that
+    scheme to it over plain HTTP, headers and all.
+
+    The opener is built again only when the proxies change, or what a new
+    TLS context would be made from (``ssl._create_default_https_context``,
+    ``SSL_CERT_FILE``, ``SSL_CERT_DIR``): building one builds a TLS context,
+    which loads the certificate store, and a context kept from a moment when
+    an application had turned verification off would not verify later
+    requests. An opener an application installs with
+    ``urllib.request.install_opener`` is not used.
+    """
+    global _api_opener_built
+    proxies = {
+        scheme: url
+        for scheme, url in urllib.request.getproxies().items()
+        if scheme.lower() in ("http", "https")
+    }
+    setting = (
+        tuple(sorted(proxies.items())),
+        ssl._create_default_https_context,
+        os.environ.get("SSL_CERT_FILE"),
+        os.environ.get("SSL_CERT_DIR"),
+    )
+    built = _api_opener_built
+    if built is not None and built[0] == setting:
+        return built[1]
+    opener = urllib.request.OpenerDirector()
+    for handler in (
+        urllib.request.ProxyHandler(proxies),
+        urllib.request.UnknownHandler(),
+        urllib.request.HTTPHandler(),
+        urllib.request.HTTPSHandler(),
+        urllib.request.HTTPDefaultErrorHandler(),
+        urllib.request.HTTPErrorProcessor(),
+    ):
+        opener.add_handler(handler)
+    _api_opener_built = (setting, opener)
+    return opener
+
+
+def _urlopen(req: urllib.request.Request, *, timeout: float) -> Any:
+    """``urllib.request.urlopen(req, timeout=timeout)`` without following a
+    redirect (:func:`_api_opener`). Every urllib request that carries the API
+    key or a session token goes through here: ``decide()``, the key check and
+    the policy-rules fetch in this module, the CLI's and ``artzain gui``'s.
+    The event and policy-decision posts go through :class:`_CloudTransport`,
+    which follows no redirect either."""
+    return _api_opener().open(req, timeout=timeout)
+
+
 def _probe_api_key_via_events(*, timeout_sec: float = 8.0) -> dict[str, Any]:
     """Validate the configured key with ``POST /api/events`` (older dashboard builds).
 
@@ -327,7 +413,7 @@ def _probe_api_key_via_events(*, timeout_sec: float = 8.0) -> dict[str, Any]:
     headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, method="POST", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+        with _urlopen(req, timeout=timeout_sec) as resp:
             if resp.status >= 400:
                 return {
                     "valid": False,
@@ -384,7 +470,7 @@ def fetch_api_key_identity(*, timeout_sec: float = 8.0) -> dict[str, Any]:
     url = base + "/api/api-keys/me"
     req = urllib.request.Request(url, method="GET", headers=_api_request_headers(key))
     try:
-        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+        with _urlopen(req, timeout=timeout_sec) as resp:
             body = resp.read().decode("utf-8")
         data = json.loads(body) if body.strip() else {}
         if not isinstance(data, dict) or not data.get("ok"):
@@ -534,14 +620,18 @@ class _CloudTransport:
     """One keep-alive ``http.client`` connection reused across telemetry POSTs.
 
     The connection is opened lazily, kept for the next request, and closed on
-    any socket / protocol error so the following request reconnects. A request
-    that fails on a *reused* connection (a keep-alive the server has since
-    dropped) is retried once on a fresh one.
+    any socket / protocol error so the following request reconnects. A kept
+    connection the server has closed while idle, or one idle for longer than
+    a NAT on the way may keep it, is replaced before a request is sent on
+    it. A request is sent again (once, on a fresh connection) only
+    when sending it failed on a kept connection, never once it may have
+    reached the server: the posts are not idempotent.
     """
 
     def __init__(self) -> None:
         self._conn: Any = None
         self._conn_key: Optional[tuple[str, str, Optional[int], float]] = None
+        self._idle_since = 0.0  # when the kept connection's last answer came
 
     def close(self) -> None:
         conn, self._conn, self._conn_key = self._conn, None, None
@@ -570,33 +660,93 @@ class _CloudTransport:
                 conn.set_tunnel(host, port, headers=tunnel_headers)
                 return conn
             return http.client.HTTPSConnection(host, port, timeout=timeout_sec)
-        return http.client.HTTPConnection(host, port, timeout=timeout_sec)
+        if scheme == "http":
+            return http.client.HTTPConnection(host, port, timeout=timeout_sec)
+        raise ValueError("not an http:// or https:// URL")
 
     def post(
         self, url: str, body: bytes, headers: dict[str, str], timeout_sec: float
     ) -> tuple[int, bytes]:
         parts = urllib.parse.urlsplit(url)
         host = parts.hostname or ""
+        if parts.scheme not in ("https", "http") or not host:
+            # Any other scheme went over plain HTTP, and a URL with no host
+            # dialled an empty one: this machine. The credentials are refused
+            # such a base URL where they are resolved; this refuses any other
+            # URL that reaches the sender. The message leaves the URL out.
+            raise ValueError("not an http:// or https:// URL that names a host")
         key = (parts.scheme, host, parts.port, float(timeout_sec))
         path = parts.path or "/"
         if parts.query:
             path += "?" + parts.query
         for attempt in (1, 2):
-            reused = self._conn is not None and self._conn_key == key
-            if not reused:
+            if (self._conn is None or self._conn_key != key
+                    or time.monotonic() - self._idle_since > _CONNECTION_IDLE_LIMIT_SEC
+                    or _server_closed(self._conn)):
                 self.close()
                 self._conn = self._open(parts.scheme, host, parts.port, timeout_sec)
                 self._conn_key = key
+            # A socket kept from an earlier request (``http.client`` opens a
+            # new one when it holds none).
+            reused = getattr(self._conn, "sock", None) is not None
             try:
                 self._conn.request("POST", path, body=body, headers=headers)
+            except Exception as exc:
+                # A connection left mid-request (a header value refused
+                # before sending, say) cannot carry the next one.
+                self.close()
+                # The request did not get out whole, so the server cannot
+                # have acted on it: on a kept-alive connection, one more try
+                # on a fresh one. A send that timed out met a slow server,
+                # not a closed connection.
+                if (attempt == 2 or not reused or isinstance(exc, TimeoutError)
+                        or not isinstance(exc, (http.client.HTTPException, OSError))):
+                    raise
+                continue
+            try:
                 resp = self._conn.getresponse()
                 data = resp.read()
-                return int(resp.status), data
-            except (http.client.HTTPException, OSError):
+            except Exception:
+                # The server may have read the whole request: an answer that
+                # is slow, cut short or never comes is not asked for again,
+                # or the event (or a human verdict) is stored twice with
+                # nothing to tell the copies apart (survey 25 Sep 2026, row 35).
                 self.close()
-                if attempt == 2 or not reused:
-                    raise
+                raise
+            self._idle_since = time.monotonic()
+            return int(resp.status), data
         raise RuntimeError("unreachable")  # pragma: no cover
+
+
+# A kept connection idle longer than this is not used again. A NAT or
+# firewall on the way may drop an idle flow after a few minutes without
+# telling either end; a post sent on it is reset unread, and it is not sent
+# again once it may have left, so it would be lost.
+_CONNECTION_IDLE_LIMIT_SEC = 60.0
+
+
+def _server_closed(conn: Any) -> bool:
+    """Whether the server has closed (or written to) an idle kept-alive connection.
+
+    Nothing is due on a connection between requests, so a readable one holds
+    the server's close, or an answer to nothing: either way it cannot carry
+    the next request, which would fail on it and not be sent again.
+    """
+    sock = getattr(conn, "sock", None)
+    if sock is None:
+        return False
+    try:
+        pending = getattr(sock, "pending", None)  # TLS bytes already decrypted
+        if pending is not None and pending():
+            return True
+        if hasattr(select, "poll"):
+            poller = select.poll()
+            poller.register(sock, select.POLLIN)
+            return bool(poller.poll(0))
+        readable, _, _ = select.select([sock], [], [], 0)
+        return bool(readable)
+    except (OSError, ValueError):
+        return True
 
 
 class _CloudWorker:
@@ -703,7 +853,8 @@ def _deliver_post(transport: _CloudTransport, item: _QueuedPost) -> None:
     except Exception as exc:
         _log_failure(f"{item.op} {item.label}", exc, item.base_source)
         return
-    if status >= 400:
+    # A redirect is not followed, so its row did not reach the API either.
+    if status >= 300:
         _log_http_status(item.op, item.label, status, body, item.base_source)
 
 
@@ -1024,12 +1175,13 @@ class _PolicyRulesFetchFailed(Exception):
 def _fetch_policy_rules(
     creds: Optional[ResolvedCredentials], *, timeout_sec: float = 12.0, quiet: bool = False
 ) -> list[Any]:
-    """The tenant's rule rows, fetched with *creds* (``None``: they conflict).
+    """The tenant's rule rows, fetched with *creds* (``None``: the settings
+    refused to send the key, which was warned of when they were resolved).
 
     ``[]`` is an answer: the tenant has no rules, or no key is configured, so
     there is no tenant to fetch for. Every other way the fetch can end without a
     rule list raises :class:`_PolicyRulesFetchFailed`: a key that may not go to
-    the host that is set, a request that cannot be made or fails (an HTTP
+    the base URL that is set, a request that cannot be made or fails (an HTTP
     error, among them the 503 the platform answers while it cannot read the
     tenant's rules, or a timeout), a body that is not a rule list. Each failure
     is logged, at DEBUG rather than WARNING when *quiet*: a retry, whose run of
@@ -1037,7 +1189,7 @@ def _fetch_policy_rules(
     """
     level = logging.DEBUG if quiet else logging.WARNING
     if creds is None:
-        raise _PolicyRulesFetchFailed("the API key and the base URL conflict")
+        raise _PolicyRulesFetchFailed("the API key may not go to the base URL that is set")
     key = creds.api_key
     if not key:
         _log.debug("cloud: skip policy rules fetch — no API key")
@@ -1048,7 +1200,7 @@ def _fetch_policy_rules(
             method="GET",
             headers=_api_request_headers(key),
         )
-        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+        with _urlopen(req, timeout=timeout_sec) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as exc:
         if quiet:

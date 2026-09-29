@@ -95,6 +95,10 @@ export class ArtzainDecision implements INodeType {
     const creds = await this.getCredentials("artzainApi");
     const apiKey = creds.apiKey || "";
     const baseUrl = creds.baseUrl || "https://app.cognexuslabs.ai";
+    const label = {
+      what: "Decision API",
+      baseSource: creds.baseUrl ? "the credential's Base URL" : "default",
+    };
     // Unique per execution so an empty Request ID never replays another
     // run's decision from the server's 48 h idempotency ledger.
     const executionId =
@@ -136,7 +140,7 @@ export class ArtzainDecision implements INodeType {
             body: JSON.stringify(body),
           },
           timeoutMs,
-          async (resp) => ({ status: resp.status, text: await resp.text() }),
+          label,
         );
         let parsed: unknown;
         try {

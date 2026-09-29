@@ -58,6 +58,7 @@ a dashboard JWT and **not** an envelope `cnxe_…` key). Example:
 | `deny` | exit 2 / `{ allow: false, blockReason }` |
 | `review` | exit 2 — human owns it in the CogNEXUS Review Queue |
 | HTTP 503 / 401 / 422 / missing key | exit 2 (fail closed) |
+| a redirect (HTTP 3xx) | exit 2: not followed, so the key stays with the configured host |
 
 ## Instance announce (opt-in)
 
@@ -75,8 +76,8 @@ Identity only — **names**, never prompts or `gateway.json` — POSTs to
 `grokbot-announce:{instance}#agent:{id}` behind the standard sealed
 registration gate. Pick a stable `instance` name (no `#`). Announce is
 telemetry, not a gate: it never blocks or delays the Decision call.
-Transient failures (network, 5xx, 429) retry on a later gated call; a 4xx
-refusal means config — fix and restart.
+Transient failures (network, 5xx, 429) retry on a later gated call; a 3xx or
+4xx refusal means config — fix and restart.
 
 ## Pull enroll (default on)
 

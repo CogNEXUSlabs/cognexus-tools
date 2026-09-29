@@ -59,6 +59,7 @@ a dashboard JWT and **not** an envelope `cnxe_…` key). Optional:
 | `deny` | `{ block: true, blockReason }` |
 | `review` | `{ block: true }` — human owns it in the CogNEXUS Review Queue |
 | HTTP 503 / 401 / 422 / missing key | `{ block: true }` (fail closed) |
+| a redirect (HTTP 3xx) | `{ block: true }`: not followed, so the key stays with the configured host |
 
 ## Instance announce (v0.2, opt-in)
 
@@ -83,8 +84,8 @@ registration gate, in the review queue like every other discovery.
 decision leaves), then `agentDid`. Pick a stable `instance` name (no `#`) —
 changing it re-namespaces the rows. Announce is telemetry, not a gate: it
 never blocks or delays tool gating, and its failure never fails closed.
-Transient failures (network, 5xx, 429) retry on a later gated call; a 4xx
-refusal means config — fix and restart. The success log line reports the
+Transient failures (network, 5xx, 429) retry on a later gated call; a 3xx or
+4xx refusal means config — fix and restart. The success log line reports the
 server's `registered/seen/blocked/deferred/failed` counts; `deferred` rows
 are held by capacity and only submitted again on a re-announce, and
 `failed` rows hit a server-side write error and were not stored at all —
@@ -107,4 +108,4 @@ Agents that already hold a Decision API key pull their adapter:
 { already_have_key: true }, envelope: null }` — never a `cnxe_`. Set
 `enroll: false` to skip. Enroll is telemetry, not a gate: it never blocks
 or delays tool gating. Transient failures retry on a later gated call; a
-4xx means config — fix and restart.
+3xx or 4xx means config — fix and restart.

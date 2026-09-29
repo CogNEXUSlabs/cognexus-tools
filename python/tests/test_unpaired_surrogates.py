@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import urllib.request
 from decimal import Decimal
 
 import pytest
@@ -88,14 +87,17 @@ def _isolated(monkeypatch, tmp_path):
 
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch):
-    """Every test: reaching ``urlopen`` fails it. Online tests read the call list."""
+    """Every test: reaching the API (``cloud._urlopen``, which ``decide()``
+    sends through) fails it. Online tests read the call list."""
+    from artzain import cloud
+
     calls: list[object] = []
 
     def _unreachable(*args, **kwargs):
         calls.append(args)
         raise AssertionError("urlopen must not be reached")
 
-    monkeypatch.setattr(urllib.request, "urlopen", _unreachable)
+    monkeypatch.setattr(cloud, "_urlopen", _unreachable)
     return calls
 
 

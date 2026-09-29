@@ -8,7 +8,7 @@ for CI and guard-sync until those jobs move here.
 
 | Package | Install | Latest | What it is |
 |---|---|---|---|
-| **`artzain`** | `pip install artzain` | [![PyPI version](https://img.shields.io/pypi/v/artzain)](https://pypi.org/project/artzain/) | Python SDK — local guards, `decide()`, CLI (`login`, `quickstart`, `audit`, `policy`, `registry`) |
+| **`artzain`** | `pip install artzain` | [![PyPI version](https://img.shields.io/pypi/v/artzain)](https://pypi.org/project/artzain/) | Python SDK — local guards, `decide()`, CLI (`login`, `quickstart`, `init`, `audit`, `policy`, `registry`) |
 | **`@cognexuslabs/artzain`** | `npm i @cognexuslabs/artzain` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/artzain)](https://www.npmjs.com/package/@cognexuslabs/artzain) | TypeScript SDK — remote-only Node client (`decide`, events, identity) |
 | **`@cognexuslabs/openclaw-artzain`** | `npm i @cognexuslabs/openclaw-artzain` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/openclaw-artzain)](https://www.npmjs.com/package/@cognexuslabs/openclaw-artzain) | OpenClaw `before_tool_call` plugin (deny / review / errors block; not `/approve`) |
 | **`@cognexuslabs/n8n-nodes-artzain`** | `npm i @cognexuslabs/n8n-nodes-artzain` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/n8n-nodes-artzain)](https://www.npmjs.com/package/@cognexuslabs/n8n-nodes-artzain) | n8n Decision + Envelope nodes (fail closed on HTTP 503; `review` does not Wait) |
@@ -51,7 +51,18 @@ pip install "artzain[policy]"   # policy bundle signing (keygen/sign)
 export COGNEXUS_API_KEY=cnx_…
 artzain login
 artzain quickstart
+
+# artzain 0.6.32
+artzain init --framework openshell
+artzain registry list --source openshell
 ```
+
+`init --framework openshell` writes `artzain_openshell_policy.yaml`: a
+network policy that allows the Decision API and a local inference host
+with enforcement on, and skill text that proposes a `policy.local` rule
+and waits. The command does not run that file as Python. `registry list`
+and `registry export` accept `--source openshell`. Releases through
+0.6.31 do not contain either command.
 
 ```python
 import artzain
