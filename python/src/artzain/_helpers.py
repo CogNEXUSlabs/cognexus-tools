@@ -952,11 +952,13 @@ def _load_fetched_policy_rules(*, force_refresh: bool) -> list[ClientPolicyRule]
             # The profile holds the key, or the host a key set elsewhere may
             # go to: no fetch can be made, and that is a failed fetch, not a
             # key cleared. What configure() and the environment set can
-            # still be read.
+            # still be read: configure()'s key and base URL in one read, so
+            # they are the pair as one call of it left them.
+            api_key, base_url = cloud._overrides
             return _policy_rules_profile_unreadable(
                 generation,
-                credentials._key_set_above_profile(cloud._override_key)[0],
-                credentials._named_host(cloud._override_base)[0],
+                credentials._key_set_above_profile(api_key)[0],
+                credentials._named_host(base_url)[0],
             )
         except credentials.CredentialConflictError as exc:
             cloud._warn_conflict(exc)

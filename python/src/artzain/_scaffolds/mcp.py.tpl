@@ -15,20 +15,26 @@ every transport, and it is the one place the *arguments* are known.
 
 Only `allow` runs the tool, and `review` queues it. `deny`, or any outcome this
 code does not know (missing, misspelt, or added in a later release), refuses
-it. `decide()` blocks on the network, so the gate runs in a worker thread and
-the server keeps answering other requests while it waits.
+it. A call that did not run comes back as a failed tool call (`is_error`), so
+a model or client never takes the refusal or the queued notice for the tool's
+output. So does a call to a tool this server does not list, refused without a
+decision, and a call that raises: its error goes to the server's log
+(stderr), not into the reply. `decide()` blocks on the network, so the gate
+runs in a worker thread and the server keeps answering other requests while
+it waits.
 
 Note the payload kind: `tool_call`. That selects the tool-contract and
 destructive-action guards, which is what you want for a structured call —
 `model_output` would skip the tool-contract check.
 
-This file uses the MCP SDK 1.x server API (the `list_tools()` and
-`call_tool()` decorators). The 2.x SDK registers handlers in the `Server`
-constructor instead.
+This file uses the MCP SDK 2.x low-level server. `call_tool` is the one
+handler every tool call reaches, passed to the `Server` constructor as
+`on_call_tool`. On the 1.x SDK, which registers handlers with decorators, the
+file exits saying what to install.
 
 Install::
 
-    pip install artzain "mcp<2"
+    pip install artzain "mcp>=2,<3"
 
 Run::
 
@@ -39,6 +45,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sys
 from typing import Any
@@ -46,49 +53,57 @@ from typing import Any
 import artzain
 
 try:
-    from mcp.server import Server
+    from mcp.server import Server, ServerRequestContext
     from mcp.server.stdio import stdio_server
-    from mcp.types import TextContent, Tool
+    from mcp.types import (
+        CallToolRequestParams,
+        CallToolResult,
+        ListToolsResult,
+        PaginatedRequestParams,
+        TextContent,
+        Tool,
+    )
 except ImportError:  # pragma: no cover - scaffold guidance, not library code
-    raise SystemExit('This example needs the MCP SDK:  pip install "mcp<2"')
-
-if not hasattr(Server, "call_tool"):
-    raise SystemExit('This example uses the MCP SDK 1.x API:  pip install "mcp<2"')
+    # No MCP SDK, or the 1.x SDK, whose `mcp.server` has no ServerRequestContext.
+    raise SystemExit('This example needs the MCP SDK 2.x:  pip install "mcp>=2,<3"')
 
 
 AGENT_DID = os.environ.get("COGNEXUS_AGENT_DID", "mcp-demo-server")
 
-app = Server("artzain-guarded-demo")
+log = logging.getLogger("artzain_mcp_guard")
 
 
 # ── The tools this server exposes ────────────────────────────────────────────
 
+TOOLS = [
+    Tool(
+        name="send_email",
+        description="Send an email to a CRM contact.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "contact_id": {"type": "string"},
+                "body": {"type": "string"},
+            },
+            "required": ["contact_id", "body"],
+        },
+    ),
+    Tool(
+        name="execute_sql",
+        description="Run a read query against the analytics warehouse.",
+        input_schema={
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    ),
+]
 
-@app.list_tools()
-async def list_tools() -> list[Tool]:
-    return [
-        Tool(
-            name="send_email",
-            description="Send an email to a CRM contact.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "contact_id": {"type": "string"},
-                    "body": {"type": "string"},
-                },
-                "required": ["contact_id", "body"],
-            },
-        ),
-        Tool(
-            name="execute_sql",
-            description="Run a read query against the analytics warehouse.",
-            inputSchema={
-                "type": "object",
-                "properties": {"query": {"type": "string"}},
-                "required": ["query"],
-            },
-        ),
-    ]
+
+async def list_tools(
+    ctx: ServerRequestContext, params: PaginatedRequestParams | None
+) -> ListToolsResult:
+    return ListToolsResult(tools=TOOLS)
 
 
 # ── The gate ─────────────────────────────────────────────────────────────────
@@ -131,8 +146,28 @@ def gate(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         }
 
 
-@app.call_tool()
-async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+async def call_tool(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
+    name = params.name
+    # A client may leave the arguments out; the 1.x server passed {} for them.
+    arguments = params.arguments or {}
+    if name not in {tool.name for tool in TOOLS}:
+        # Nothing this server could run, so nothing to decide.
+        return reply(f"Unknown tool {name!r}.", is_error=True)
+    try:
+        return await gated_call(name, arguments)
+    except Exception:
+        # Left to the 2.x server, the exception's text would reach the client
+        # (over the 2025 protocol, as the error's message), and it can quote
+        # a password or a key. The traceback goes to the log (stderr); the
+        # reply says only that the call failed.
+        log.exception("Tool call %r failed", name)
+        return reply(
+            f"FAILED: the call to {name!r} raised an error; see the server log.",
+            is_error=True,
+        )
+
+
+async def gated_call(name: str, arguments: dict[str, Any]) -> CallToolResult:
     # decide() blocks on the network: run the gate in a worker thread so the
     # event loop keeps serving other requests while it waits.
     d = await asyncio.to_thread(gate, name, arguments)
@@ -142,36 +177,45 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     if outcome == "allow":
         # Only now does the tool actually execute.
         result = run_tool(name, arguments)
-        return [TextContent(type="text", text=f"{result}\n(sealed as {decision_id})")]
+        return reply(f"{result}\n(sealed as {decision_id})")
 
     if outcome == "review":
         # Do not act yet — a human owns this one now.
-        return [TextContent(
-            type="text",
-            text=(
-                "QUEUED FOR REVIEW: this call needs human approval before it "
-                f"runs.\n(decision {decision_id})"
-            ),
-        )]
+        return reply(
+            "QUEUED FOR REVIEW: this call needs human approval before it "
+            f"runs.\n(decision {decision_id})",
+            is_error=True,
+        )
 
     # deny, and any outcome this code does not know: never run the tool on it.
     if outcome == "deny":
         reasons = "; ".join(d.get("reasons") or []) or "policy denied this call"
     else:
         reasons = f"unrecognised outcome {outcome!r} — failing closed"
-    return [TextContent(
-        type="text",
-        text=f"REFUSED: {reasons}\n(decision {decision_id})",
-    )]
+    return reply(f"REFUSED: {reasons}\n(decision {decision_id})", is_error=True)
+
+
+def reply(text: str, *, is_error: bool = False) -> CallToolResult:
+    """The whole result: the 2.x server sends what a handler returns as it is."""
+    return CallToolResult(content=[TextContent(type="text", text=text)], is_error=is_error)
 
 
 def run_tool(name: str, arguments: dict[str, Any]) -> str:
-    """Stand-in for the real side effect. Replace with your implementation."""
+    """Stand-in for the real side effect. Replace with your implementation.
+
+    The 2.x server does not check the arguments against the tool's
+    `input_schema` (the 1.x server did), so check them here before acting.
+    """
     if name == "send_email":
         return f"Sent email to contact {arguments.get('contact_id')}."
     if name == "execute_sql":
         return f"Ran query: {arguments.get('query')}"
-    return f"Unknown tool {name!r}."
+    raise NotImplementedError(f"TOOLS lists {name!r}, but run_tool has no code for it")
+
+
+# ── The server ───────────────────────────────────────────────────────────────
+
+app = Server("artzain-guarded-demo", on_list_tools=list_tools, on_call_tool=call_tool)
 
 
 async def main() -> None:

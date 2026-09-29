@@ -45,6 +45,13 @@ describe("client.ts stays in lockstep with sdk/typescript (§9.85)", () => {
     );
   });
 
+  it("failureKind is byte-identical to errors.ts", () => {
+    const sdk = read(join(SDK_SRC, "errors.ts"));
+    expect(block(client, "client.ts", "failure-kind")).toBe(
+      block(sdk, "errors.ts", "failure-kind"),
+    );
+  });
+
   it("DecisionResponse and FetchLike are byte-identical to decide.ts", () => {
     const sdk = read(join(SDK_SRC, "decide.ts"));
     expect(block(client, "client.ts", "decision-types")).toBe(

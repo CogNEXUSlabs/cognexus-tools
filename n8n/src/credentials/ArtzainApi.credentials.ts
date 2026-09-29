@@ -3,6 +3,12 @@ import type {
   INodeProperties,
 } from "n8n-workflow";
 
+/**
+ * The 3xx statuses, the redirection class. The Test request follows none of
+ * them (`disableFollowRedirect`), and each gets a message that names it.
+ */
+const REDIRECT_STATUSES = [300, 301, 302, 303, 304, 305, 306, 307, 308];
+
 export class ArtzainApi implements ICredentialType {
   name = "artzainApi";
   displayName = "CogNEXUS Decision API";
@@ -36,10 +42,24 @@ export class ArtzainApi implements ICredentialType {
     },
   };
 
+  // n8n sends the Test request through its own request helper, which follows
+  // redirects and keeps X-Api-Key on them, to any host. Here a 3xx fails the
+  // test and names the status.
   test = {
     request: {
       baseURL: "={{$credentials.baseUrl}}",
       url: "/health",
+      disableFollowRedirect: true,
     },
+    rules: REDIRECT_STATUSES.map((value) => ({
+      type: "responseCode",
+      properties: {
+        value,
+        message:
+          `The Base URL answered HTTP ${value}, a redirect, which is not followed, ` +
+          "so the key goes no further: set Base URL to the address the Decision " +
+          "API answers on.",
+      },
+    })),
   };
 }

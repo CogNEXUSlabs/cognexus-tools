@@ -9,7 +9,6 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
-import urllib.request
 
 import pytest
 
@@ -82,7 +81,7 @@ def test_online_decide_posts_and_returns(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(cloud, "_urlopen", _fake_urlopen)
 
     out = decide(action="send_email", target="crm:1", payload="hi", kind="user_input")
     assert out["outcome"] == "allow"
@@ -103,7 +102,7 @@ def test_online_http_error_raises_decision_error(monkeypatch):
             io.BytesIO(json.dumps({"detail": "audit_unavailable"}).encode()),
         )
 
-    monkeypatch.setattr(urllib.request, "urlopen", _raise)
+    monkeypatch.setattr(cloud, "_urlopen", _raise)
 
     with pytest.raises(DecisionError) as ei:
         decide(action="x", target="t", payload="p", kind="user_input")

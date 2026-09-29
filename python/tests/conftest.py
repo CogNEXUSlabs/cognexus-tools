@@ -34,9 +34,9 @@ def _restore_cloud_configure():
     """
     import artzain.cloud as cloud
 
-    saved = (cloud._override_key, cloud._override_base)
+    saved = cloud._overrides
     yield
-    cloud._override_key, cloud._override_base = saved
+    cloud._overrides = saved
 
 
 @pytest.fixture(autouse=True)

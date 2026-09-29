@@ -150,7 +150,7 @@ def test_gui_bootstrap_uses_sdk_headers(monkeypatch: pytest.MonkeyPatch) -> None
         seen.append(req)
         return _FakeResp(b'{"token": "t", "email": "e", "display_name": "d"}')
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(cloud, "_urlopen", fake_urlopen)
     out = gui._try_bootstrap("https://up.example.test/", "key-123")
     assert out == {"token": "t", "email": "e", "display_name": "d"}
     assert calls == [{"url": "https://up.example.test"}]
@@ -168,7 +168,7 @@ def test_gui_proxy_uses_sdk_headers(monkeypatch: pytest.MonkeyPatch) -> None:
         seen.append(req)
         return _FakeResp(b"{}")
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(cloud, "_urlopen", fake_urlopen)
     handler_cls = gui._make_handler("https://up.example.test", b"", "")
     h = handler_cls.__new__(handler_cls)
     h.path = "/api/conversations"
@@ -195,5 +195,9 @@ def test_no_user_agent_literal_outside_cloud() -> None:
         text = (src_dir / name).read_text(encoding="utf-8")
         assert "Mozilla/" not in text, name
         assert "_DEFAULT_BROWSER_UA" not in text, name
-        assert "Sec-Fetch" not in text, name
+        # No Sec-Fetch-* header is set here (a dict key, send_header or
+        # add_header, an item assignment): cloud._sdk_headers alone chooses
+        # outbound headers. The GUI server reads the one a browser sends it,
+        # to refuse other sites (survey 25 Sep 2026, row 34).
+        assert re.search(r'["\']Sec-Fetch-[\w-]+["\']\s*(?::|,|\]\s*=)', text, re.IGNORECASE) is None, name
         assert re.search(r'["\']User-Agent["\']\s*:', text) is None, name

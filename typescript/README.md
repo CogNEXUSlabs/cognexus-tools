@@ -39,14 +39,21 @@ key set another way) goes to the profile's `base_url`; any other key goes to
 `configure({ baseUrl })`, then `COGNEXUS_API_BASE_URL`, then the default. When a
 host you set is not the profile key's, the call sends nothing and fails with
 `DecisionError` (`postSdkEvent` returns `false`); the message names the settings,
-not their values.
+not their values. Nor does a redirect move the key: the calls do not follow one,
+so a 3xx fails the call with its status, and a `fetchImpl` you pass must not
+follow redirects either.
 
 ## Surface
 
 - `decide(options)` → `DecisionResponse` — `POST /api/v1/decisions`. Deny/review
   outcomes are **returned**, not thrown; `DecisionError` is thrown for transport
   failures, missing keys, and typed engine refusals (`kill_switch_active`,
-  `audit_unavailable` — the engine fails closed and so should you).
+  `audit_unavailable` — the engine fails closed and so should you). For a
+  request that failed, the message names the error's kind (and, when no answer
+  came back, where the base URL came from), not the error's text, which can
+  quote the API key or name the host; to see that text, pass a `fetchImpl`
+  that wraps `fetch` and records what it, and the response's `json()`, reject
+  with.
 - `postSdkEvent(options)` — fire-and-forget guard-event telemetry
   (`POST /api/events`); never throws.
 - `fetchApiKeyIdentity()` — validate the configured key (`GET /api/api-keys/me`).

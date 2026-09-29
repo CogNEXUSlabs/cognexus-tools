@@ -7,7 +7,8 @@ Resolution order for the API key (highest wins):
   4. profile file
 
 The host a key is sent to is decided with the key, by
-:func:`resolve_credentials`: a key goes only to the host it was issued with.
+:func:`resolve_credentials`: it pairs a key only with the host it was issued
+with, and only with a plain ``http://`` or ``https://`` URL of that host.
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ import secrets
 import stat
 import sys
 import time
+import unicodedata
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -93,7 +96,9 @@ class CredentialConflictError(RuntimeError):
     Nothing was sent. The message names the settings involved, never their
     values. Also raised when the credentials profile is there but cannot be
     read: it records the host its key was issued with, so no key can be paired
-    with a host while it is unread (see :func:`resolve_credentials`).
+    with a host while it is unread (see :func:`resolve_credentials`); and when
+    the base URL the key would go to is not a plain ``http://`` or
+    ``https://`` URL of a host.
     """
 
 
@@ -106,6 +111,25 @@ class _ProfileUnreadable(CredentialConflictError):
     :class:`CredentialConflictError`, so a caller that sends nothing on a
     conflict sends nothing here either. Raised with nothing chained to it.
     """
+
+
+class _BaseUrlUnusable(CredentialConflictError):
+    """The base URL an API key would go to is not a plain ``http://`` or
+    ``https://`` URL of a host (see :func:`_usable_base`).
+
+    A :class:`CredentialConflictError`, so a caller that sends nothing on a
+    conflict sends nothing here either. Its message names the setting that
+    holds the URL, never the URL.
+    """
+
+
+def _base_url_unusable(source: str) -> _BaseUrlUnusable:
+    return _BaseUrlUnusable(
+        f"Not sent: the base URL from {source} is not an http:// or https:// URL "
+        "that names a host, with no space, control character, user or password "
+        "in it, so the API key is not sent to it. Correct the URL there, for "
+        f"example {DEFAULT_BASE_URL}."
+    )
 
 
 def _unreadable(why: str) -> _ProfileUnreadable:
@@ -603,6 +627,45 @@ def _same_host(a: str, b: str) -> bool:
     return a.rstrip("/").lower() == b.rstrip("/").lower()
 
 
+#: The schemes a base URL may have: HTTPS, and HTTP, which a deployment on
+#: this machine uses (``artzain local`` serves one at ``http://localhost``).
+#: HTTP is taken for any host, and carries the key unencrypted.
+_BASE_URL_SCHEMES = ("https", "http")
+
+
+def _space_or_control(text: str) -> bool:
+    """Whether *text* holds white space or a control character (C0, DEL or
+    C1)."""
+    return any(c.isspace() or unicodedata.category(c) == "Cc" for c in text)
+
+
+def _usable_base(url: str) -> bool:
+    """Whether *url* is a plain ``http://`` or ``https://`` URL of a host: it
+    names one, its port is a number if it has one, it carries no user or
+    password, and it holds no white space or control character, in its host
+    percent-encoded or not.
+
+    No other can carry a key to the host it names: the event and
+    policy-decision posts used plain HTTP for any scheme but ``https``, a
+    mistyped one included, and dialled an empty host, this machine, for a URL
+    with no scheme; and urllib refuses the rest with an error that quotes the
+    URL, its host percent-decoded.
+    """
+    if _space_or_control(url):
+        return False
+    try:
+        parts = urllib.parse.urlsplit(url)
+        port = parts.port  # raises ValueError for a port that is not a number
+    except ValueError:
+        return False
+    del port
+    if parts.username is not None or parts.password is not None:
+        return False
+    if _space_or_control(urllib.parse.unquote(parts.netloc)):
+        return False
+    return parts.scheme in _BASE_URL_SCHEMES and bool(parts.hostname)
+
+
 def _named_host(base_url: Optional[str] = None) -> tuple[Optional[str], str]:
     """The host set above the profile, and its label: *base_url* (a
     ``configure()`` value), then ``COGNEXUS_API_BASE_URL``."""
@@ -650,7 +713,11 @@ def resolve_credentials(
     Raises :class:`CredentialConflictError` when *base_url* or
     ``COGNEXUS_API_BASE_URL`` names a host other than the one the key was
     issued with. A profile without ``base_url`` records no host, so its key
-    goes to the named host or the default as before.
+    goes to the named host or the default as before. It raises it too when
+    the base URL a key would go to, or the one that is set, is not a plain
+    ``http://`` or ``https://`` URL of a host (:func:`_usable_base`); the
+    message names the setting that holds it. With no key, any base URL is
+    returned as it is: no key goes with it.
 
     The profile is read once, so its key and its host come from one version
     of it. A profile that is there but cannot be read is not one without a
@@ -685,6 +752,11 @@ def resolve_credentials(
             return ResolvedCredentials(None, profile_base, key_source, PROFILE_SOURCE)
         return ResolvedCredentials(None, DEFAULT_BASE_URL, key_source, _DEFAULT_BASE_SOURCE)
 
+    # A set host that no key can be sent to is named for what it is, before it
+    # is compared with the host the key was issued with.
+    if named and not _usable_base(named):
+        raise _base_url_unusable(named_source)
+
     # The profile records which host issued its key; that key goes nowhere
     # else, however it was supplied.
     if paired is None and profile_key and profile_base and key == profile_key:
@@ -698,7 +770,11 @@ def resolve_credentials(
                 f"{paired_source}). Set COGNEXUS_API_KEY to a key for that host, "
                 f"run `artzain login` against it, or unset {named_source}."
             )
-        return ResolvedCredentials(key, paired, key_source, paired_source)
-    if named:
-        return ResolvedCredentials(key, named, key_source, named_source)
-    return ResolvedCredentials(key, DEFAULT_BASE_URL, key_source, _DEFAULT_BASE_SOURCE)
+        base, base_source = paired, paired_source
+    elif named:
+        base, base_source = named, named_source
+    else:
+        base, base_source = DEFAULT_BASE_URL, _DEFAULT_BASE_SOURCE
+    if not _usable_base(base):
+        raise _base_url_unusable(base_source)
+    return ResolvedCredentials(key, base, key_source, base_source)

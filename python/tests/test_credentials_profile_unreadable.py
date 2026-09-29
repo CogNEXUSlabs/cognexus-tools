@@ -556,7 +556,7 @@ def test_the_refusal_carries_nothing_read_from_the_profile(
     that holds the file's bytes, key and all."""
     decide_mod = importlib.import_module("artzain.decide")
     _login()
-    monkeypatch.setattr(decide_mod.urllib.request, "urlopen", lambda req, timeout=None: pytest.fail("sent"))
+    monkeypatch.setattr(cloud, "_urlopen", lambda req, timeout=None: pytest.fail("sent"))
 
     with _cannot_read(profile, how):
         with pytest.raises(credentials.CredentialConflictError) as caught:
@@ -1294,7 +1294,7 @@ def test_decide_does_not_go_offline_while_the_profile_cannot_be_read(
     decide_mod = importlib.import_module("artzain.decide")
     _login()
     sent: list[Any] = []
-    monkeypatch.setattr(decide_mod.urllib.request, "urlopen", lambda req, timeout=None: sent.append(req))
+    monkeypatch.setattr(cloud, "_urlopen", lambda req, timeout=None: sent.append(req))
 
     with _cannot_read(profile, how):
         with pytest.raises(decide_mod.DecisionError) as caught:
@@ -1353,7 +1353,7 @@ def test_decide_reads_the_credentials_once(
                     "contributing_agents": [], "reasons": []}
         return _Answer(json.dumps(decision).encode("utf-8"))
 
-    monkeypatch.setattr(decide_mod.urllib.request, "urlopen", _urlopen)
+    monkeypatch.setattr(cloud, "_urlopen", _urlopen)
 
     result = decide_mod.decide(action="send_email", target="crm:contact:1", payload="hi", kind="user_input")
 
@@ -1428,7 +1428,7 @@ def test_the_other_cli_commands_that_send_the_key_read_it_once(
             used.append((req.full_url, req.get_header("X-api-key")))
             return _Answer(b"PK")
 
-        monkeypatch.setattr(cli.urllib.request, "urlopen", _urlopen)
+        monkeypatch.setattr(cloud, "_urlopen", _urlopen)
         cli.cmd_audit_export(argparse.Namespace(profile=None, from_=None, to=None,
                                                 out=str(tmp_path / "bundle.zip")))
     elif command == "quickstart":
@@ -1511,7 +1511,7 @@ class _Clock:
 @pytest.fixture
 def platform(monkeypatch: pytest.MonkeyPatch, profile: Path) -> _Platform:
     stub = _Platform()
-    monkeypatch.setattr(cloud.urllib.request, "urlopen", stub.urlopen)
+    monkeypatch.setattr(cloud, "_urlopen", stub.urlopen)
     # The User-Agent's version lookup reads package metadata on every request.
     monkeypatch.setattr(cloud, "_package_version", lambda: "test")
     return stub

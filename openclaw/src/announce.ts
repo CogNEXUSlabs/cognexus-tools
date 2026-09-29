@@ -12,11 +12,16 @@
  * CALL (the register hook never sees plugin config), NEVER blocks tool
  * gating, and failures are logged and swallowed — the decision gate's
  * fail-closed contract is untouched. Transient failures (network, 5xx,
- * 429) retry on a later gated call; a refusal (4xx) is a config problem
+ * 429) retry on a later gated call; a refusal (3xx or 4xx) is a config problem
  * and is not retried until the process restarts.
  */
 
-import { resolveApiKey, resolveBaseUrl, type FetchLike } from "./client.js";
+import {
+  failureKind,
+  resolveApiKey,
+  resolveBaseUrlSetting,
+  type FetchLike,
+} from "./client.js";
 
 export const ANNOUNCE_TIMEOUT_MS = 10_000;
 const MAX_AGENTS = 50;
@@ -48,7 +53,7 @@ export interface AnnounceResult {
   status?: number;
   reason?: string;
   /** Transient (network / 5xx / 429): a later gated call may retry.
-   * False for successes and for 4xx config refusals. */
+   * False for successes and for 3xx and 4xx config refusals. */
   retryable?: boolean;
 }
 
@@ -124,9 +129,13 @@ export async function announceInstance(
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ANNOUNCE_TIMEOUT_MS);
+  // Named if the request fails; a baseUrl that is not a string fails first.
+  let baseSource = "plugin config baseUrl";
   try {
+    const base = resolveBaseUrlSetting(cfg.baseUrl);
+    baseSource = base.source;
     const resp = await impl(
-      `${resolveBaseUrl(cfg.baseUrl)}/api/v1/registry/announce`,
+      `${base.url}/api/v1/registry/announce`,
       {
         method: "POST",
         headers: {
@@ -135,9 +144,13 @@ export async function announceInstance(
         },
         body: JSON.stringify({ instance, agents, skills }),
         signal: controller.signal,
+        redirect: "manual",
       },
     );
     if (!resp.ok) {
+      // The refusal's body is not read: end the request, or a large one
+      // holds the connection until garbage collection.
+      controller.abort();
       const retryable = resp.status >= 500 || resp.status === 429;
       log(`artzain announce refused: HTTP ${resp.status}` +
         (retryable ? " (will retry on a later gated call)" : ""));
@@ -169,9 +182,12 @@ export async function announceInstance(
     log(`artzain announce ok: instance '${instance}', ${agents.length} agent(s); ${counts}`);
     return { ok: true, status: resp.status };
   } catch (err) {
-    log(`artzain announce failed: ${(err as Error).message} ` +
+    // The error's text can quote the API key or name the host (see
+    // failureKind): the line and the reason give its kind instead.
+    const kind = failureKind(err, controller.signal);
+    log(`artzain announce failed: ${kind} (base URL from ${baseSource}) ` +
       "(will retry on a later gated call)");
-    return { ok: false, reason: (err as Error).message, retryable: true };
+    return { ok: false, reason: kind, retryable: true };
   } finally {
     clearTimeout(timer);
   }

@@ -34,6 +34,36 @@ export class DecisionError extends Error {
 }
 // lockstep:end DecisionError
 
+// lockstep:begin failure-kind
+/**
+ * The kind of error a request failed with, for a message: its name, and its
+ * code when it has one (`TypeError`, `Error [ECONNREFUSED]`). A TypeError
+ * with a cause, such as fetch's "fetch failed", is named by its cause. The
+ * error's text is left out, and so is a name or code that is not an
+ * identifier: fetch quotes a header value it refuses, an API key among them,
+ * and a certificate issued for another name puts the host in the text.
+ *
+ * Once `deadline`, the call's own timeout signal, has fired, the failure is
+ * that timeout, whatever the transport rejected with.
+ */
+export function failureKind(err: unknown, deadline?: AbortSignal): string {
+  if (deadline?.aborted) return "TimeoutError, aborted when the timeout passed";
+  try {
+    let failure = err as { name?: unknown; code?: unknown; cause?: unknown } | null | undefined;
+    if (failure?.name === "TypeError" && typeof failure.cause === "object" && failure.cause) {
+      failure = failure.cause as typeof failure;
+    }
+    const name = failure?.name;
+    const code = failure?.code;
+    const kind = typeof name === "string" && /^[A-Z][A-Za-z0-9_]{0,63}$/.test(name) ? name : "Error";
+    return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? `${kind} [${code}]` : kind;
+  } catch {
+    // A property that throws when read (a proxy, a getter) names nothing.
+    return "Error";
+  }
+}
+// lockstep:end failure-kind
+
 // lockstep:begin decision-types
 export type DecisionOutcome = "allow" | "deny" | "review";
 
@@ -82,6 +112,14 @@ export type FetchLike = (
     headers: Record<string, string>;
     body?: string;
     signal?: AbortSignal;
+    /**
+     * Always `"manual"`. The request carries the API key, and following a
+     * redirect sends it again to wherever `Location` points, which may be
+     * another host. `fetch` hands back the 3xx instead, and the call treats
+     * it as the error status it is. A custom transport must not follow
+     * redirects either.
+     */
+    redirect: "manual";
   },
 ) => Promise<{
   ok: boolean;
@@ -94,6 +132,11 @@ export type FetchLike = (
 export interface PostDecisionOptions {
   apiKey: string;
   baseUrl: string;
+  /**
+   * Where `baseUrl` came from, named when the request fails: a label such as
+   * `COGNEXUS_API_BASE_URL`, never the value. Default `"the baseUrl option"`.
+   */
+  baseSource?: string;
   action: string;
   target: string;
   payload: string;
@@ -121,13 +164,34 @@ export function resolveApiKey(pluginKey?: string): string | undefined {
 }
 
 export function resolveBaseUrl(pluginBase?: string): string {
+  return resolveBaseUrlSetting(pluginBase).url;
+}
+
+/** How a `baseUrl` from the skill's config is named: `configSource` if one is given. */
+export function configBaseUrlSource(configSource?: unknown): string {
+  return typeof configSource === "string" && configSource.trim()
+    ? configSource
+    : "skill config baseUrl";
+}
+
+/**
+ * The base URL `resolveBaseUrl` picks and where it came from: skill config,
+ * then `COGNEXUS_API_BASE_URL`, then the default. The source is a label for
+ * messages, never the value; `configSource` names the config's `baseUrl`
+ * (the CLI passes `--base-url`).
+ */
+export function resolveBaseUrlSetting(
+  pluginBase?: string,
+  configSource?: string,
+): { url: string; source: string } {
   const explicit = (pluginBase || "").trim();
-  if (explicit) return trimBase(explicit);
+  if (explicit) return { url: trimBase(explicit), source: configBaseUrlSource(configSource) };
   const env =
     (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
       ?.env;
   const fromEnv = (env?.COGNEXUS_API_BASE_URL || "").trim();
-  return trimBase(fromEnv || DEFAULT_BASE_URL);
+  if (fromEnv) return { url: trimBase(fromEnv), source: "COGNEXUS_API_BASE_URL" };
+  return { url: DEFAULT_BASE_URL, source: "default" };
 }
 
 export async function postDecision(
@@ -170,14 +234,31 @@ export async function postDecision(
           context: {},
         }),
         signal: controller.signal,
+        redirect: "manual",
       });
     } catch (err) {
+      // The error's text can quote the API key or name the host (see
+      // failureKind), so the message names its kind and where the base URL
+      // came from, and the error is not kept as a cause, which loggers print.
       throw new DecisionError(
-        `Decision API unreachable: ${(err as Error).message}`,
+        `Decision API unreachable: ${failureKind(err, controller.signal)} ` +
+          `(base URL from ${options.baseSource ?? "the baseUrl option"})`,
       );
     }
 
     // lockstep:begin decision-response
+    if (resp.status >= 300 && resp.status < 400) {
+      // A redirect is not followed (see FetchLike), so the 3xx itself lands
+      // here. Its body is the redirecting server's, not an engine refusal,
+      // and is left unread: ending the request releases the connection,
+      // which a large unread body would hold until garbage collection.
+      controller.abort();
+      throw new DecisionError(
+        `Decision API returned HTTP ${resp.status}, a redirect, which is not followed: ` +
+          "check the base URL",
+        { status: resp.status },
+      );
+    }
     if (!resp.ok) {
       let detail: unknown;
       try {
@@ -200,13 +281,14 @@ export async function postDecision(
       // A 2xx that is not JSON (a proxy or captive portal answering HTML)
       // surfaced as a bare SyntaxError, outside the DecisionError contract.
       // A body that could not be read at all (the timeout passed while it
-      // was arriving, the connection dropped) is not a JSON problem.
-      const problem =
-        (err as Error)?.name === "SyntaxError"
-          ? "with a non-JSON body"
-          : "but its body could not be read";
+      // was arriving, the connection dropped) is not a JSON problem. Neither
+      // message quotes the error: a SyntaxError quotes the body, which can
+      // echo the request's headers.
+      const kind = failureKind(err, controller.signal);
       throw new DecisionError(
-        `Decision API returned HTTP ${resp.status} ${problem}: ${(err as Error).message}`,
+        kind === "SyntaxError"
+          ? `Decision API returned HTTP ${resp.status} with a non-JSON body`
+          : `Decision API returned HTTP ${resp.status} but its body could not be read: ${kind}`,
         { status: resp.status },
       );
     }

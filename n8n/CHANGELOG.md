@@ -2,6 +2,45 @@
 
 All notable changes to `@cognexuslabs/n8n-nodes-artzain`.
 
+## 0.1.6
+
+### Fixed
+
+- **A redirect no longer takes the Decision API key to another host.** Both
+  nodes let `fetch` follow redirects. The Decision node's request went again,
+  `X-Api-Key` included, to wherever a redirect pointed, another host
+  included, and after a 307 or 308 either node's body went with it. Neither
+  node follows one now: the Decision node routes the item to Deny and the
+  Envelope node fails it closed, each with a reason that names the status
+  and the redirect rather than quoting the redirecting server's page.
+- **The Decision credential's Test button no longer follows a redirect.**
+  n8n's own request helper followed it with the key, and could report the
+  connection as successful from wherever it landed. A redirect now fails the
+  test, naming the status.
+- **A failed request is reported without its error's text.** When a
+  request failed, or its answer broke off mid-body, both nodes put the text
+  of the error into the item (the Decision node's Deny reason, the Envelope
+  node's `error`) or the node error, and attached the error itself. That
+  can carry what an execution log, or a later node, must not: `fetch`
+  quotes a header value it refuses, so a key with a line break in it was
+  quoted in full, and it quotes a Base URL that holds a user name and
+  password; the error's cause names the host of a certificate issued for
+  another name, or holds the socket, addresses and ports, when the
+  connection drops. The nodes now name the error's kind (for `fetch`'s
+  "fetch failed", its cause's) and, when no answer came back, where the base
+  URL came from, as in `Decision API unreachable: Error [ECONNREFUSED] (base
+  URL from the credential's Base URL) — failing closed` or `Decision API
+  returned HTTP 200 but its body could not be read: SocketError
+  [UND_ERR_SOCKET] — failing closed`, and attach an error of their own. A
+  response the server sent is reported as before.
+
+### Changed
+
+- A Base URL the server redirects, `http://` to `https://` say, now sends
+  every Decision item to Deny, where a 307 or 308 used to be followed once
+  the key had gone out in cleartext: set it to the address the API answers
+  on.
+
 ## 0.1.5
 
 ### Changed

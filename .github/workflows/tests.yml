@@ -41,6 +41,49 @@ jobs:
           PYTHONPATH: src
         run: python -m pytest tests/ -q
 
+  # The Python files `artzain init` writes, run on the framework each one's
+  # install line names; the suite above runs them with the framework stubbed,
+  # which cannot see the framework's API change. The requirements are read
+  # from the rendered file, and ARTZAIN_SCAFFOLD_FRAMEWORK makes a missing or
+  # mismatched framework a failure instead of a skip. The newest release each
+  # line allows is installed unpinned, so the checkout keeps no credential.
+  python-scaffolds:
+    name: Python scaffolds on their frameworks (${{ matrix.framework }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        framework: [crewai, langgraph, mcp]
+    defaults:
+      run:
+        working-directory: python
+    env:
+      PYTHONPATH: src
+      ARTZAIN_SCAFFOLD_FRAMEWORK: ${{ matrix.framework }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: python
+
+      # CrewAI supports Python 3.10 to 3.13.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install what the scaffold's install line names
+        run: |
+          python tests/scaffold_install_line.py "$ARTZAIN_SCAFFOLD_FRAMEWORK" > "$RUNNER_TEMP/scaffold-requirements.txt"
+          cat "$RUNNER_TEMP/scaffold-requirements.txt"
+          pip install pytest packaging -r "$RUNNER_TEMP/scaffold-requirements.txt"
+
+      - name: Run the rendered scaffold on it
+        env:
+          CREWAI_DISABLE_TELEMETRY: "true"
+          OTEL_SDK_DISABLED: "true"
+        run: python -m pytest tests/test_scaffolds_real_frameworks.py -q
+
   typescript:
     name: TypeScript SDK
     runs-on: ubuntu-latest

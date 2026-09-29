@@ -24,6 +24,7 @@ from artzain import (
     announce_cloud_ingest,
     augment_system_prompt,
     clear_run,
+    cloud,
     configure,
     decide,
     evaluate_system_prompt,
@@ -42,6 +43,7 @@ from artzain.credentials import (
     PROFILE_SOURCE,
     CredentialConflictError,
     ResolvedCredentials,
+    _usable_base,
     credentials_path,
     resolve_credentials,
 )
@@ -394,7 +396,9 @@ def _http_json(
         req_headers.setdefault("Content-Type", "application/json")
     req = urllib.request.Request(url, data=data, headers=req_headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+        # A redirect is not followed: it comes back as its status, like any
+        # other error, and the key or token stays with the host it was for.
+        with cloud._urlopen(req, timeout=timeout_sec) as resp:
             raw = resp.read().decode("utf-8")
             if not raw.strip():
                 return resp.status, {}
@@ -951,10 +955,24 @@ def _licence_write_json(path: str, payload: dict) -> None:
 
 
 def _licence_base_url(args: argparse.Namespace) -> str:
-    """The deployment to talk to: explicit flag, env, else loopback."""
+    """The deployment to talk to: explicit flag, env, else loopback.
+
+    A plain http(s) URL, as a base URL for the cloud API is: a proxy set for
+    another scheme would be sent the request, the API key with it."""
+    if getattr(args, "base_url", None):
+        source = "--base-url"
+    elif os.environ.get("COGNEXUS_LOCAL_URL"):
+        source = "COGNEXUS_LOCAL_URL"
+    else:
+        source = "the default"
     raw = (getattr(args, "base_url", None)
            or os.environ.get("COGNEXUS_LOCAL_URL")
            or _LICENCE_DEFAULT_BASE).strip().rstrip("/")
+    if not _usable_base(raw):
+        raise SystemExit(
+            f"Not sent: the deployment URL from {source} is not an http:// or "
+            "https:// URL that names a host, with no space, control character, "
+            "user or password in it. Licence commands carry your API key.")
     host = (urllib.parse.urlsplit(raw).hostname or "").lower()
     if host not in _LOOPBACK_HOSTS and not getattr(args, "allow_remote", False):
         raise SystemExit(
@@ -979,6 +997,13 @@ def _licence_auth_headers(args: argparse.Namespace) -> dict[str, str]:
     return _policy_auth_headers()
 
 
+def _print_licence_refusal(base: str, status: int, detail: Any) -> None:
+    """The deployment's refusal, with its detail when it gave one (a redirect
+    has none)."""
+    said = f": {detail}" if detail else ""
+    print(f"{base} refused the request (HTTP {status}){said}", file=sys.stderr)
+
+
 def _licence_get(args: argparse.Namespace, path: str,
                  params: str = "") -> dict:
     base = _licence_base_url(args)
@@ -986,7 +1011,7 @@ def _licence_get(args: argparse.Namespace, path: str,
     headers = {**_request_headers_for_url(url), **_licence_auth_headers(args)}
     req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with cloud._urlopen(req, timeout=120) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
@@ -995,8 +1020,7 @@ def _licence_get(args: argparse.Namespace, path: str,
             detail = json.loads(raw).get("detail") or raw
         except Exception:
             _log.debug("error body is not JSON; reporting it verbatim", exc_info=True)
-        print(f"{base} refused the request (HTTP {exc.code}): {detail}",
-              file=sys.stderr)
+        _print_licence_refusal(base, exc.code, detail)
         raise SystemExit(1) from exc
     except Exception as exc:
         print(f"Could not reach the deployment at {base}: {exc}", file=sys.stderr)
@@ -1008,10 +1032,11 @@ def _licence_post(args: argparse.Namespace, path: str, body: dict) -> dict:
     url = f"{base}{path}"
     status, payload = _http_json("POST", url, headers=_licence_auth_headers(args),
                                  body=body, timeout_sec=120.0)
-    if status >= 400:
+    # A redirect, which is not followed, did not install or store anything
+    # either: only a success is one.
+    if not 200 <= status < 300:
         detail = payload.get("detail") if isinstance(payload, dict) else payload
-        print(f"{base} refused the request (HTTP {status}): {detail}",
-              file=sys.stderr)
+        _print_licence_refusal(base, status, detail)
         raise SystemExit(1)
     return payload if isinstance(payload, dict) else {}
 
@@ -1326,7 +1351,7 @@ def cmd_audit_export(args: argparse.Namespace) -> None:
     headers = {**_request_headers_for_url(url), **_policy_auth_headers(creds)}
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=120.0) as resp:
+        with cloud._urlopen(req, timeout=120.0) as resp:
             data = resp.read()
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
@@ -1542,7 +1567,7 @@ def cmd_registry_export(args: argparse.Namespace) -> None:
     headers = {**_request_headers_for_url(url), **_policy_auth_headers(creds)}
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=120.0) as resp:
+        with cloud._urlopen(req, timeout=120.0) as resp:
             data = resp.read()
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")

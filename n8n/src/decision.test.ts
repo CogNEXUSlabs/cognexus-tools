@@ -65,6 +65,17 @@ describe("routeHttpDecision", () => {
     expect(routeHttpDecision(401, {}).branch).toBe("deny");
     expect(routeHttpDecision(422, {}).branch).toBe("deny");
   });
+
+  it("fails closed on a redirect and names its status, whatever the body says", () => {
+    for (const body of [undefined, { detail: "<html><body>Moved</body></html>" }]) {
+      const closed = routeHttpDecision(308, body);
+      expect(closed.branch).toBe("deny");
+      const reasons = String(closed.json.reasons);
+      expect(reasons).toContain("HTTP 308");
+      expect(reasons).toContain("redirect");
+      expect(reasons).not.toContain("Moved");
+    }
+  });
 });
 
 describe("fallbackRequestId", () => {
