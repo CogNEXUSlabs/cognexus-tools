@@ -11,8 +11,46 @@
  */
 
 import { announceInstance } from "./announce.js";
+import type { FetchLike } from "./client.js";
 import { enrollInstance } from "./enroll.js";
 import { gateToolCall, type SkillConfig } from "./gate.js";
+
+/**
+ * How long an announce or enroll still in flight once `decide` has its
+ * verdict may run on before it is cut off. They are telemetry: the exit,
+ * which carries the verdict, must not wait out their own 10-second timeout.
+ */
+const TELEMETRY_GRACE_MS = 2_000;
+
+/** Aborting it ends every request this CLI has made (see `fetchImpl`). */
+const cutOff = new AbortController();
+
+/** A signal that aborts when either of two does, with that one's reason. */
+function either(a: AbortSignal | undefined, b: AbortSignal): AbortSignal {
+  if (!a) return b;
+  const both = new AbortController();
+  for (const signal of [a, b]) {
+    if (signal.aborted) {
+      both.abort(signal.reason);
+      break;
+    }
+    signal.addEventListener("abort", () => both.abort(signal.reason), { once: true });
+  }
+  return both.signal;
+}
+
+/**
+ * Global fetch, with each request also ended by `cutOff`: a request still in
+ * flight holds the process open.
+ */
+const fetchImpl: FetchLike | undefined =
+  typeof globalThis.fetch === "function"
+    ? (url, init) =>
+        (globalThis.fetch as unknown as FetchLike)(url, {
+          ...init,
+          signal: either(init.signal, cutOff.signal),
+        })
+    : undefined;
 
 function env(name: string): string {
   return (process.env[name] || "").trim();
@@ -60,12 +98,12 @@ async function main(argv: string[]): Promise<number> {
   };
 
   if (cmd === "announce") {
-    const out = await announceInstance({ ...cfg, announce: true }, undefined, log, cfg.agentDid);
+    const out = await announceInstance({ ...cfg, announce: true }, fetchImpl, log, cfg.agentDid);
     return out.ok ? 0 : 2;
   }
 
   if (cmd === "enroll") {
-    const out = await enrollInstance({ ...cfg, enroll: true }, undefined, log, cfg.agentDid);
+    const out = await enrollInstance({ ...cfg, enroll: true }, fetchImpl, log, cfg.agentDid);
     if (out.ok) {
       try {
         console.log(JSON.stringify({
@@ -97,6 +135,7 @@ async function main(argv: string[]): Promise<number> {
       toolCallId: flag(args, "--request-id") || undefined,
       agentDid: cfg.agentDid,
     },
+    fetchImpl,
   );
   if (result.allow) {
     try {
@@ -114,4 +153,14 @@ async function main(argv: string[]): Promise<number> {
   return 2;
 }
 
-process.exit(await main(process.argv.slice(2)));
+// Not process.exit(): on Windows, ending the process that way just after an
+// enroll or announce that ran beside the decision has finished can abort
+// Node (a libuv assertion, exit code 3221226505) instead of exiting with
+// this code. The process ends by itself once nothing is in flight. Idle
+// keep-alive connections do not hold it, and whatever still runs is cut off
+// after TELEMETRY_GRACE_MS. The timer is unref'd and holds nothing open.
+process.exitCode = await main(process.argv.slice(2));
+setTimeout(
+  () => cutOff.abort(new DOMException("the CLI is exiting", "AbortError")),
+  TELEMETRY_GRACE_MS,
+).unref();

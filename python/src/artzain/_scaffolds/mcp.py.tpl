@@ -173,14 +173,24 @@ async def gated_call(name: str, arguments: dict[str, Any]) -> CallToolResult:
     d = await asyncio.to_thread(gate, name, arguments)
     outcome = d.get("outcome")
     decision_id = d.get("decision_id", "")
+    offline = bool(d.get("offline"))
 
     if outcome == "allow":
         # Only now does the tool actually execute.
         result = run_tool(name, arguments)
+        if offline:
+            return reply(f"{result}\n(decided offline, not sealed)")
         return reply(f"{result}\n(sealed as {decision_id})")
 
     if outcome == "review":
-        # Do not act yet — a human owns this one now.
+        # Do not act yet — a human owns this one now. Offline, nothing is
+        # queued and nothing would ever run the call.
+        if offline:
+            return reply(
+                "REVIEW (offline, not queued): this call would need human "
+                f"approval before it runs.\n(decision {decision_id})",
+                is_error=True,
+            )
         return reply(
             "QUEUED FOR REVIEW: this call needs human approval before it "
             f"runs.\n(decision {decision_id})",
@@ -219,10 +229,10 @@ app = Server("artzain-guarded-demo", on_list_tools=list_tools, on_call_tool=call
 
 
 async def main() -> None:
-    if not os.environ.get("COGNEXUS_API_KEY"):
+    if not artzain.has_api_key():
         # stderr: stdout carries the JSON-RPC stream a stdio client reads.
         print(
-            "Note: no COGNEXUS_API_KEY set — calls run against the local guard "
+            "Note: no API key configured — calls run against the local guard "
             "library and are not sealed. `artzain login` takes ~15s.",
             file=sys.stderr,
             flush=True,

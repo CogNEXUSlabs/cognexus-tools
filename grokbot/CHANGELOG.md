@@ -4,6 +4,28 @@ All notable changes to `@cognexuslabs/grokbot-artzain`. Headings are the
 bare version (`## 0.1.0`): the mirror's `publish-npm.yml` cuts the GitHub
 release notes for tag `grokbot-v<version>` from the matching section.
 
+## 0.1.5
+
+### Fixed
+
+- **`grokbot-artzain decide` exits 0 or 2 on Windows.** With enroll or
+  announce on (enroll is on by default), the CLI aborted as it exited,
+  whatever the decision: it printed a libuv assertion (`Assertion failed:
+  !(handle->flags & UV_HANDLE_CLOSING)`) and ended with exit code
+  3221226505. Only the JSON it printed on stdout was right. A caller that
+  treats any exit but 0 as a block, as `SKILL.md` says to, blocked allowed
+  calls too; one that looked for exit 2 alone let denied calls through. The
+  CLI no longer ends the process itself: it sets the exit code, ends the
+  requests it no longer needs, and lets Node exit. The `announce` and
+  `enroll` commands, which were not affected, now exit the same way.
+
+### Changed
+
+- `decide` prints the decision as soon as it has it, as before. An enroll
+  or announce still running then gets up to 2 more seconds to finish and is
+  then cut off, where the process used to end at once. Neither changes the
+  exit code.
+
 ## 0.1.4
 
 ### Fixed

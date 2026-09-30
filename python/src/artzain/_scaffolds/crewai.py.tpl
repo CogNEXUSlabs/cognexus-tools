@@ -101,12 +101,21 @@ def governed(action: str, target: str) -> Callable:
 
             outcome = d.get("outcome")
             decision_id = d.get("decision_id", "")
+            offline = bool(d.get("offline"))
 
             if outcome == "allow":
                 result = fn(*args, **kwargs)
+                if offline:
+                    return f"{result} (decided offline, not sealed)"
                 return f"{result} (sealed as {decision_id})"
 
             if outcome == "review":
+                if offline:
+                    return (
+                        "REVIEW (offline, not queued): a human would need to "
+                        "approve this before it runs. Nothing was queued. Do "
+                        f"not retry. (decision {decision_id})"
+                    )
                 return (
                     "QUEUED FOR REVIEW: a human must approve this before it "
                     f"runs. Do not retry. (decision {decision_id})"
@@ -138,8 +147,8 @@ def send_email(body: str) -> str:
 
 
 def main() -> None:
-    if not os.environ.get("COGNEXUS_API_KEY"):
-        print("Note: no COGNEXUS_API_KEY set — tool calls run against the local")
+    if not artzain.has_api_key():
+        print("Note: no API key configured — tool calls run against the local")
         print("guard library and are not sealed. `artzain login` takes ~15s.\n")
 
     outreach = Agent(
