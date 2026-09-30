@@ -295,45 +295,89 @@ def test_a_resolution_reads_the_profile_once(
     assert reads == [first]
 
 
-def test_a_profile_being_rewritten_never_reads_as_one_without_a_key(profile: Path) -> None:
+def test_a_profile_being_rewritten_never_reads_as_one_without_a_key(
+    profile: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """``artzain login`` in one process while another reads the profile: the
     reader finds one whole version or the other, never an empty or half written
     file. On Windows a read that meets the rename itself can still fail after
-    its retries; that refuses to send, which is no pairing and no missing key."""
+    its retries; that refuses to send, which is no pairing and no missing key.
+
+    The reader and the writer meet at the move, not by racing on the wall
+    clock: the new file is filled, the move waits, the reader runs, then the
+    move goes through and the reader runs again. A free-running rewrite loop
+    depended on thread scheduling and, on Windows, on the replace retry
+    budget while readers kept the profile open.
+    """
     versions = {(KEY, HOST), (OTHER_KEY, OTHER_HOST)}
     _login()
-    done = threading.Event()
+    ready_to_replace = threading.Event()
+    allow_replace = threading.Event()
+    replaced = threading.Event()
+    real_replace = os.replace
     errors: list[BaseException] = []
-
-    def _rewrite() -> None:
-        try:
-            for i in range(200):
-                _login(*((KEY, HOST) if i % 2 else (OTHER_KEY, OTHER_HOST)))
-        except BaseException as exc:
-            errors.append(exc)
-        finally:
-            done.set()
-
-    writer = threading.Thread(target=_rewrite)
-    writer.start()
     seen: collections.Counter[tuple[Optional[str], str]] = collections.Counter()
     refused = 0
-    try:
-        while not done.is_set():
-            try:
-                creds = credentials.resolve_credentials()
-            except credentials.CredentialConflictError:
-                refused += 1
-                continue
-            seen[(creds.api_key, creds.base_url)] += 1
-    finally:
-        writer.join()
+
+    def _gated_replace(src: Any, dst: Any) -> None:
+        ready_to_replace.set()
+        if not allow_replace.wait(10):
+            raise TimeoutError("the reader did not release the move")
+        real_replace(src, dst)
+        replaced.set()
+
+    def _rewrite(key: str, host: str) -> None:
+        try:
+            _login(key, host)
+        except BaseException as exc:
+            errors.append(exc)
+
+    def _observe() -> Optional[tuple[Optional[str], str]]:
+        nonlocal refused
+        try:
+            creds = credentials.resolve_credentials()
+        except credentials.CredentialConflictError:
+            refused += 1
+            return None
+        pair = (creds.api_key, creds.base_url)
+        seen[pair] += 1
+        return pair
+
+    monkeypatch.setattr(os, "replace", _gated_replace)
+
+    previous = (KEY, HOST)
+    for i in range(20):
+        nxt = (OTHER_KEY, OTHER_HOST) if i % 2 == 0 else (KEY, HOST)
+        ready_to_replace.clear()
+        allow_replace.clear()
+        replaced.clear()
+        writer = threading.Thread(target=_rewrite, args=nxt)
+        writer.start()
+        assert ready_to_replace.wait(10), "the writer never reached the move"
+        # New file filled; the profile path still names the previous whole version.
+        pair = _observe()
+        if pair is None:
+            assert sys.platform == "win32"
+        else:
+            assert pair == previous
+        allow_replace.set()
+        assert replaced.wait(10), "the move never finished"
+        writer.join(10)
+        assert not writer.is_alive()
+        assert errors == []
+        pair = _observe()
+        if pair is None:
+            assert sys.platform == "win32"
+        else:
+            assert pair == nxt
+        previous = nxt
 
     assert errors == []
     assert set(seen) <= versions, (
         f"a read found {sorted(map(repr, set(seen) - versions))[:3]}: no key, or one "
         "version's key with the other's host"
     )
+    assert set(seen) == versions
     if sys.platform != "win32":
         assert refused == 0
 

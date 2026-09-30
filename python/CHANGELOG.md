@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.34
+
+### Fixed
+
+- **The Python scaffolds' no-key note follows the SDK's own credential
+  resolver, and offline replies no longer say "sealed" or "queued".** The
+  note `artzain init` writes for CrewAI, LangGraph and MCP checked only
+  `COGNEXUS_API_KEY`, so after `artzain login` (or with `MYAPP_API_KEY`) it
+  still claimed calls ran against the local guard library and were not
+  sealed, while `decide()` went online. It now asks `artzain.has_api_key()`,
+  which uses the same resolver `decide()` does, and prints only whether a
+  key is configured — never anything derived from the credentials profile.
+  When a decision carries `offline=True`, an allowed call says "decided
+  offline, not sealed" instead of "sealed as …", and a review says it is
+  offline and not queued instead of "QUEUED FOR REVIEW" (nothing is queued
+  offline, and nothing would run the call). The MCP note stays on stderr.
+
 ## 0.6.33
 
 ### Fixed

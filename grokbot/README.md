@@ -60,6 +60,10 @@ a dashboard JWT and **not** an envelope `cnxe_…` key). Example:
 | HTTP 503 / 401 / 422 / missing key | exit 2 (fail closed) |
 | a redirect (HTTP 3xx) | exit 2: not followed, so the key stays with the configured host |
 
+Announce and enroll never change the exit code. `decide` prints the
+decision on stdout as soon as it has it. An announce or enroll it started
+that is still running then gets up to 2 more seconds, and is then cut off.
+
 ## Instance announce (opt-in)
 
 Hosts no scanner can reach (laptops, home labs) can self-register:

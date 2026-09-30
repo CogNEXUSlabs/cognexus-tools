@@ -387,8 +387,8 @@ def test_mcp_serves_over_stdio_as_a_program(mode, monkeypatch, tmp_path):
     assert sorted(tool.name for tool in tools.tools) == ["execute_sql", "send_email"]
     assert result.is_error is False
     (block,) = result.content
-    assert block.text.startswith("Sent email to contact 123.\n(sealed as "), block.text
-    assert "no COGNEXUS_API_KEY set" in stderr.read_text(encoding="utf-8")
+    assert block.text == "Sent email to contact 123.\n(decided offline, not sealed)", block.text
+    assert "no API key configured" in stderr.read_text(encoding="utf-8")
 
 
 def test_mcp_program_writes_only_protocol_messages_to_stdout(monkeypatch, tmp_path):
@@ -452,9 +452,11 @@ def test_mcp_program_writes_only_protocol_messages_to_stdout(monkeypatch, tmp_pa
     assert all(json.loads(line).get("jsonrpc") == "2.0" for line in written if line.strip()), written
     assert sorted(tool["name"] for tool in answers[2]["result"]["tools"]) == ["execute_sql", "send_email"]
     sent, unknown = answers[3]["result"], answers[4]["result"]
-    assert (sent["isError"], sent["content"][0]["text"][:26]) == (False, "Sent email to contact 123.")
+    assert (sent["isError"], sent["content"][0]["text"]) == (
+        False, "Sent email to contact 123.\n(decided offline, not sealed)"
+    )
     assert (unknown["isError"], unknown["content"][0]["text"]) == (True, "Unknown tool 'drop_table'.")
-    assert "no COGNEXUS_API_KEY set" in stderr
+    assert "no API key configured" in stderr
 
 
 def _pump(stream, lines: queue.Queue[bytes]) -> None:
@@ -512,9 +514,13 @@ def test_langgraph_demo_acts_on_the_benign_draft_and_refuses_the_injected_one(
 
     guard.main()
 
-    benign, injected = capsys.readouterr().out.split("2. An injected draft")
+    out = capsys.readouterr().out
+    benign, injected = out.split("2. An injected draft")
     assert [name for name, mark in LANGGRAPH_NODES.items() if mark in benign] == ["act"]
     assert [name for name, mark in LANGGRAPH_NODES.items() if mark in injected] == ["refused"]
+    assert "decided offline, not sealed" in benign
+    assert "sealed as" not in benign
+    assert "no API key configured" in out
 
 
 # ── CrewAI: the tool object the @tool decorator builds ───────────────────────

@@ -569,28 +569,153 @@ def test_langgraph_plan_keeps_the_work_it_is_given(monkeypatch):
     assert planned["action"] == "send_email" and planned["draft"]
 
 
+def test_langgraph_act_offline_says_decided_offline_not_sealed(monkeypatch, capsys):
+    guard = _load_scaffold(monkeypatch, "langgraph")
+    _decide_answers(
+        monkeypatch,
+        {"outcome": "allow", "decision_id": "dec-off", "reasons": [], "offline": True},
+    )
+    state = guard.guard({"action": "send_email", "target": "crm:contact:123", "draft": "Hi"})
+    assert state.get("offline") is True
+    guard.act(state)
+    printed = capsys.readouterr().out
+    assert "decided offline, not sealed" in printed
+    assert "sealed as" not in printed
+
+
+def test_langgraph_await_human_offline_is_not_queued(monkeypatch, capsys):
+    guard = _load_scaffold(monkeypatch, "langgraph")
+    _decide_answers(
+        monkeypatch,
+        {"outcome": "review", "decision_id": "dec-off", "reasons": ["x"], "offline": True},
+    )
+    state = guard.guard({"action": "send_email", "target": "crm:contact:123", "draft": "Hi"})
+    guard.await_human(state)
+    printed = capsys.readouterr().out
+    assert "queued for human review" not in printed.lower()
+    assert "not queued" in printed
+    assert "offline" in printed.lower()
+
+
+PYTHON_SCAFFOLDS = ["crewai", "langgraph", "mcp"]
+
+
+def _run_scaffold_main(monkeypatch, framework: str) -> None:
+    """Reach each scaffold's startup/shutdown note with the framework stubbed."""
+    guard = _load_scaffold(monkeypatch, framework)
+    if framework == "mcp":
+
+        class _Streams:
+            async def __aenter__(self):
+                return ("read", "write")
+
+            async def __aexit__(self, *exc):
+                return False
+
+        async def run(read, write, options):
+            return None
+
+        monkeypatch.setattr(guard, "stdio_server", _Streams)
+        monkeypatch.setattr(guard.app, "run", run, raising=False)
+        monkeypatch.setattr(guard.app, "create_initialization_options", lambda: None, raising=False)
+        asyncio.run(guard.main())
+        return
+    if framework == "langgraph":
+        monkeypatch.setattr(
+            guard, "build_graph", lambda: types.SimpleNamespace(invoke=lambda _state: None)
+        )
+        guard.main()
+        return
+    # CrewAI: Agent / Crew / Task only need to accept kwargs and kick off.
+    class _CrewBits:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def kickoff(self):
+            return "ok"
+
+    monkeypatch.setattr(guard, "Agent", _CrewBits)
+    monkeypatch.setattr(guard, "Crew", _CrewBits)
+    monkeypatch.setattr(guard, "Task", _CrewBits)
+    guard.main()
+
+
 def test_mcp_prints_its_note_to_stderr_not_the_protocol_stream(monkeypatch, capsys):
     """A stdio MCP server speaks JSON-RPC on stdout: a line of prose there is a
     protocol error for the client."""
-    guard = _load_scaffold(monkeypatch, "mcp")
-
-    class _Streams:
-        async def __aenter__(self):
-            return ("read", "write")
-
-        async def __aexit__(self, *exc):
-            return False
-
-    async def run(read, write, options):
-        return None
-
-    monkeypatch.setattr(guard, "stdio_server", _Streams)
-    monkeypatch.setattr(guard.app, "run", run, raising=False)
-    monkeypatch.setattr(guard.app, "create_initialization_options", lambda: None, raising=False)
-    asyncio.run(guard.main())  # no COGNEXUS_API_KEY here (conftest.py)
+    _run_scaffold_main(monkeypatch, "mcp")  # no key here (conftest.py)
     out, err = capsys.readouterr()
     assert out == ""
-    assert "no COGNEXUS_API_KEY" in err
+    assert "no API key configured" in err
+    assert "not sealed" in err
+
+
+@pytest.mark.parametrize("framework", PYTHON_SCAFFOLDS)
+def test_no_key_note_uses_the_sdk_resolver_not_one_env_var(framework, monkeypatch, capsys, tmp_path):
+    """``artzain.decide`` also takes ``MYAPP_API_KEY`` and the profile
+    ``artzain login`` writes. Checking only ``COGNEXUS_API_KEY`` printed the
+    offline note while calls went online (or failed reaching the profile's
+    host). The note must ask the SDK's own resolver, and print only a yes/no
+    — never anything derived from the credentials profile."""
+    from artzain import credentials
+
+    source = cli.scaffold_contents(framework, BASE_URL)
+    assert "has_api_key()" in source
+    assert 'os.environ.get("COGNEXUS_API_KEY")' not in source
+
+    # No key anywhere: the note fires.
+    _run_scaffold_main(monkeypatch, framework)
+    printed = "\n".join(capsys.readouterr())
+    assert "no API key configured" in printed
+    assert "not sealed" in printed
+    assert "`artzain login`" in printed
+
+    # A profile alone (no COGNEXUS_API_KEY) is a configured key: no note.
+    profile = tmp_path / "credentials.toml"
+    monkeypatch.setenv("COGNEXUS_CREDENTIALS_PATH", str(profile))
+    credentials.write_profile(api_key="profile-key", base_url="http://127.0.0.1:9")
+    assert artzain.has_api_key() is True
+    _run_scaffold_main(monkeypatch, framework)
+    printed = "\n".join(capsys.readouterr())
+    assert "no API key configured" not in printed
+    assert "local guard" not in printed
+
+    # MYAPP_API_KEY alone is also a configured key.
+    profile.unlink()
+    monkeypatch.setenv("MYAPP_API_KEY", "myapp-key")
+    assert artzain.has_api_key() is True
+    _run_scaffold_main(monkeypatch, framework)
+    printed = "\n".join(capsys.readouterr())
+    assert "no API key configured" not in printed
+
+
+@pytest.mark.parametrize("framework", TOOL_CALL_FRAMEWORKS)
+def test_allow_offline_says_decided_offline_not_sealed(framework, monkeypatch):
+    """Without a key, ``decide()`` answers from the local guard library with
+    ``offline=True``. Calling that "sealed" is wrong: nothing was sealed."""
+    _decide_answers(
+        monkeypatch,
+        {"outcome": "allow", "decision_id": "dec-off", "reasons": [], "offline": True},
+    )
+    told, ran = _call_guarded_tool(monkeypatch, framework)
+    assert ran == ["send_email"]
+    assert "decided offline, not sealed" in told
+    assert "sealed as" not in told
+
+
+@pytest.mark.parametrize("framework", TOOL_CALL_FRAMEWORKS)
+def test_review_offline_is_not_queued(framework, monkeypatch):
+    """Offline, nothing is queued and nothing would ever run the call. The
+    scaffolds must not say ``QUEUED FOR REVIEW`` for that path."""
+    _decide_answers(
+        monkeypatch,
+        {"outcome": "review", "decision_id": "dec-off", "reasons": ["x"], "offline": True},
+    )
+    told, ran = _call_guarded_tool(monkeypatch, framework)
+    assert ran == []
+    assert "QUEUED FOR REVIEW" not in told
+    assert "not queued" in told
+    assert "offline" in told.lower()
 
 
 def test_mcp_names_the_sdk_version_it_needs(monkeypatch):
