@@ -28,7 +28,9 @@ from typing import Any, Callable, Optional
 
 from artzain import cloud
 from artzain.cloud import (
+    _UNSENDABLE,
     _api_request_headers,
+    _describe_failure,
     _resolve,
 )
 from artzain.credentials import CredentialConflictError
@@ -122,8 +124,15 @@ def decide(
             API key was issued with, the base URL is not an ``http://`` or
             ``https://`` URL that names a host, or the credentials profile is
             there but cannot be read, which is not the same as no key (see
-            :func:`artzain.credentials.resolve_credentials`). Nothing is sent
-            in any of these cases.
+            :func:`artzain.credentials.resolve_credentials`), or the API key
+            that is set is one no request can carry. Nothing is sent in any
+            of these cases. For a call that fails, the message gives the
+            error's type and where the base URL came from, or says that no
+            request can be made with the base URL and the API key that are
+            set, never the error's text, which can quote the host or the key;
+            the text is logged at DEBUG under ``artzain.decide``. The error for
+            a request that was sent, or that ``http.client`` refused, has
+            neither a cause nor a context.
     """
     if kind not in _VALID_KINDS:
         raise ValueError(f"kind must be one of {_VALID_KINDS}, got {kind!r}")
@@ -172,13 +181,13 @@ def decide(
         ) from exc
     headers = _api_request_headers(creds.api_key)
     headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, method="POST", headers=headers)
+    failure: Optional[DecisionError] = None
     try:
+        req = urllib.request.Request(url, data=data, method="POST", headers=headers)
         # A redirect is not followed: its status is the error, and the key
         # stays with the host it was issued with.
         with cloud._urlopen(req, timeout=timeout_sec) as resp:
-            raw = resp.read().decode("utf-8")
-        return json.loads(raw) if raw.strip() else {}
+            raw = resp.read()
     except urllib.error.HTTPError as exc:
         detail = ""
         try:
@@ -186,12 +195,35 @@ def decide(
             detail = str(parsed.get("detail") or "")
         except Exception:
             _log.debug("HTTP %s error body is not JSON", exc.code, exc_info=True)
-        raise DecisionError(
+        failure = DecisionError(
             f"decision API returned HTTP {exc.code}{': ' + detail if detail else ''}",
             status=exc.code,
-        ) from exc
+        )
+    except _UNSENDABLE as exc:
+        # Raised before anything is sent, by a base URL or an API key that no
+        # request can carry, with a message that quotes the value: the error
+        # names the settings instead, and the text goes to the log at DEBUG.
+        _log.debug("decision request not sent: %s", exc)
+        failure = DecisionError(f"decision request not sent: {_describe_failure(exc, creds.base_source)}")
     except Exception as exc:
-        raise DecisionError(f"decision API unreachable: {exc}") from exc
+        # The text can name the host, as a certificate issued for another name
+        # does: the error gives the type and where the base URL came from.
+        _log.debug("decision API unreachable: %s", exc)
+        failure = DecisionError(f"decision API unreachable: {_describe_failure(exc, creds.base_source)}")
+    if failure is not None:
+        # Raised out here, not in a handler: an error raised in one keeps the
+        # error it handles as its context, text included, which a caller's
+        # logger.exception renders, and ``from None`` only hides.
+        raise failure
+    try:
+        return json.loads(raw.decode("utf-8")) if raw.strip() else {}
+    except (ValueError, RecursionError):
+        # Not JSON or not UTF-8, or nested deeper than the decoder follows.
+        _log.debug(
+            "decision API answered with a body that is not JSON: %r",
+            raw[:240].decode("utf-8", errors="replace"),
+        )
+    raise DecisionError("decision API answered with a body that is not JSON")
 
 
 # ---------------------------------------------------------------------------

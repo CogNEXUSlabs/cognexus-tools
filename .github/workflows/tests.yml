@@ -32,9 +32,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       # cryptography is NOT optional. Without it, Ed25519 audit-verify and
-      # policy-sign tests skip and CI stays green.
+      # policy-sign tests skip and CI stays green. grpcio and protobuf (the
+      # [openshell] extra) are not either: the OpenShell servicer tests import
+      # them unconditionally under GitHub Actions.
       - name: Install test deps
-        run: pip install pytest httpx cryptography pyyaml
+        run: pip install pytest httpx cryptography pyyaml grpcio protobuf
 
       - name: Python SDK suite
         env:

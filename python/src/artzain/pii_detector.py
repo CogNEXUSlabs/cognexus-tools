@@ -12,6 +12,7 @@ Detectors
                    invalid area/group/serial ranges rejected).
 ``credit_card``    13–19 digit card numbers (separators allowed), validated
                    with the Luhn checksum and a same-digit-run rejection.
+                   A Go pseudo-version's 14-digit timestamp is not one.
 ``iban``           International Bank Account Numbers, validated with the
                    ISO 13616 mod-97 checksum (kills virtually all false hits).
 ``email_bulk``     A *bulk* set of distinct email addresses in one text
@@ -89,6 +90,23 @@ _SSN_RE = re.compile(r"(?<![A-Za-z0-9])(\d{3})[ .-](\d{2})[ .-](\d{4})(?![A-Za-z
 # ── Credit card candidates ── 13–19 digits allowing single space/hyphen
 # separators; each candidate is confirmed with Luhn before it counts.
 _CARD_CANDIDATE_RE = re.compile(r"\b(?:\d[ -]?){12,18}\d\b")
+
+# A Go module pseudo-version's timestamp is 14 digits, yyyymmddhhmmss, and
+# about one in ten passes Luhn. This rule has no issuer prefix, so the
+# timestamp was read as a card. The forms (golang.org/x/mod/module) are
+# ``vX.0.0-<14 digits>-<12 hex>``, ``vX.Y.(Z+1)-0.<14 digits>-<12 hex>`` and
+# ``vX.Y.Z-pre.0.<14 digits>-<12 hex>``, the last two also with
+# ``+incompatible``. On the first, the hyphen before the timestamp is a
+# separator the candidate pattern allows, so the match is the patch ``0``
+# glued to the 14 digits; prepending ``0`` does not change a Luhn sum. The
+# other forms put a dot before the timestamp, so the match is the 14 digits.
+# The pre-release is bounded so a long run of identifiers cannot make this
+# search quadratic. A candidate covered by one of these versions is that
+# timestamp, not a PAN.
+_GO_PSEUDOVERSION_RE = re.compile(
+    r"v\d+\.(?:0\.0-|\d+\.\d+-(?:[0-9A-Za-z-]{1,32}(?:\.[0-9A-Za-z-]{1,32}){0,6}\.)?0\.)"
+    r"\d{14}-[0-9a-fA-F]{12}(?:\+incompatible)?"
+)
 
 # ── IBAN candidates ── country code + 2 check digits + 11-30 alphanumerics;
 # confirmed with the mod-97 checksum before they count.
@@ -238,15 +256,38 @@ def _count_ssn(text: str) -> int:
     return sum(1 for m in _SSN_RE.finditer(text) if _ssn_valid(*m.groups()))
 
 
+def _go_pseudoversion_spans(text: str) -> "tuple[tuple[int, int], ...]":
+    """Spans of Go pseudo-versions in *text*. Empty when *text* has no ``v``."""
+    if "v" not in text:
+        return ()
+    return tuple((m.start(), m.end()) for m in _GO_PSEUDOVERSION_RE.finditer(text))
+
+
+def _inside_go_pseudoversion(
+    spans: "tuple[tuple[int, int], ...]", start: int, end: int,
+) -> bool:
+    return any(span_start <= start and end <= span_end for span_start, span_end in spans)
+
+
+def _is_pan(raw: str) -> bool:
+    """True when *raw* is a Luhn-valid card candidate, not a filler run.
+
+    Digits are compared by value, as :func:`luhn_ok` reads them, whatever the
+    script. A long run of one repeated digit passes Luhn but is filler.
+    """
+    digits = re.sub(r"[ -]", "", raw)
+    if len({int(ch) for ch in digits}) <= 1:
+        return False
+    return luhn_ok(digits)
+
+
 def _count_cards(text: str) -> int:
+    spans = _go_pseudoversion_spans(text)
     count = 0
     for m in _CARD_CANDIDATE_RE.finditer(text):
-        digits = re.sub(r"[ -]", "", m.group(0))
-        # A long run of one repeated digit passes Luhn but is filler, not a PAN.
-        # Digits are compared by value, as luhn_ok reads them, whatever the script.
-        if len({int(ch) for ch in digits}) <= 1:
+        if _inside_go_pseudoversion(spans, m.start(), m.end()):
             continue
-        if luhn_ok(digits):
+        if _is_pan(m.group(0)):
             count += 1
     return count
 
@@ -359,8 +400,9 @@ def redact_text(text: str) -> "tuple[str, Dict[str, int]]":
         return m.group(0)
 
     def _sub_card(m: "re.Match[str]") -> str:
-        digits = re.sub(r"[ -]", "", m.group(0))
-        if len({int(ch) for ch in digits}) > 1 and luhn_ok(digits):
+        if _inside_go_pseudoversion(spans, m.start(), m.end()):
+            return m.group(0)
+        if _is_pan(m.group(0)):
             counts["credit_card"] = counts.get("credit_card", 0) + 1
             return "[REDACTED-CARD]"
         return m.group(0)
@@ -378,6 +420,7 @@ def redact_text(text: str) -> "tuple[str, Dict[str, int]]":
         return m.group(0)
 
     out = _SSN_RE.sub(_sub_ssn, text)
+    spans = _go_pseudoversion_spans(out)
     out = _CARD_CANDIDATE_RE.sub(_sub_card, out)
     out = _IBAN_CANDIDATE_RE.sub(_sub_iban, out)
     out = _NINO_RE.sub(_sub_nino, out)

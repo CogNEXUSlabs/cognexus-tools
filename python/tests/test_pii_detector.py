@@ -83,6 +83,40 @@ class OtherScriptDigitTests(unittest.TestCase):
         self.assertNotIn("ssn", scan_text("ref " + fullwidth("900-00-0000")))
 
 
+class GoPseudoVersionTests(unittest.TestCase):
+    """A Go pseudo-version's 14-digit timestamp is not a card number.
+
+    The same detector the Decision API's privacy vote uses. A real card, with
+    or without separators and inside a sentence, still counts.
+    """
+
+    def test_timestamp_is_not_a_card_and_a_real_card_still_is(self):
+        version = "golang.org/x/sys@v0.0.0-20200101033456-abcdef123456"
+        self.assertNotIn("credit_card", scan_text(version))
+        out, counts = redact_text(f"`{version}` in `go.mod`")
+        self.assertEqual(out, f"`{version}` in `go.mod`")
+        self.assertNotIn("credit_card", counts)
+        dotted = "v1.2.4-0.20200101033456-abcdef123456"
+        self.assertNotIn("credit_card", scan_text(dotted))
+
+        for sample in (
+            "The PAN is 4111111111111111.",
+            "Please charge 4111 1111 1111 1111 today.",
+            "charge 4111-1111-1111-1111 today",
+            "Diners 30569309025904 on the invoice",
+            "ref-30569309025904-abcdef123456",
+        ):
+            with self.subTest(sample=sample):
+                self.assertEqual(scan_text(sample).get("credit_card"), 1)
+
+        beside = f"{version}\nCharge the sandbox card 4111 1111 1111 1111."
+        self.assertEqual(scan_text(beside).get("credit_card"), 1)
+        redacted, found = redact_text(beside)
+        self.assertEqual(found.get("credit_card"), 1)
+        self.assertIn("20200101033456", redacted)
+        self.assertIn("[REDACTED-CARD]", redacted)
+
+
 class ToolCallMemberTests(unittest.TestCase):
     """The SDK copy of the tool-call member reading counts labelled arguments."""
 

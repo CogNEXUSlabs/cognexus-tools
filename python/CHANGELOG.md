@@ -1,5 +1,87 @@
 # Changelog
 
+## 0.6.35
+
+### Added
+
+- **`artzain openshell sidecar`: the ArtzAIn sidecar for NVIDIA OpenShell
+  gateways ships in the SDK** (`artzain.openshell`). It runs beside an
+  OpenShell gateway, answers the gateway's interceptor calls from the
+  ArtzAIn Decision API, lists sandboxes for the catalog, and seals OpenShell
+  policy events. It only ever calls out. Until now it ran from the ArtzAIn
+  engine's source tree.
+  - It decides as `OPENSHELL_GATEWAY_ID`, whatever a request names.
+  - Engine calls finish inside `OPENSHELL_SIDECAR_DECIDE_TIMEOUT_MS`
+    (default 1200 ms), so a slow engine is a deny from the sidecar rather
+    than a timeout at the gateway.
+  - A connection reset is retried once, only for a decision that carries a
+    request id; nothing else is retried.
+  - Engine calls use the SDK's HTTP client (no redirects, proxy from the
+    environment), and only an `http` or `https` engine URL is accepted.
+  - With `OPENSHELL_SIDECAR_GRPC` set (a `unix://` socket or a loopback
+    port), it serves the gRPC `GatewayInterceptor` service the gateway calls.
+    It answers the gateway's protocol handshake without contacting the
+    engine, so a gateway can start while the engine is unreachable.
+  - With `OPENSHELL_JWT_PUBLIC_KEY` and `OPENSHELL_JWT_GATEWAY_ID` set, every
+    call must carry the gateway's signed token (`gateway_jwt`). A call
+    without one is refused, which the gateway treats as a failed call: the
+    write is refused, and the gateway does not start while its first call is
+    refused.
+  - The gRPC service needs the new `artzain[openshell]` extra (`grpcio`,
+    `protobuf`, `cryptography`). The HTTP routes, including a new open
+    `GET /healthz`, need nothing extra.
+
+  Pinned to OpenShell v0.1.2.
+
+### Fixed
+
+- **A Go pseudo-version's timestamp is not read as a card number.** The card
+  rule matches 13–19 digits that pass Luhn, with no issuer prefix. A module
+  pseudo-version (`vX.0.0-yyyymmddhhmmss-<12 hex>`, and the forms that put
+  `.0.` before the timestamp) carries a 14-digit timestamp, and about one in
+  ten passes. On the `vX.0.0-` form the hyphen is a separator the rule
+  allows, so the match was the patch `0` glued to those 14 digits.
+  `scan_text` and `redact_text` leave that timestamp in place. A card number
+  still counts, with or without separators and inside a sentence, including
+  one written beside a pseudo-version.
+- **`artzain quickstart` and `decide()` report a failed request without its
+  error's text.** `artzain quickstart` printed why the API key could not be
+  verified, and `decide()` raised why the Decision API could not be reached,
+  as the text of the error the request raised. That text can quote what a
+  terminal or a log must not: `http.client` quotes a header value it will not
+  send, so an API key it refused was printed in full, right under the line
+  that shows only its prefix, and a certificate issued for another name puts
+  the host in it. The `error` of `fetch_api_key_identity()` and the message of
+  a `DecisionError` now give the error's type (for a `URLError`, the type of
+  the error it wraps) and where the base URL came from, or say that no request
+  can be made with the base URL and the API key that are set; the text is
+  logged at DEBUG, unmasked, under `artzain.cloud` and `artzain.decide`. The
+  `DecisionError` for a request that was sent, or that `http.client` refused,
+  has neither a cause nor a context: a caller's `logger.exception` rendered
+  the error it stood for, text included. A 200 answer that is not JSON is
+  `unexpected_response` from `fetch_api_key_identity()`, and from `decide()`
+  a `DecisionError` that says so rather than "unreachable".
+- **No CLI command prints an error page.** A command whose request was
+  answered with a page rather than the API's JSON printed the page: `audit
+  export`, `registry export`, the licence commands and the commands that read
+  the API's JSON. A page can name the host, or echo the request headers back,
+  the API key or the session token among them. The command now prints the
+  status and that a page came back, and logs the page at DEBUG under
+  `artzain.cli`. A CDN/WAF block page is named as one, now also a 403 page
+  that names Cloudflare or gives its error code 1010, and `artzain login` and
+  the sign-in `artzain quickstart` offers follow it with their hint.
+  `licence attest`, `licence anchor-request` and `licence anchors` printed the
+  text of an error their request raised; they print its type, and log the text
+  at DEBUG, and an answer that holds nothing ends them with a message, where
+  they could stop on a traceback, or `licence anchors` write an export of
+  nothing.
+  A base URL, an API key or a session token no request can be made with ends
+  a command with a message that names the settings, where a traceback or
+  those three commands' message quoted the value, and a 200 answer that is not
+  JSON ends it with a message rather than a traceback. When an export's error
+  answer has a `detail`, the export prints it, as the other commands do,
+  rather than the whole answer.
+
 ## 0.6.34
 
 ### Fixed
