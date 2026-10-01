@@ -411,8 +411,8 @@ def _probe_api_key_via_events(*, timeout_sec: float = 8.0) -> dict[str, Any]:
     data = json.dumps(without_unpaired_surrogates(body_obj), ensure_ascii=False).encode("utf-8")
     headers = _api_request_headers(key)
     headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, method="POST", headers=headers)
     try:
+        req = urllib.request.Request(url, data=data, method="POST", headers=headers)
         with _urlopen(req, timeout=timeout_sec) as resp:
             if resp.status >= 400:
                 return {
@@ -447,7 +447,10 @@ def _probe_api_key_via_events(*, timeout_sec: float = 8.0) -> dict[str, Any]:
             err = detail or f"http_{exc.code}"
         return {"valid": False, "error": err, "base_url": base, "http_status": exc.code}
     except Exception as exc:
-        return {"valid": False, "error": str(exc), "base_url": base}
+        # The caller reports ``error``; the error's text is for the log only
+        # (see _describe_failure).
+        _log.debug("cloud: API key probe POST events failed: %s", exc)
+        return {"valid": False, "error": _describe_failure(exc, creds.base_source), "base_url": base}
 
 
 def fetch_api_key_identity(*, timeout_sec: float = 8.0) -> dict[str, Any]:
@@ -468,33 +471,17 @@ def fetch_api_key_identity(*, timeout_sec: float = 8.0) -> dict[str, Any]:
         return {"valid": False, "error": "no_api_key", "base_url": base}
 
     url = base + "/api/api-keys/me"
-    req = urllib.request.Request(url, method="GET", headers=_api_request_headers(key))
     try:
+        req = urllib.request.Request(url, method="GET", headers=_api_request_headers(key))
         with _urlopen(req, timeout=timeout_sec) as resp:
-            body = resp.read().decode("utf-8")
-        data = json.loads(body) if body.strip() else {}
-        if not isinstance(data, dict) or not data.get("ok"):
-            return {
-                "valid": False,
-                "error": "unexpected_response",
-                "base_url": base,
-            }
-        return {
-            "valid": True,
-            "email": str(data.get("email") or "").strip(),
-            "display_name": str(data.get("display_name") or "").strip(),
-            "key_prefix": str(data.get("key_prefix") or key[:14]).strip(),
-            "key_label": str(data.get("key_label") or "").strip(),
-            "base_url": base,
-            "verified_via": "api_keys_me",
-        }
+            raw = resp.read()
     except urllib.error.HTTPError as exc:
         if exc.code in (404, 405):
             return _probe_api_key_via_events(timeout_sec=timeout_sec)
         detail = ""
         try:
-            raw = exc.read().decode("utf-8", errors="replace")
-            parsed = json.loads(raw) if raw.strip() else {}
+            page = exc.read().decode("utf-8", errors="replace")
+            parsed = json.loads(page) if page.strip() else {}
             if isinstance(parsed, dict) and parsed.get("detail"):
                 detail = str(parsed["detail"])
         except Exception:
@@ -507,7 +494,31 @@ def fetch_api_key_identity(*, timeout_sec: float = 8.0) -> dict[str, Any]:
             err = detail or f"http_{exc.code}"
         return {"valid": False, "error": err, "base_url": base, "http_status": exc.code}
     except Exception as exc:
-        return {"valid": False, "error": str(exc), "base_url": base}
+        # The caller reports ``error``, quickstart on the terminal; the error's
+        # text is for the log only (see _describe_failure).
+        _log.debug("cloud: API key check GET api-keys/me failed: %s", exc)
+        return {"valid": False, "error": _describe_failure(exc, creds.base_source), "base_url": base}
+    try:
+        data = json.loads(raw.decode("utf-8")) if raw.strip() else {}
+    except (ValueError, RecursionError):
+        # Not JSON or not UTF-8, or nested deeper than the decoder follows.
+        _log.debug("cloud: API key check GET api-keys/me answered with a body that is not JSON")
+        data = None
+    if not isinstance(data, dict) or not data.get("ok"):
+        return {
+            "valid": False,
+            "error": "unexpected_response",
+            "base_url": base,
+        }
+    return {
+        "valid": True,
+        "email": str(data.get("email") or "").strip(),
+        "display_name": str(data.get("display_name") or "").strip(),
+        "key_prefix": str(data.get("key_prefix") or key[:14]).strip(),
+        "key_label": str(data.get("key_label") or "").strip(),
+        "base_url": base,
+        "verified_via": "api_keys_me",
+    }
 
 
 def announce_cloud_ingest(*, file: Any = None) -> bool:
@@ -874,22 +885,46 @@ def flush_cloud_events(timeout_sec: float = 10.0) -> None:
     _worker.flush(timeout_sec)
 
 
+def _failure_kind(exc: BaseException) -> str:
+    """The name of *exc*'s type; for a ``URLError`` that wraps an exception,
+    that exception's type."""
+    if isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, BaseException):
+        return type(exc.reason).__name__
+    return type(exc).__name__
+
+
+#: Raised before anything is sent, by a base URL or an API key that no request
+#: can carry, with a message that quotes the value.
+_UNSENDABLE = (ValueError, http.client.InvalidURL)
+
+
+def _describe_failure(exc: BaseException, source: str) -> str:
+    """How a request that raised is described where its text must not go.
+
+    The text can quote what a terminal, a log or an error message must not
+    carry: a certificate issued for another name puts the host in it, and
+    ``http.client`` quotes a header value it will not send, the API key among
+    them. The description is the error's type (:func:`_failure_kind`) and
+    *source*, where the base URL came from (``ResolvedCredentials.base_source``,
+    a label); for an error the settings themselves raised (:data:`_UNSENDABLE`)
+    it says that no request can be made with them. The text belongs at DEBUG.
+    """
+    if isinstance(exc, _UNSENDABLE):
+        return f"no request can be made with the base URL (from {source}) and the API key that are set"
+    return f"{_failure_kind(exc)} (base URL from {source})"
+
+
 def _log_failure(what: str, exc: BaseException, source: str) -> None:
     """Log a cloud call that raised instead of answering.
 
-    The WARNING line gives the exception's type (for a ``URLError`` that wraps
-    an exception, that exception's type) and *source*, where the base URL came
-    from, never the exception's text: a certificate issued for another name
-    puts the host in it, and ``http.client`` quotes a header value it will not
-    send, the API key among them. The text is logged at DEBUG.
+    The WARNING line gives the exception's type (:func:`_failure_kind`) and
+    *source*, where the base URL came from, never the exception's text (see
+    :func:`_describe_failure`). The text is logged at DEBUG.
 
     *source* is the ``base_source`` of the credentials the call was made with,
     so logging a failure reads no settings, and cannot fail on them.
     """
-    kind = type(exc).__name__
-    if isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, BaseException):
-        kind = type(exc.reason).__name__
-    _log.warning("cloud: %s failed: %s (base URL from %s)", what, kind, source)
+    _log.warning("cloud: %s failed: %s (base URL from %s)", what, _failure_kind(exc), source)
     _log.debug("cloud: %s failed: %s", what, exc)
 
 
@@ -1208,16 +1243,11 @@ def _fetch_policy_rules(
         else:
             _log_http_error("policy rules GET", "policy-enforcement", exc, creds.base_source)
         raise _PolicyRulesFetchFailed(f"HTTP {exc.code}") from exc
-    except (ValueError, http.client.InvalidURL) as exc:
+    except _UNSENDABLE as exc:
         # Raised before anything is sent, by a base URL or an API key that no
         # request can carry, with a message that quotes it: the log names
         # where the base URL came from instead.
-        _log.log(
-            level,
-            "cloud: policy rules fetch failed: no request can be made with the base URL "
-            "(from %s) and the API key that are set",
-            creds.base_source,
-        )
+        _log.log(level, "cloud: policy rules fetch failed: %s", _describe_failure(exc, creds.base_source))
         raise _PolicyRulesFetchFailed("no request can be made with these settings") from exc
     except Exception as exc:
         if quiet:

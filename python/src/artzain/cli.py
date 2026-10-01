@@ -7,6 +7,7 @@ import getpass
 import json
 import logging
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -38,7 +39,7 @@ from artzain import (
     screen_user_input,
     should_block,
 )
-from artzain.cloud import _sdk_headers
+from artzain.cloud import _UNSENDABLE, _failure_kind, _sdk_headers
 from artzain.credentials import (
     PROFILE_SOURCE,
     CredentialConflictError,
@@ -390,26 +391,86 @@ def _http_json(
     body: dict[str, Any] | None = None,
     timeout_sec: float = 30.0,
 ) -> tuple[int, Any]:
+    """``(status, body)`` of one request to the API, the body decoded from JSON.
+
+    An error answered with a page rather than JSON comes back as
+    ``{"detail": ...}`` saying what came back, never the page (see
+    :func:`_error_answer`). A request no request can be made with ends the
+    command (see :data:`_NOT_SENT`), and so does a 2xx answer that is not
+    JSON, with a message rather than a traceback.
+    """
     data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
     req_headers = {**_request_headers_for_url(url), **(headers or {})}
     if body is not None:
         req_headers.setdefault("Content-Type", "application/json")
-    req = urllib.request.Request(url, data=data, headers=req_headers, method=method)
     try:
+        req = urllib.request.Request(url, data=data, headers=req_headers, method=method)
         # A redirect is not followed: it comes back as its status, like any
         # other error, and the key or token stays with the host it was for.
         with cloud._urlopen(req, timeout=timeout_sec) as resp:
-            raw = resp.read().decode("utf-8")
-            if not raw.strip():
-                return resp.status, {}
-            return resp.status, json.loads(raw)
+            status, raw = resp.status, resp.read()
     except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        try:
-            parsed = json.loads(raw) if raw.strip() else {}
-        except json.JSONDecodeError:
-            parsed = {"detail": raw or str(exc)}
-        return exc.code, parsed
+        return exc.code, _error_answer(exc.code, exc.read().decode("utf-8", errors="replace"))
+    except _UNSENDABLE as exc:
+        _log.debug("request not sent: %s", exc)
+        status = None
+    if status is None:
+        # Raised out here, not in the handler: an exception raised in one
+        # keeps the one it handles, whose text quotes the value, as its context.
+        raise SystemExit(_NOT_SENT)
+    try:
+        text = raw.decode("utf-8")
+        return status, json.loads(text) if text.strip() else {}
+    except (ValueError, RecursionError):
+        # Not UTF-8 or not JSON, or nested deeper than the decoder follows.
+        page = raw.decode("utf-8", errors="replace")
+        _log.debug("HTTP %s answered with a page rather than JSON: %r", status, page[:240])
+    raise SystemExit(f"Not understood: {_page_detail(status, page)}")
+
+
+def _error_answer(status: int, page: str) -> Any:
+    """What an error answer says: its JSON, or, for a page, ``{"detail": ...}``
+    saying what came back, never what the page says. A proxy's error page can
+    name the host, and one that echoes the request headers back holds the API
+    key or the session token. The page is logged at DEBUG, on one line."""
+    if not page.strip():
+        return {}
+    try:
+        return json.loads(page)
+    except (ValueError, RecursionError):
+        _log.debug("HTTP %s answered with a page rather than JSON: %r", status, page[:240])
+    return {"detail": _page_detail(status, page)}
+
+
+#: How a command ends when ``http.client`` or ``urllib`` refused its URL or a
+#: header value before anything was sent, with an error that quotes the value,
+#: which is logged at DEBUG: the message names the settings, not their values.
+_NOT_SENT = (
+    "Not sent: no request can be made with the base URL or the credentials this "
+    "command uses. Check them for a missing https:// or a stray character, such as "
+    "a line break or a space."
+)
+
+#: How ``detail`` reads for an error answered with a CDN/WAF block page.
+_CDN_BLOCKED = "the CDN/WAF blocked this client before the API"
+
+
+def _looks_cdn_blocked(text: str) -> bool:
+    """The words of a CDN/WAF block, as the hint has always matched them."""
+    low = text.lower()
+    return "blocked" in low and "browser" in low
+
+
+def _page_detail(status: int, page: str) -> str:
+    """``detail`` for an answer that is a page rather than the API's JSON: what
+    came back, never what it says. A 403 page that names Cloudflare or gives
+    its error code 1010, the one it answers a client it does not take for a
+    browser with, is a CDN/WAF block."""
+    low = page.lower()
+    cdn = "cloudflare" in low or re.search(r"\b1010\b", low) is not None
+    if _looks_cdn_blocked(page) or (status == 403 and cdn):
+        return f"{_CDN_BLOCKED} (HTTP {status})"
+    return f"the answer is a page, not the API's JSON (HTTP {status})"
 
 
 def _format_api_error(payload: Any) -> str:
@@ -430,11 +491,10 @@ def _format_api_error(payload: Any) -> str:
 
 def _append_cli_http_hint(message: str) -> str:
     """Extra guidance when the edge (e.g. Cloudflare) blocks the client before the API."""
-    low = message.lower()
-    if "blocked" in low and "browser" in low:
+    if _CDN_BLOCKED in message or _looks_cdn_blocked(message):
         return (
             message
-            + "\n  This text is from the CDN/WAF (e.g. Cloudflare 1010), not the Cognexus app. "
+            + "\n  The block is from the CDN/WAF (e.g. Cloudflare 1010), not the Cognexus app. "
             "The API does not reject sign-up by User-Agent. If this persists, create an API key "
             "in the browser (Account → API Keys) and set COGNEXUS_API_KEY, or ask your infra "
             "admin to allow programmatic access to /api/auth/* (e.g. lower bot fight for that path "
@@ -1007,24 +1067,34 @@ def _print_licence_refusal(base: str, status: int, detail: Any) -> None:
 def _licence_get(args: argparse.Namespace, path: str,
                  params: str = "") -> dict:
     base = _licence_base_url(args)
-    url = f"{base}{path}{params}"
-    headers = {**_request_headers_for_url(url), **_licence_auth_headers(args)}
-    req = urllib.request.Request(url, headers=headers)
+    headers = _licence_auth_headers(args)
     try:
-        with cloud._urlopen(req, timeout=120) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        detail = raw
-        try:
-            detail = json.loads(raw).get("detail") or raw
-        except Exception:
-            _log.debug("error body is not JSON; reporting it verbatim", exc_info=True)
-        _print_licence_refusal(base, exc.code, detail)
-        raise SystemExit(1) from exc
+        status, payload = _http_json("GET", f"{base}{path}{params}", headers=headers,
+                                     timeout_sec=120.0)
     except Exception as exc:
-        print(f"Could not reach the deployment at {base}: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
+        # A socket or TLS error, whose text can quote a certificate's names:
+        # the type says what happened, and the text is logged at DEBUG.
+        _log.debug("licence GET %s failed: %s", path, exc)
+        failed = _failure_kind(exc)
+    else:
+        failed = None
+    if failed is not None:
+        # Raised out here, not in the handler, so the exit keeps no error.
+        print(f"Could not reach the deployment at {base}: {failed}", file=sys.stderr)
+        raise SystemExit(1)
+    # A redirect, which is not followed, answered nothing either: only a
+    # success is one.
+    if not 200 <= status < 300:
+        _print_licence_refusal(base, status,
+                               payload.get("detail") if isinstance(payload, dict) else payload)
+        raise SystemExit(1)
+    # The licence reads use what the answer holds: an answer with nothing in
+    # it would make an export of nothing, or a traceback.
+    if not isinstance(payload, dict) or not payload:
+        print(f"{base} answered without the data the command reads (HTTP {status})",
+              file=sys.stderr)
+        raise SystemExit(1)
+    return payload
 
 
 def _licence_post(args: argparse.Namespace, path: str, body: dict) -> dict:
@@ -1334,6 +1404,30 @@ def cmd_licence_verify(args: argparse.Namespace) -> None:
     raise SystemExit(0)
 
 
+def _download(url: str, creds: ResolvedCredentials) -> bytes:
+    """The body of an authenticated GET, for the export commands.
+
+    An error answer ends the command with its status and what the API says,
+    or, for a page, what came back (see :func:`_error_answer`); a request no
+    request can be made with ends it as :func:`_http_json` does.
+    """
+    headers = {**_request_headers_for_url(url), **_policy_auth_headers(creds)}
+    try:
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        # A redirect is not followed: it ends the command as its status.
+        with cloud._urlopen(req, timeout=120.0) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        answer = _error_answer(exc.code, exc.read().decode("utf-8", errors="replace"))
+        detail = _format_api_error(answer) if answer else "no detail"
+        raise SystemExit(f"Export failed ({exc.code}): {detail}") from exc
+    except _UNSENDABLE as exc:
+        _log.debug("request not sent: %s", exc)
+    # Only a request no request can be made with gets here. Raised out here,
+    # not in the handler, as in _http_json.
+    raise SystemExit(_NOT_SENT)
+
+
 def cmd_audit_export(args: argparse.Namespace) -> None:
     """Download an audit evidence bundle (ZIP) from the server to disk."""
     creds = _cli_credentials()
@@ -1346,16 +1440,7 @@ def cmd_audit_export(args: argparse.Namespace) -> None:
     if getattr(args, "to", None):
         params.append(f"to={urllib.parse.quote(args.to)}")
     query = ("?" + "&".join(params)) if params else ""
-    url = f"{base}/api/v1/audit/export{query}"
-
-    headers = {**_request_headers_for_url(url), **_policy_auth_headers(creds)}
-    req = urllib.request.Request(url, headers=headers, method="GET")
-    try:
-        with cloud._urlopen(req, timeout=120.0) as resp:
-            data = resp.read()
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        raise SystemExit(f"Export failed ({exc.code}): {raw or str(exc)}") from exc
+    data = _download(f"{base}/api/v1/audit/export{query}", creds)
 
     out = Path(args.out) if getattr(args, "out", None) else None
     if out is None:
@@ -1563,15 +1648,7 @@ def cmd_registry_export(args: argparse.Namespace) -> None:
     if getattr(args, "lifecycle", None):
         params.append(f"lifecycle={urllib.parse.quote(args.lifecycle)}")
     creds = _cli_credentials()
-    url = f"{creds.base_url}/api/v1/registry/catalog?{'&'.join(params)}"
-    headers = {**_request_headers_for_url(url), **_policy_auth_headers(creds)}
-    req = urllib.request.Request(url, headers=headers, method="GET")
-    try:
-        with cloud._urlopen(req, timeout=120.0) as resp:
-            data = resp.read()
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        raise SystemExit(f"Export failed ({exc.code}): {raw or str(exc)}") from exc
+    data = _download(f"{creds.base_url}/api/v1/registry/catalog?{'&'.join(params)}", creds)
     out = Path(args.out) if getattr(args, "out", None) else None
     if out is None:
         from datetime import datetime, timezone
@@ -1700,6 +1777,15 @@ def cmd_gui(args: argparse.Namespace) -> None:
         print("No COGNEXUS_API_KEY found — you will be prompted to sign in.")
 
     launch_gui(base_url, api_key=api_key or "", port=port, no_browser=no_browser)
+
+
+def cmd_openshell_sidecar(_args: argparse.Namespace) -> None:
+    import logging
+
+    from artzain.openshell import sidecar
+
+    logging.basicConfig(level=logging.INFO)
+    sidecar.main()
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -2093,6 +2179,40 @@ def main(argv: list[str] | None = None) -> None:
                          "configured).")
     _licence_cert_flags(la)
     la.set_defaults(func=cmd_local_activate)
+
+    p_openshell = sub.add_parser(
+        "openshell",
+        help="Govern an NVIDIA OpenShell gateway: run the ArtzAIn sidecar beside it.",
+    )
+    openshell_sub = p_openshell.add_subparsers(dest="openshell_command", required=True)
+    os_sidecar = openshell_sub.add_parser(
+        "sidecar",
+        help="Run the sidecar beside an OpenShell gateway (HTTP, loopback).",
+        description=(
+            "Runs the ArtzAIn sidecar beside an OpenShell gateway. It answers\n"
+            "the gateway's interceptor calls from the ArtzAIn Decision API,\n"
+            "lists sandboxes for the catalog and seals OpenShell policy events.\n"
+            "It only ever calls out to the engine.\n\n"
+            "Settings (environment):\n"
+            "  OPENSHELL_SIDECAR_GRPC    where the gateway calls the interceptor:\n"
+            "      unix:///absolute/path or a loopback host:port\n"
+            "      (needs: pip install 'artzain[openshell]')\n"
+            "  OPENSHELL_JWT_PUBLIC_KEY / OPENSHELL_JWT_GATEWAY_ID  the gateway's\n"
+            "      gateway_jwt public key file and id; every call must then carry\n"
+            "      the gateway's signed token\n"
+            "  OPENSHELL_SIDECAR_HOST / OPENSHELL_SIDECAR_PORT  HTTP bind address\n"
+            "      (default 127.0.0.1:8088)\n"
+            "  OPENSHELL_SIDECAR_TOKEN   bearer every request must carry\n"
+            "  OPENSHELL_GATEWAY_ID      this gateway; names every decision\n"
+            "  ARTZAIN_DECISION_URL      engine origin (http or https)\n"
+            "  COGNEXUS_API_KEY          Decision API key\n"
+            "  OPENSHELL_SIDECAR_DECIDE_TIMEOUT_MS  engine deadline\n"
+            "      (default 1200; keep it below the gateway's interceptor timeout)\n\n"
+            "Operator steps: the ArtzAIn operator manual, chapter 17."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    os_sidecar.set_defaults(func=cmd_openshell_sidecar)
 
     args = parser.parse_args(argv)
     args.func(args)

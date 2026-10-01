@@ -72,6 +72,13 @@ policy = ["cryptography>=41"]
 # from somewhere other than your own code.
 bounded = ["regex>=2024.5.15"]
 
+# Required only for `artzain openshell sidecar` with OPENSHELL_SIDECAR_GRPC:
+# the gRPC interceptor service an NVIDIA OpenShell gateway calls (grpcio,
+# protobuf) and the check of the gateway's signed calls (cryptography). The
+# sidecar's HTTP routes need none of them. grpcio 1.78 is the floor the
+# OpenShell 0.1.2 Python package itself needs.
+openshell = ["grpcio>=1.78", "protobuf>=4.25", "cryptography>=41"]
+
 dev = [
     "pytest>=8.0",
     "ruff>=0.4",
