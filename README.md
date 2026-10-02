@@ -12,7 +12,7 @@ for CI and guard-sync until those jobs move here.
 | **`@cognexuslabs/artzain`** | `npm i @cognexuslabs/artzain` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/artzain)](https://www.npmjs.com/package/@cognexuslabs/artzain) | TypeScript SDK — remote-only Node client (`decide`, events, identity) |
 | **`@cognexuslabs/openclaw-artzain`** | `npm i @cognexuslabs/openclaw-artzain` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/openclaw-artzain)](https://www.npmjs.com/package/@cognexuslabs/openclaw-artzain) | OpenClaw `before_tool_call` plugin (deny / review / errors block; not `/approve`) |
 | **`@cognexuslabs/n8n-nodes-artzain`** | `npm i @cognexuslabs/n8n-nodes-artzain` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/n8n-nodes-artzain)](https://www.npmjs.com/package/@cognexuslabs/n8n-nodes-artzain) | n8n Decision + Envelope nodes (fail closed on HTTP 503; `review` does not Wait) |
-| **`@cognexuslabs/grokbot-artzain`** | `npm i @cognexuslabs/grokbot-artzain` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/grokbot-artzain)](https://www.npmjs.com/package/@cognexuslabs/grokbot-artzain) | Grok Bot cooperative Decision skill, opt-in announce, and pull enroll (no host intercept) |
+| **`@cognexuslabs/grokbot-artzain`** | `npm install -g @cognexuslabs/grokbot-artzain` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/grokbot-artzain)](https://www.npmjs.com/package/@cognexuslabs/grokbot-artzain) | Grok Bot cooperative Decision skill, opt-in announce, and pull enroll (no host intercept) |
 
 All five are Apache-2.0.
 
@@ -275,14 +275,21 @@ See [`n8n/README.md`](n8n/README.md).
 ## Grok Bot (`@cognexuslabs/grokbot-artzain`)
 
 ```bash
-npm i @cognexuslabs/grokbot-artzain
+npm install -g @cognexuslabs/grokbot-artzain
+grokbot-artzain --version
 ```
 
+Install it with `-g`, where the Bot runs its commands: the skill tells the
+Bot to run the `grokbot-artzain` command, and only a global install puts
+that on the PATH. Then set `COGNEXUS_API_KEY` (a Decision API key, `cnx_…`)
+and add [`grokbot/SKILL.md`](grokbot/SKILL.md) to the Bot as a skill, in
+the Grok Bot app.
+
 Cooperative skill (pattern C): Grok Bot has no host `before_tool_call`
-intercept. Copy [`grokbot/SKILL.md`](grokbot/SKILL.md) into the Bot's skills
-folder, or run `grokbot-artzain decide` before a side-effect. `deny`,
-`review`, and transport errors fail closed. Opt-in announce and default-on
-pull enroll are in [`grokbot/README.md`](grokbot/README.md).
+intercept, so the Bot itself runs `grokbot-artzain decide` before a
+side-effect. `deny`, `review`, and transport errors fail closed. The setup
+steps, the Windows notes, opt-in announce and default-on pull enroll are in
+[`grokbot/README.md`](grokbot/README.md).
 
 ## Development
 

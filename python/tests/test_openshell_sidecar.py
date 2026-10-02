@@ -27,6 +27,7 @@ import pytest
 from artzain import cloud
 from artzain.openshell import interceptor as osi
 from artzain.openshell import sidecar
+from artzain.openshell.state import GatewayLedger
 
 UPDATE = {
     "method": "openshell.v1.OpenShell/UpdateConfig",
@@ -50,6 +51,7 @@ def _sidecar_env(monkeypatch):
     monkeypatch.delenv("OPENSHELL_SIDECAR_TOKEN", raising=False)
     monkeypatch.delenv("ARTZAIN_DECISION_URL", raising=False)
     monkeypatch.setenv("COGNEXUS_API_KEY", "cnx_sidecar_test_key")
+    monkeypatch.setattr(sidecar, "_LEDGER", GatewayLedger(gateway_id="gw-a"))
 
 
 def _capture():
@@ -91,7 +93,9 @@ def test_review_deny_and_503_are_interceptor_denies():
         {"method": "UpdateConfig", "phase": "validate", "body": {"sandbox": "sb"}},
         decide=lambda _p: {"outcome": "review", "decision_id": "01R", "status_code": 200},
     )
-    assert review["allowed"] is False and review["reason"] == "decision review"
+    # The refusal names the decision the engine sealed (the review to resolve).
+    assert review["allowed"] is False and review["reason"] == "decision review (01R)"
+    assert review["log_annotations"] == {"decision_id": "01R"}
     denied = osi.evaluate(
         {"method": "CreateSandbox", "phase": "validate", "body": {}},
         decide=lambda _p: {"outcome": "deny", "status_code": 200},
@@ -116,7 +120,8 @@ def test_review_deny_and_503_are_interceptor_denies():
 
 
 def test_an_unbound_method_is_denied_without_a_decision():
-    out = osi.evaluate({"method": "DeleteSandbox", "phase": "validate", "body": {}},
+    # The one interceptable write the sidecar leaves unbound.
+    out = osi.evaluate({"method": "SubmitPolicyAnalysis", "phase": "validate", "body": {}},
                        decide=_never)
     assert out["allowed"] is False
     assert "not an interceptable binding" in out["reason"]
@@ -132,29 +137,35 @@ def test_global_update_is_denied_before_decide():
 
 
 def test_modify_applies_the_compiled_base_only_when_the_request_omits_policy():
+    # A create is decided in modify_operation, so every allow also carries the stamp.
+    def allow(_payload):
+        return {"outcome": "allow", "decision_id": "01D", "status_code": 200}
+
+    stamp = {"op": "add", "path": "/annotations", "value": {osi.STAMP_KEY: "01D"}}
     applied = osi.evaluate(
         {"method": "CreateSandbox", "phase": "modify_operation", "body": {"name": "new"}},
-        decide=_never, base_policy=BASE,
+        decide=allow, base_policy=BASE,
     )
     assert applied["allowed"] is True
-    assert applied["patches"] == [{"op": "add", "path": "/spec", "value": {"policy": BASE}}]
+    assert applied["patches"] == [
+        {"op": "add", "path": "/spec", "value": {"policy": BASE}}, stamp]
     into_spec = osi.evaluate(
         {"method": "CreateSandbox", "phase": "modify_operation",
          "body": {"spec": {"command": ["sleep"]}}},
-        decide=_never, base_policy=BASE,
+        decide=allow, base_policy=BASE,
     )
-    assert into_spec["patches"] == [{"op": "add", "path": "/spec/policy", "value": BASE}]
+    assert into_spec["patches"] == [{"op": "add", "path": "/spec/policy", "value": BASE}, stamp]
     kept = osi.evaluate(
         {"method": "CreateSandbox", "phase": "modify_operation",
          "body": {"spec": {"policy": {"version": "1"}}}},
-        decide=_never, base_policy=BASE,
+        decide=allow, base_policy=BASE,
     )
-    assert kept["patches"] == []
+    assert kept["patches"] == [stamp]
     without_base = osi.evaluate(
         {"method": "CreateSandbox", "phase": "modify_operation", "body": {"name": "new"}},
-        decide=_never,
+        decide=allow,
     )
-    assert without_base["allowed"] is True and without_base["patches"] == []
+    assert without_base["allowed"] is True and without_base["patches"] == [stamp]
 
 
 def test_the_patch_never_replaces_an_operators_policy():
@@ -225,7 +236,8 @@ def test_a_request_cannot_choose_its_gateway_or_agent():
     seen, decide = _capture()
     sidecar.handle_evaluate({**UPDATE, "gateway_id": "gw-other",
                              "agent_did": "openshell:gw-other"}, decide=decide)
-    assert seen[0]["target"] == "openshell:gw-a:sb-1"
+    # A name the sidecar has no uuid for is decided as that name.
+    assert seen[0]["target"] == "openshell:gw-a:name:default/sb-1"
     assert seen[0]["agent_did"] == "openshell:gw-a"
 
 

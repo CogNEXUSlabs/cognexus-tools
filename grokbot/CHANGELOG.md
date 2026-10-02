@@ -4,6 +4,78 @@ All notable changes to `@cognexuslabs/grokbot-artzain`. Headings are the
 bare version (`## 0.1.0`): the mirror's `publish-npm.yml` cuts the GitHub
 release notes for tag `grokbot-v<version>` from the matching section.
 
+## 0.1.6
+
+### Fixed
+
+- **The install instructions work.** The README said `npm i
+  @cognexuslabs/grokbot-artzain`, which installs into the current folder:
+  it fails with `EPERM` in a folder you cannot write to (a terminal that
+  opens under `C:\Program Files`, say), and where it succeeds it leaves the
+  `grokbot-artzain` command off the PATH, while `SKILL.md` tells the Bot to
+  run that command. The README and `SKILL.md` now install with `npm install
+  -g`, say where to install (the computer the Bot runs its commands on), how
+  to set the key on Windows as well as in a POSIX shell, how to check the
+  key (`grokbot-artzain enroll`), and how to add the skill to a Bot. Grok
+  Bot has no skills folder to copy `SKILL.md` into, as the README said: a
+  skill is added in the app.
+- **The README no longer says `npx grokbot-artzain`.** Outside a folder the
+  package is installed in, `npx` looks that name up on the registry, where
+  no such package exists. The package's name is
+  `@cognexuslabs/grokbot-artzain`.
+- **A tool call's arguments reach the engine from cmd.exe and Windows
+  PowerShell.** The documented `--payload '{"tool":…}'` loses its double
+  quotes on the way through either, and through npm's `.cmd` launcher. What
+  arrives is not JSON, and the engine refuses a tool call that is not JSON,
+  so every such call was blocked. `decide` now takes the
+  arguments as `--arg <name>=<value>` pairs, which need no JSON quoting, or
+  as JSON in a file with `--payload-file <path>`, which no shell rewrites.
+  `--payload` works as before where the shell keeps its quotes.
+- **A mistyped `decide` line no longer asks about a different call.** The
+  command read only the options it knew and skipped everything else. A
+  misspelt option, a value cut short at an unquoted space, an empty
+  `--payload` (an unset shell variable leaves one) and a `decide` with no
+  `--action` were all sent on, as a call with no arguments or with the
+  action `unknown_tool`, and exited 0 if the engine allowed that. The
+  command line is now read strictly: see Changed.
+
+### Added
+
+- `decide --arg <name>=<value>`, once per argument of the tool call, and
+  `decide --payload-file <path>` (UTF-8, or the UTF-16 Windows PowerShell
+  writes). A malformed `--arg` (no `=`, no name, a name given twice, or
+  `--arg` beside a payload) and a file that is empty or cannot be read exit
+  2 without asking the engine.
+- `grokbot-artzain skill` prints the path of the `SKILL.md` the package
+  ships. `--version` prints the version. `--help` prints the usage. Each
+  exits 0 only when it is the whole command line: with anything after it,
+  and for any other unknown command, the usage goes to stderr and the exit
+  code is 2.
+
+### Changed
+
+- **`decide`, `announce` and `enroll` refuse a command line they cannot
+  read**, exit 2, with nothing sent: an option the command does not take
+  (`--help` and `--version` after `decide` among them, and `--enroll-token`
+  on `decide`, which never redeemed one), an option joined to its value
+  with `=`, an option with no value or an empty one, an option given twice
+  (the first used to win), and any word that is not an option, so
+  `enroll decide …` and `announce … decide …` no longer exit 0. `decide`
+  needs `--action`; without one, and for the bare command, it used to ask
+  about `unknown_tool`. A line 0.1.5 accepted with one of these in it is now
+  a deny: `{"outcome":"deny","error":"no decision asked for (…) — failing
+  closed"}`. A refusal names the option, never its value.
+- A `decide` told to announce (`--announce`, `GROKBOT_ANNOUNCE=true`) with
+  no instance name says which setting is missing and does not announce; the
+  decision is unaffected, as before.
+- When `--payload` or the `--payload-file` is not JSON, `decide` says so on
+  stderr, and for `--payload` names the cause on Windows. The call still
+  goes to the engine, whose refusal is the decision, as before.
+- `grokbot-artzain announce` with no instance name says which setting is
+  missing (`GROKBOT_INSTANCE` or `--instance`) and exits 2, as before.
+- `SKILL.md` is written for the Bot that reads it: what needs a decision,
+  how to ask, and what to do on each answer. The setup steps follow.
+
 ## 0.1.5
 
 ### Fixed

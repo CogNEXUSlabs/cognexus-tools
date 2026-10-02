@@ -60,6 +60,13 @@ DEFAULT_AUDIENCES = (
     "urn:openshell:extension:interceptor:artzain",
     "urn:openshell:extension:interceptor:artzain-observe",
 )
+#: The phases each of those registrations binds. The gateway logs a warning
+#: for every binding a manifest declares and its registration does not
+#: configure, so a caller known to be one of the two is told only its own.
+REGISTRATION_PHASES = {
+    DEFAULT_AUDIENCES[0]: (PHASE_MODIFY, PHASE_VALIDATE),
+    DEFAULT_AUDIENCES[1]: (PHASE_POST,),
+}
 _SERVICE_RPC = "openshell.v1.OpenShell"
 _MAX_TOKEN_BYTES = 8192
 _MAX_REASON = 500
@@ -69,8 +76,12 @@ _MAX_ANNOTATION_VALUE = 256
 HandleFn = Callable[[Dict[str, Any]], Dict[str, Any]]
 
 
-def bindings() -> List[Tuple[str, List[str]]]:
-    """``(method, phases)`` for every method the sidecar decides, sorted."""
+def bindings(only: Optional[Sequence[str]] = None) -> List[Tuple[str, List[str]]]:
+    """``(method, phases)`` for every method the sidecar decides, sorted.
+
+    With *only*, the phases are limited to those, and a method left with
+    none is left out.
+    """
     methods = sorted(BOUND_VALIDATE | BOUND_MODIFY | BOUND_POST)
     out = []
     for method in methods:
@@ -78,9 +89,27 @@ def bindings() -> List[Tuple[str, List[str]]]:
             (PHASE_MODIFY, BOUND_MODIFY),
             (PHASE_VALIDATE, BOUND_VALIDATE),
             (PHASE_POST, BOUND_POST),
-        ) if method in bound]
-        out.append((method, phases))
+        ) if method in bound and (only is None or phase in only)]
+        if phases:
+            out.append((method, phases))
     return out
+
+
+def registration_phases(claims: Optional[Mapping[str, Any]]) -> Optional[Tuple[str, ...]]:
+    """The phases the calling registration binds, when its token says which it is.
+
+    None when it cannot be told: no token, an audience that is not one of
+    the example's two, or a token for both. Such a caller is told every
+    binding, since a manifest that leaves out one its registration
+    configures stops the gateway from starting.
+    """
+    if not claims:
+        return None
+    aud = claims.get("aud")
+    named = aud if isinstance(aud, list) else [aud]
+    if len(named) != 1 or not isinstance(named[0], str):
+        return None
+    return REGISTRATION_PHASES.get(named[0])
 
 
 def status_name(status_code: int) -> str:
@@ -266,19 +295,22 @@ class Servicer:
         self._verifier = verifier
         self.wire = wire or _wire.load()
 
-    def _authenticate(self, context: Any) -> None:
+    def _authenticate(self, context: Any) -> Optional[Dict[str, Any]]:
+        """The verified token's claims, or None when no key is configured."""
         if self._verifier is None:
-            return
+            return None
         import grpc
 
         metadata = dict(context.invocation_metadata() or ())
         try:
-            self._verifier.verify(str(metadata.get("authorization") or ""))
+            return self._verifier.verify(str(metadata.get("authorization") or ""))
         except TokenRejected as exc:
             logger.warning("gateway token rejected: %s", exc)
             context.abort(grpc.StatusCode.UNAUTHENTICATED, f"gateway token rejected: {exc}")
+        return None
 
-    def manifest(self) -> Any:
+    def manifest(self, only: Optional[Sequence[str]] = None) -> Any:
+        """The manifest: every binding, or those in the phases *only* names."""
         w = self.wire
         out = w.InterceptorManifest(name="artzain", provider_profiles=False)
         phase_value = {
@@ -286,7 +318,7 @@ class Servicer:
             PHASE_VALIDATE: _wire.PHASE_VALIDATE,
             PHASE_POST: _wire.PHASE_POST_COMMIT,
         }
-        for method, phases in bindings():
+        for method, phases in bindings(only):
             out.bindings.add(
                 id=f"artzain-{method}",
                 selector=w.InterceptorSelector(rpc=f"{_SERVICE_RPC}/{method}"),
@@ -302,7 +334,7 @@ class Servicer:
         return out
 
     def Describe(self, request: Any, context: Any) -> Any:  # noqa: N802 - gRPC method name
-        self._authenticate(context)
+        claims = self._authenticate(context)
         gateway = request.gateway
         problem = _gateway_metadata_problem(gateway)
         if problem:
@@ -310,7 +342,7 @@ class Servicer:
 
             logger.warning("gateway refused at Describe: %s", problem)
             context.abort(grpc.StatusCode.FAILED_PRECONDITION, problem)
-        return self.manifest()
+        return self.manifest(registration_phases(claims))
 
     def Evaluate(self, request: Any, context: Any) -> Any:  # noqa: N802 - gRPC method name
         self._authenticate(context)
