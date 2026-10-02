@@ -4,6 +4,43 @@
 
 ### Changed
 
+- **OpenShell sidecar: its own connection to the engine, kept warm.** The
+  sidecar called the engine through the SDK's general HTTP client, which
+  opens a connection for every call. Each governed write paid for the TCP
+  and TLS handshakes inside the gateway's interceptor timeout.
+  - Connections are now kept between calls. One is opened before the
+    first request and renewed every 30 s.
+  - Every call goes to the origin of `ARTZAIN_DECISION_URL` and to no
+    other. No redirect is followed, as before.
+  - **The environment's proxy is no longer used unless you say so.** Set
+    `OPENSHELL_SIDECAR_PROXY=env` to keep using `HTTPS_PROXY`, or name the
+    proxy: `http://[user:password@]host[:port]`. The proxy is asked to
+    `CONNECT`; only an `http://` proxy is supported.
+  - `OPENSHELL_SIDECAR_CA_BUNDLE` names the certificate authorities to
+    trust for the engine, for a network that inspects TLS. The
+    certificate and its host name are always checked.
+  - A proxy or bundle setting the sidecar cannot honour stops it from
+    starting. It does not fall back to a direct connection.
+  - The deadline now covers the whole answer. An answer whose body
+    trickled in could be waited for past it.
+- **OpenShell sidecar: a projection report the engine could not be given
+  is sent again.** It used to be counted and lost, and the sandbox showed
+  as drifted until its next governed write.
+  - Reports now wait in a journal and are delivered in the order they
+    were made, every 15 s and whenever another report is made.
+  - `OPENSHELL_SIDECAR_JOURNAL` names a file to keep them in across a
+    restart (`0600`). Unset, they wait in memory.
+  - The journal is hash-chained; a file that does not verify is set
+    aside as `<name>.damaged` and not replayed.
+- **OpenShell sidecar: a write refused by the engine's rate limit says so.**
+  On the hosted engine a decision past the hourly rate is answered 429. The
+  sidecar turned that into `decision unavailable`, which reads as an outage.
+  - The deny now reads `decision rate limit reached (600 per hour); retry
+    in 42 s`: the limit when the engine names it, and the engine's
+    `Retry-After` in whole seconds, between one second and a day.
+  - The gateway reports it as `RESOURCE_EXHAUSTED`, not `UNAVAILABLE`.
+  - Nothing was decided or sealed for the write, and the sidecar does not
+    retry it. Run the command again after the wait.
 - **OpenShell sidecar: a sandbox create or update gets one decision.** The
   sidecar now decides in the gateway's `modify_operation` phase and stamps
   the decision id onto the write as the annotation

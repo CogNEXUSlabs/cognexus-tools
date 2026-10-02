@@ -246,7 +246,13 @@ def test_a_validate_call_reaches_the_sidecar_as_its_request(wire):
     assert dict(result.log_annotations) == {"decision_id": "01X"}
 
 
-@pytest.mark.parametrize("code, name", [(403, "PERMISSION_DENIED"), (503, "UNAVAILABLE")])
+@pytest.mark.parametrize("code, name", [
+    (403, "PERMISSION_DENIED"), (503, "UNAVAILABLE"),
+    # The engine's rate limit: a status the gateway knows, so the CLI does
+    # not show a rate limit as a refusal of the change itself.
+    (429, "RESOURCE_EXHAUSTED"),
+    (400, "PERMISSION_DENIED"), (500, "PERMISSION_DENIED"),
+])
 def test_a_deny_carries_its_status_name(wire, code, name):
     result, _ = _run(wire, _evaluation(wire, "validate", {"sandbox": "s1"}),
                      {"allowed": False, "status_code": code, "reason": "decision deny"})

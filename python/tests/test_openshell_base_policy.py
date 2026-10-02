@@ -22,6 +22,7 @@ import json
 import os
 import stat
 import sys
+import time
 import urllib.error
 
 import pytest
@@ -29,6 +30,7 @@ import pytest
 from artzain.openshell import base_policy as bp
 from artzain.openshell import interceptor as osi
 from artzain.openshell import sidecar
+from artzain.openshell.journal import Journal
 from artzain.openshell.state import GatewayLedger
 
 DECISION = "01JABCDEFGHJKMNPQRSTVWXYZ0"
@@ -77,6 +79,8 @@ def _sidecar_env(monkeypatch):
     monkeypatch.setenv("COGNEXUS_API_KEY", "cnxg_sidecar_test_credential")
     monkeypatch.setattr(sidecar, "_LEDGER", GatewayLedger(gateway_id="gw-a"))
     monkeypatch.setattr(sidecar, "_BASE", None)
+    monkeypatch.setattr(sidecar, "_JOURNAL", Journal())
+    monkeypatch.setattr(sidecar, "_CLIENT", None)
 
 
 @pytest.fixture
@@ -425,35 +429,33 @@ def test_the_fetch_asks_for_this_gateways_base_policy(monkeypatch):
         sidecar.fetch_base_policy()
 
 
+class _Client:
+    """Stands in for the engine client: answers 200 with *raw*, and records
+    each request with the time its deadline left."""
+
+    def __init__(self, raw=b"{}"):
+        self.raw, self.seen = raw, []
+
+    def request(self, method, target, *, headers, body=None, deadline, retry_on_reset=False):
+        self.seen.append({"method": method, "target": target, "body": body,
+                          "headers": dict(headers), "retry_on_reset": retry_on_reset,
+                          "left": deadline - time.monotonic()})
+        return 200, {}, self.raw
+
+
 def test_the_engine_is_read_with_a_get_inside_the_deadline(monkeypatch):
-    from artzain import cloud
-
-    seen = {}
-
-    class Answer:
-        def __init__(self):
-            self.chunks = [b'{"gateway_id": "gw-a"}', b""]
-
-        def read(self, _size):
-            return self.chunks.pop(0)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_exc):
-            return False
-
-    class Opener:
-        def open(self, request, timeout):
-            seen.update(method=request.get_method(), url=request.full_url, timeout=timeout,
-                        body=request.data, accept=request.get_header("Accept"))
-            return Answer()
-
-    monkeypatch.setattr(cloud, "_api_opener", lambda: Opener())
+    client = _Client(b'{"gateway_id": "gw-a"}')
+    monkeypatch.setattr(sidecar, "_client", lambda: client)
     assert sidecar._get_engine("https://engine.example/x", "k", timeout=10.0) == {
         "gateway_id": "gw-a"}
-    assert seen == {"method": "GET", "url": "https://engine.example/x", "timeout": 10.0,
-                    "body": None, "accept": "application/json"}
+    (seen,) = client.seen
+    assert (seen["method"], seen["target"], seen["body"]) == (
+        "GET", "https://engine.example/x", None)
+    assert seen["headers"]["Accept"] == "application/json"
+    assert seen["headers"]["X-Api-Key"] == "k"
+    assert "Content-Type" not in seen["headers"]
+    assert 9.0 < seen["left"] <= 10.0
+    assert seen["retry_on_reset"] is False
 
 
 # ---------------------------------------------------------------------------

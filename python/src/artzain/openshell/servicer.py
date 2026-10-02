@@ -13,8 +13,9 @@ default) or a loopback TCP port. It never listens on a routable address.
   ArtzAIn engine is unreachable. A gateway on another protocol major, or one
   without the contract capability, is refused and does not start.
 * ``Evaluate`` turns the protobuf call into the sidecar's request and the
-  answer back. A deny carries ``PERMISSION_DENIED``, or ``UNAVAILABLE`` when
-  the engine could not decide. Patches go back only from
+  answer back. A deny carries ``PERMISSION_DENIED``, ``UNAVAILABLE`` when
+  the engine could not decide, or ``RESOURCE_EXHAUSTED`` when its rate
+  limit refused the decision. Patches go back only from
   ``modify_operation``, and a ``post_commit`` answer is always an allow: the
   gateway cannot revoke a commit.
 * With ``OPENSHELL_JWT_PUBLIC_KEY`` set, every call must carry the gateway's
@@ -113,8 +114,11 @@ def registration_phases(claims: Optional[Mapping[str, Any]]) -> Optional[Tuple[s
 
 
 def status_name(status_code: int) -> str:
-    """The gRPC status name the gateway reports for a deny."""
-    return "UNAVAILABLE" if int(status_code) == 503 else "PERMISSION_DENIED"
+    """The gRPC status name the gateway reports for a deny: ``UNAVAILABLE``
+    when the engine could not be asked, ``RESOURCE_EXHAUSTED`` when its rate
+    limit refused the decision, ``PERMISSION_DENIED`` otherwise."""
+    return {503: "UNAVAILABLE", 429: "RESOURCE_EXHAUSTED"}.get(
+        int(status_code), "PERMISSION_DENIED")
 
 
 def _implementation_version() -> str:
