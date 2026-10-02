@@ -1,5 +1,117 @@
 # Changelog
 
+## 0.6.36
+
+### Changed
+
+- **OpenShell sidecar: a sandbox create or update gets one decision.** The
+  sidecar now decides in the gateway's `modify_operation` phase and stamps
+  the decision id onto the write as the annotation
+  `artzain.cognexuslabs.ai/decision-id`.
+  - The `validate` phase confirms that decision without asking again, and
+    asks for one itself whenever it cannot. Nothing is allowed without a
+    decision.
+  - Bind `modify_operation` and `validate` on `UpdateConfig`, as the engine's
+    example registration now does. With `validate` alone the write is still
+    decided, but it carries no stamp.
+  - A gateway-global `UpdateConfig` is not stamped, and is denied as before.
+- **OpenShell sidecar: a decision names its sandbox by uuid.** The gateway
+  names a sandbox by name and workspace in every call but the create's
+  answer, so the sidecar remembers the uuid each create returned.
+  - A name it cannot resolve is decided as `name:<workspace>/<name>`.
+  - The memory is the process's own, so a sandbox created before a
+    sidecar restart stays unresolved, unless `OPENSHELL_SIDECAR_STATE`
+    names a file to keep it in (below).
+- **OpenShell sidecar: every operator write the gateway can intercept is
+  decided.** 0.6.35 decided eight methods and refused any other, so a
+  delete, a service exposure, an SSH session and every provider write could
+  not be bound. Each now gets one decision, named for what it is:
+  - `openshell_sandbox_delete`, `openshell_service_change`,
+    `openshell_ssh_session` and `openshell_provider_change`, beside
+    `openshell_policy_change` and `openshell_provider_attach`. The rest of
+    the draft family (`UndoDraftChunk`, `ClearDraftChunks`) is a policy
+    change.
+  - The target names the sandbox, the provider, the provider profile or the
+    gateway the write is about.
+  - The payload carries names and ids. A provider write sends the
+    provider's name, its profile type and the profile ids, and nothing else.
+  - A draft or provider-attach decision now says which chunk, which rule or
+    which provider it is about.
+  - Use the engine's updated example registration, which binds all of them.
+    `SubmitPolicyAnalysis` stays unbound: a sandbox's own supervisor calls
+    it every few seconds, and the sidecar does not serve it.
+- **OpenShell sidecar: each registration is told only its own bindings.**
+  With a gateway token, `Describe` answers the example's `artzain`
+  registration with the pre-commit bindings and `artzain-observe` with the
+  post-commit ones. The gateway used to log a warning at every start for
+  each binding a registration was told about and did not configure. A
+  registration under another name is still told every binding.
+- **OpenShell sidecar: a refusal names its decision.** A deny or a review the
+  engine sealed reaches the operator as `decision deny (<decision id>)`.
+- **OpenShell sidecar: an allowed delete forgets the sandbox's name**, so a
+  later sandbox under that name is not decided as the old one.
+- **OpenShell sidecar: sandboxes are kept across restarts.** Set
+  `OPENSHELL_SIDECAR_STATE` to a file and the sidecar keeps each sandbox's
+  name, uuid and last committed policy hash there, and reads it back when
+  it starts. An update to an older sandbox is then still decided by uuid,
+  and its projection is still reported.
+  - The file is the owner's alone (`0600`, in a `0700` folder). It holds no
+    policy body and no credential.
+  - A file that cannot be read or written costs the memory across
+    restarts and nothing else.
+- **OpenShell sidecar: with a gateway credential it reports to the
+  engine.** When `COGNEXUS_API_KEY` is a gateway's own credential
+  (`cnxg_...`), the sidecar sends a heartbeat every minute, and its
+  inventory every five minutes and a few seconds after a change.
+  - The heartbeat carries the sidecar's version, the p50 and p95 of
+    recent decision round trips, and how many reports failed since the
+    last heartbeat the engine took.
+  - The inventory is the sandboxes the sidecar has seen commit, sent as
+    partial, unless listing is switched on (under Fixed).
+  - With an account key nothing is sent. The engine takes these reports
+    from a gateway credential only.
+- **OpenShell sidecar: with a gateway credential it applies the team's
+  base policy.** The sidecar fetches the base policy the engine compiled
+  from the team's active bundle, at start and every five minutes, and
+  gives it to a new sandbox whose create carries no policy. It never
+  replaces an operator's policy.
+  - Until it has been told what the base policy is, such a create is
+    refused (`base policy unavailable`) with no decision. A create that
+    brings its own policy is decided as usual.
+  - When the engine says the team has none, a create is decided as it is.
+  - The sidecar takes a policy only when it matches the digest the engine
+    sent with it. Set `OPENSHELL_SIDECAR_BASE_POLICY` to a file and it
+    keeps the policy there for the next start; a copy that does not match
+    its digest is not used.
+  - A sidecar on an account key is given no base policy and decides a
+    create as before.
+
+### Fixed
+
+- **OpenShell sidecar: a gateway-wide setting write is decided, not
+  refused.** 0.6.35 refused every `UpdateConfig` with `global: true`, so
+  `proposal_approval_mode` could not be set to `manual` on a bound gateway.
+  A setting write is now decided as `openshell_setting_change`. A
+  gateway-wide policy is still refused without a decision.
+
+- **OpenShell sidecar: a committed policy update is reported to the
+  engine.** The gateway's `post_commit` call carries only the committed
+  response, with no decision id, so the sidecar had nothing to report the
+  new policy hash with. It now reads the stamp back from the committed
+  response and reports the pair for the sandbox's uuid.
+- **OpenShell sidecar: the inventory works against the OpenShell SDK.** It
+  called `SandboxClient()` with no endpoint and `list_all()` with no
+  workspace, so every read failed. It now lists through
+  `SandboxClient.from_active_cluster()` and `list_all(workspace=...)`, for
+  the workspaces `OPENSHELL_SIDECAR_LIST_WORKSPACES` names.
+  - Listing uses the operator's own CLI identity, so it is off unless
+    that variable is set.
+  - A sandbox's effective policy hash is the one its last committed
+    update reported to the sidecar. One the sidecar has not seen is sent
+    empty.
+  - `GET /artzain/inventory` answers `degraded` whenever its list may not
+    be every sandbox.
+
 ## 0.6.35
 
 ### Added

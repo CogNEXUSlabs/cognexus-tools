@@ -1,11 +1,11 @@
 /**
  * CogNEXUS Grok Bot skill — cooperative pattern C tool gate.
  *
- * Install from a CogNEXUS checkout (`sdk/grokbot/SKILL.md` into the Bot's
- * skills folder, or `npx @cognexuslabs/grokbot-artzain decide …`). This
- * repository does not publish to npm (Trusted Publishing lives on
- * cognexus-tools). There is no host `before_tool_call` intercept; the
- * Bot has to call the gate.
+ * Install with `npm install -g @cognexuslabs/grokbot-artzain` and add
+ * `SKILL.md` to the Bot as a skill (README, "Set it up"). This repository
+ * does not publish to npm (Trusted Publishing lives on cognexus-tools).
+ * There is no host `before_tool_call` intercept; the Bot has to call the
+ * gate.
  */
 
 export {

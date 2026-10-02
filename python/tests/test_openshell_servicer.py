@@ -398,6 +398,76 @@ def test_with_a_key_every_call_needs_a_token(wire, signed):
     assert ok.allowed is True
 
 
+OBSERVE = "urn:openshell:extension:interceptor:artzain-observe"
+
+
+def _declared(manifest):
+    return {b.selector.rpc.rsplit("/", 1)[-1]: sorted(b.phases) for b in manifest.bindings}
+
+
+def _described_as(wire, private, verifier, **claims):
+    service = servicer.Servicer(handle=lambda _r: {}, wire=wire, verifier=verifier)
+    return _declared(service.Describe(
+        _describe(wire), _Context([("authorization", _token(private, **claims))])))
+
+
+def _everything():
+    return {method: phases for method, phases in (
+        (m, sorted(([_wire.PHASE_MODIFY_OPERATION] if m in osi.BOUND_MODIFY else [])
+                   + ([_wire.PHASE_VALIDATE] if m in osi.BOUND_VALIDATE else [])
+                   + ([_wire.PHASE_POST_COMMIT] if m in osi.BOUND_POST else [])))
+        for m in osi.BOUND_VALIDATE | osi.BOUND_MODIFY | osi.BOUND_POST)}
+
+
+def test_each_example_registration_is_told_only_what_it_binds(wire, signed):
+    """The gateway logs a warning for every binding a manifest declares and
+    its registration does not configure. With every method declared to both,
+    the observe registration drew one warning per pre-commit method at each
+    gateway start."""
+    private, verifier = signed
+    observe = _described_as(wire, private, verifier, aud=OBSERVE)
+    assert observe == {method: [_wire.PHASE_POST_COMMIT] for method in osi.BOUND_POST}
+
+    pre = _described_as(wire, private, verifier)
+    assert set(pre) == set(osi.BOUND_VALIDATE)
+    assert all(_wire.PHASE_POST_COMMIT not in phases for phases in pre.values())
+    assert {m for m, phases in pre.items() if _wire.PHASE_MODIFY_OPERATION in phases} == set(
+        osi.BOUND_MODIFY)
+    assert all(_wire.PHASE_VALIDATE in phases for phases in pre.values())
+
+
+def test_between_them_the_two_registrations_are_told_every_binding(wire, signed):
+    private, verifier = signed
+    merged = {}
+    for claims in ({}, {"aud": OBSERVE}):
+        for method, phases in _described_as(wire, private, verifier, **claims).items():
+            merged[method] = sorted(set(merged.get(method, [])) | set(phases))
+    assert merged == _everything()
+
+
+def test_a_registration_under_another_name_is_told_everything(wire):
+    # Its phases are not known from its name, and a manifest that leaves out a
+    # binding the registration configures stops the gateway from starting.
+    private, pem = _keys()
+    other = "urn:openshell:extension:interceptor:governance"
+    verifier = servicer.GatewayTokenVerifier(pem, "openshell-gateway:gw", [other])
+    assert _described_as(wire, private, verifier, aud=other) == _everything()
+
+
+def test_a_token_for_both_registrations_is_told_everything(wire, signed):
+    private, verifier = signed
+    both = ["urn:openshell:extension:interceptor:artzain", OBSERVE]
+    assert _described_as(wire, private, verifier, aud=both) == _everything()
+    assert _described_as(wire, private, verifier, aud=[OBSERVE]) == {
+        method: [_wire.PHASE_POST_COMMIT] for method in osi.BOUND_POST}
+
+
+def test_an_unsigned_gateway_is_told_everything(wire):
+    manifest = servicer.Servicer(handle=lambda _r: {}, wire=wire).Describe(
+        _describe(wire), _Context())
+    assert _declared(manifest) == _everything()
+
+
 def test_the_verifier_reads_its_settings(monkeypatch, tmp_path):
     _private, pem = _keys()
     key = tmp_path / "public.pem"
