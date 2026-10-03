@@ -45,7 +45,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, Callable
 
-from artzain._private_files import open_private, private_dir, write_private
+from artzain._private_files import open_private, private_dir, replace_file, write_private
 
 __all__ = [
     "DEFAULT_MANIFEST_URL",
@@ -129,7 +129,7 @@ def _write_atomic(path: Path, text: str, *, private: bool = False) -> None:
         write_private(tmp, text.encode("utf-8"))
     else:
         tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    replace_file(tmp, path)
 
 
 @contextmanager

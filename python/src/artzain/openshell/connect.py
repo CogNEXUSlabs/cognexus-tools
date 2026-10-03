@@ -13,13 +13,16 @@ configuration the operator approved, and then:
    against the digest. The credential goes straight into the sidecar's
    settings file (``0600``), so a run that stops later needs no new token;
 2. sets the gateway's ``proposal_approval_mode`` to ``manual`` while nothing
-   governs it yet;
+   governs it yet (the CLI must already reach the gateway, as the install
+   script leaves it; this is checked before the token is spent);
 3. writes the gateway's telemetry choice into ``gateway.env``;
 4. installs the sidecar as a systemd user service, starts it and waits until
    it answers;
 5. adds the two interceptor registrations to ``gateway.toml`` as one marked
    block, after ``openshell-gateway config preflight`` has passed on the
-   result, and makes the gateway's unit require the sidecar;
+   result, and makes the gateway's unit require the sidecar. A package
+   install runs on its defaults and has no ``gateway.toml`` until someone
+   writes one: ``up`` then writes it, and ``remove`` deletes it;
 6. restarts the gateway, and waits until it stays up;
 7. runs the self-test: it asks the gateway to set ``proposal_approval_mode``
    to ``auto``, which ArtzAIn's built-in rule denies. The write must be
@@ -42,6 +45,7 @@ Nothing here logs the credential or the token.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -55,7 +59,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
-from artzain._private_files import private_dir, write_private
+from artzain._private_files import private_dir, replace_file, write_private
 from artzain.openshell import registration, transport
 
 #: What the configuration a token carries says it is, and the one version
@@ -84,7 +88,7 @@ BLOCK_BEGIN = ("# >>> artzain connect openshell: added by `artzain connect opens
 BLOCK_END = "# <<< artzain connect openshell"
 
 _GATEWAY_ID = re.compile(r"^gw_[0-9A-HJKMNP-TV-Z]{26}$")
-_DECISION_ID = re.compile(r"\(([0-9A-HJKMNP-TV-Z]{26})\)")
+_DECISION_ID = re.compile(r"decision (?:deny|review) \(([0-9A-HJKMNP-TV-Z]{26})\)")
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 #: Characters a value written into a systemd unit or environment file must
@@ -111,6 +115,7 @@ class Host:
                  root: str = "/",
                  runner: Optional[Callable[..., subprocess.CompletedProcess]] = None,
                  healthy: Optional[Callable[[int], bool]] = None,
+                 reports: Optional[Callable[[int], Optional[Dict[str, Any]]]] = None,
                  post_json: Optional[Callable[..., Tuple[int, Any]]] = None,
                  which: Optional[Callable[[str], Optional[str]]] = None,
                  sleep: Callable[[float], None] = time.sleep,
@@ -119,9 +124,12 @@ class Host:
                  executable: Optional[str] = None,
                  uid: Optional[int] = None) -> None:
         self.environ = dict(os.environ if environ is None else environ)
+        # The openshell CLI colours its output unless told not to.
+        self.environ.setdefault("NO_COLOR", "1")
         self.root = Path(root)
         self._runner = runner or _run
         self._healthy = healthy or _healthy
+        self._reports = reports or _reports
         self._post_json = post_json or _post_json
         self._which = which
         self.sleep = sleep
@@ -167,6 +175,11 @@ class Host:
     def healthy(self, port: int) -> bool:
         return self._healthy(port)
 
+    def reports(self, port: int) -> Optional[Dict[str, Any]]:
+        """What the sidecar says the engine took (``GET /artzain/reports``),
+        or None when it does not say."""
+        return self._reports(port)
+
     def post_json(self, url: str, *, headers: Mapping[str, str], body: Mapping[str, Any],
                   proxy: str = "", ca_bundle: str = "") -> Tuple[int, Any]:
         return self._post_json(url, headers=headers, body=body, proxy=proxy, ca_bundle=ca_bundle)
@@ -182,13 +195,29 @@ def _run(argv: List[str], *, env: Mapping[str, str], timeout: float) -> subproce
         return subprocess.CompletedProcess(argv, 124, "", f"{argv[0]}: timed out")
 
 
+def _sidecar_get(port: int, path: str) -> Any:
+    """``GET`` a route of the sidecar on loopback. Never through a proxy: a
+    host behind one sets ``HTTP_PROXY``, which would be asked for 127.0.0.1.
+    Raises."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(f"http://127.0.0.1:{int(port)}{path}", timeout=2) as resp:
+        return json.loads(resp.read(65536) or b"null")
+
+
 def _healthy(port: int) -> bool:
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{int(port)}/healthz",  # noqa: S310
-                                    timeout=2) as resp:
-            return resp.status == 200 and json.loads(resp.read(4096) or b"{}").get("ok") is True
+        answer = _sidecar_get(port, "/healthz")
     except Exception:  # noqa: BLE001 - not up yet
         return False
+    return isinstance(answer, dict) and answer.get("ok") is True
+
+
+def _reports(port: int) -> Optional[Dict[str, Any]]:
+    try:
+        answer = _sidecar_get(port, "/artzain/reports")
+    except Exception:  # noqa: BLE001 - it does not say
+        return None
+    return answer if isinstance(answer, dict) else None
 
 
 def _post_json(url: str, *, headers: Mapping[str, str], body: Mapping[str, Any],
@@ -401,8 +430,8 @@ def detect(host: Host) -> Shape:
     if not paths.gateway_unit.is_file():
         raise ConnectError(f"no {GATEWAY_UNIT} user unit: this is not a deb or rpm gateway "
                            "(Homebrew, snap and Compose come later)")
-    if not paths.gateway_toml.is_file():
-        raise ConnectError(f"{paths.gateway_toml} is missing: start the gateway once so it is written")
+    if paths.gateway_toml.exists() and not paths.gateway_toml.is_file():
+        raise ConnectError(f"{paths.gateway_toml} is not a file")
     done = host.run("openshell-gateway", "--version", timeout=30)
     found = _VERSION.search((done.stdout or "") + " " + (done.stderr or ""))
     if done.returncode != 0 or not found:
@@ -420,7 +449,13 @@ def _sha(data: bytes) -> str:
 
 
 def _replace(path: Path, data: bytes, *, private: bool = False) -> None:
-    """Write *path* whole, by a rename, keeping the mode an existing file had."""
+    """Write *path* whole, by a rename, keeping the mode an existing file had.
+
+    Windows refuses the rename while another program has *path* open, a
+    virus scanner reading the file just written, say, so it is tried again
+    for a while (:func:`~artzain._private_files.replace_file`). Whatever
+    fails, *path* is as it was and the new file is gone.
+    """
     mode = path.stat().st_mode & 0o777 if path.exists() else (0o600 if private else 0o644)
     temporary = path.with_name(path.name + ".artzain-new")
     if private:
@@ -429,9 +464,14 @@ def _replace(path: Path, data: bytes, *, private: bool = False) -> None:
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary.write_bytes(data)
-    if hasattr(os, "chmod"):
-        os.chmod(temporary, mode)
-    os.replace(temporary, path)
+    try:
+        if hasattr(os, "chmod"):
+            os.chmod(temporary, mode)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
+    replace_file(temporary, path)
 
 
 def block(text: str) -> str:
@@ -544,20 +584,37 @@ class Record:
 # ---------------------------------------------------------------------------
 
 
-def _jwt_settings(toml_text: str) -> Dict[str, str]:
-    """The gateway's own ``gateway_jwt`` public key and id, when its
-    ``gateway.toml`` names them, so the sidecar can check the gateway's
-    signed calls."""
+#: Where a package-managed gateway keeps the JWT bundle it signs its calls
+#: with when ``gateway.toml`` names none: next to its generated TLS files
+#: (the deb unit's ``OPENSHELL_LOCAL_TLS_DIR``), under this gateway id.
+LOCAL_JWT_DIR = (".local", "state", "openshell", "tls", "jwt")
+LOCAL_JWT_GATEWAY_ID = "openshell"
+
+
+def _jwt_settings(toml_text: str, host: Optional[Host] = None) -> Dict[str, str]:
+    """The gateway's own ``gateway_jwt`` public key and id, so the sidecar
+    can check the gateway's signed calls: as ``gateway.toml`` names them,
+    or else the bundle a package install generates for itself."""
     import tomllib
 
     try:
-        jwt = tomllib.loads(toml_text).get("openshell", {}).get("gateway", {}).get("gateway_jwt", {})
+        jwt = tomllib.loads(toml_text).get("openshell", {}).get("gateway", {}).get("gateway_jwt")
     except tomllib.TOMLDecodeError:
         return {}
-    key, gateway = jwt.get("public_key_path"), jwt.get("gateway_id")
-    if isinstance(key, str) and isinstance(gateway, str) and key and gateway and not (
-            _UNSAFE.search(key) or _UNSAFE.search(gateway)):
-        return {"OPENSHELL_JWT_PUBLIC_KEY": key, "OPENSHELL_JWT_GATEWAY_ID": gateway}
+    if isinstance(jwt, dict):
+        key, gateway = jwt.get("public_key_path"), jwt.get("gateway_id")
+        if isinstance(key, str) and isinstance(gateway, str) and key and gateway and not (
+                _UNSAFE.search(key) or _UNSAFE.search(gateway)):
+            return {"OPENSHELL_JWT_PUBLIC_KEY": key, "OPENSHELL_JWT_GATEWAY_ID": gateway}
+        return {}
+    if host is None:
+        return {}
+    bundle = host.home.joinpath(*LOCAL_JWT_DIR)
+    key = bundle / "public.pem"
+    if (all((bundle / name).is_file() for name in ("signing.pem", "public.pem", "kid"))
+            and not _UNSAFE.search(key.as_posix())):
+        return {"OPENSHELL_JWT_PUBLIC_KEY": key.as_posix(),
+                "OPENSHELL_JWT_GATEWAY_ID": LOCAL_JWT_GATEWAY_ID}
     return {}
 
 
@@ -577,7 +634,12 @@ def sidecar_environment(host: Host, paths: Layout, redeemed_gateway: str, creden
         "OPENSHELL_SIDECAR_JOURNAL": (paths.state_dir / "journal.json").as_posix(),
         "OPENSHELL_SIDECAR_BASE_POLICY": (paths.state_dir / "base-policy.json").as_posix(),
         "OPENSHELL_REGISTRATION_DIGEST": registration_digest,
+        # Each inventory lists every workspace through the CLI the operator
+        # registered with the gateway, so it is never partial.
+        "OPENSHELL_SIDECAR_LIST_CLI": host.which("openshell") or "",
     }
+    if not values["OPENSHELL_SIDECAR_LIST_CLI"].startswith("/"):
+        raise ConnectError("OPENSHELL_SIDECAR_LIST_CLI: the openshell CLI has no absolute path")
     if proxy:
         values["OPENSHELL_SIDECAR_PROXY"] = proxy
     if ca_bundle:
@@ -734,25 +796,48 @@ def _same_line(found: str, wanted: str) -> bool:
     return bool(a and b and a.group(1, 2) == b.group(1, 2))
 
 
+def _said(done: subprocess.CompletedProcess) -> str:
+    """What a command printed, on one line, without colour codes or the
+    box the openshell CLI draws around an error."""
+    text = re.sub(r"\x1b\[[0-9;]*m", "", (done.stdout or "") + "\n" + (done.stderr or ""))
+    return " ".join(re.sub("[\u2500-\u257f]", " ", text).split())
+
+
+def _setting(host: Host, value: str) -> subprocess.CompletedProcess:
+    """Set the gateway-wide ``proposal_approval_mode``. ``--yes`` because the
+    CLI asks to confirm a global change, and nobody is there to answer."""
+    return host.run("openshell", "settings", "set", "--global", "--key", SELF_TEST_KEY,
+                    "--value", value, "--yes", timeout=60)
+
+
+def _cli_reaches_the_gateway(host: Host) -> None:
+    """Raise :class:`ConnectError` unless the ``openshell`` CLI can talk to
+    the gateway: every step after the redeem needs it."""
+    done = host.run("openshell", "settings", "get", "--global", timeout=60)
+    if done.returncode != 0:
+        raise ConnectError("the openshell CLI cannot reach the gateway: start it "
+                           f"(systemctl --user start {GATEWAY_UNIT}) and register it "
+                           "(openshell gateway add https://127.0.0.1:17670 --local "
+                           "--name openshell), then run this again: " + _said(done)[-300:])
+
+
 def self_test(host: Host) -> str:
     """Ask the gateway for a write ArtzAIn denies. Returns the decision id.
     Raises :class:`ConnectError` when the write was not refused, or not by
     ArtzAIn, or the setting moved anyway."""
-    tried = host.run("openshell", "settings", "set", "--global", "--key", SELF_TEST_KEY,
-                     "--value", "auto", timeout=60)
-    said = (tried.stdout or "") + "\n" + (tried.stderr or "")
+    tried = _setting(host, "auto")
+    said = _said(tried)
     if tried.returncode == 0:
         # Governance is not in force. Put the setting back before saying so.
-        host.run("openshell", "settings", "set", "--global", "--key", SELF_TEST_KEY,
-                 "--value", "manual", timeout=60)
+        _setting(host, "manual")
         raise ConnectError("the self-test write was ALLOWED: the gateway is not governed. "
                            "Run `artzain connect openshell status`, then `up` again")
     found = _DECISION_ID.search(said)
     if not found:
         raise ConnectError("the self-test write was refused, but not by an ArtzAIn decision: "
-                           + (said.strip().splitlines() or [""])[-1][:300])
+                           + said[-300:])
     now = host.run("openshell", "settings", "get", "--global", timeout=60)
-    value = re.search(SELF_TEST_KEY + r"\W+(\w+)", now.stdout or "")
+    value = re.search(SELF_TEST_KEY + r"\s*=\s*(\w+)", _said(now))
     if now.returncode != 0 or not value or value.group(1) != "manual":
         raise ConnectError("after the self-test the gateway does not show "
                            f"{SELF_TEST_KEY} as manual: check it with `openshell settings get --global`")
@@ -774,10 +859,13 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
     if not (1 <= int(port) <= 65535):
         raise ConnectError("--port must be 1..65535")
     record = Record.load(paths.record)
-    toml_text = paths.gateway_toml.read_bytes().decode("utf-8")
+    toml_text = (paths.gateway_toml.read_bytes().decode("utf-8")
+                 if paths.gateway_toml.exists() else "")
     if strip_block(toml_text.encode("utf-8")) is None:
-        # Before the token is spent: a file the block cannot go into stops here.
+        # Before the token is spent: a file the block cannot go into stops here,
+        # and so does a CLI that cannot reach the gateway.
         check_gateway_toml(paths, toml_text)
+        _cli_reaches_the_gateway(host)
 
     # 1. The credential, once. It is saved before anything else can fail.
     if record.done("redeemed"):
@@ -795,11 +883,11 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
         sidecar_environment(host, paths, "gw_" + "0" * 26, CREDENTIAL_PREFIX + "0",
                             ConnectConfig("https://engine.invalid", "0.0.0"),
                             registration_digest="0" * 64, port=port, proxy=proxy,
-                            ca_bundle=ca_bundle, jwt=_jwt_settings(toml_text))
+                            ca_bundle=ca_bundle, jwt=_jwt_settings(toml_text, host))
         got = redeem(host, engine=engine, token=token, digest=digest, proxy=proxy,
                      ca_bundle=ca_bundle)
         config, gateway_id = got.config, got.gateway_id
-        jwt = _jwt_settings(toml_text)
+        jwt = _jwt_settings(toml_text, host)
         text = registration.render(f"unix://{paths.socket.as_posix()}",
                                    timeout_ms=config.interceptor_timeout_ms)
         _replace(paths.sidecar_env, sidecar_environment(
@@ -810,8 +898,9 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
                     engine=engine.rstrip("/"), port=int(port))
         _say(out, f"gateway {gateway_id}: credential saved to {paths.sidecar_env}")
         if not jwt:
-            _say(out, "note: gateway.toml names no gateway_jwt key, so the sidecar will not "
-                      "check that calls come from the gateway (manual chapter 17)")
+            _say(out, "note: neither gateway.toml nor the gateway's own files name a "
+                      "gateway_jwt key, so the sidecar will not check that calls come "
+                      "from the gateway (manual chapter 17)")
     if not _same_line(shape.openshell_version, config.openshell_version):
         raise ConnectError(f"this gateway is OpenShell {shape.openshell_version}, and the "
                            f"configuration was approved for {config.openshell_version}: "
@@ -819,10 +908,7 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
 
     # 2. Nothing governs the gateway yet: no automatic approvals meanwhile.
     if not record.done("approval-manual"):
-        done = host.run("openshell", "settings", "set", "--global", "--key", SELF_TEST_KEY,
-                        "--value", "manual", timeout=60)
-        if done.returncode != 0:
-            _say(out, f"note: could not set {SELF_TEST_KEY} to manual (is the gateway running?)")
+        _check(_setting(host, "manual"), f"setting {SELF_TEST_KEY} to manual")
         record.mark("approval-manual")
 
     # 3. The gateway's telemetry choice, in the file its unit reads.
@@ -848,7 +934,8 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
 
     # 5. The registration, checked by the gateway's own preflight first.
     if not record.done("registration"):
-        current = paths.gateway_toml.read_bytes()
+        created = not paths.gateway_toml.exists()
+        current = b"" if created else paths.gateway_toml.read_bytes()
         if strip_block(current) is None:
             text = registration_text(paths, config, current.decode("utf-8"))
             candidate = add_block(current, text)
@@ -862,8 +949,8 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
                 if trial.exists():
                     trial.unlink()
             _replace(paths.toml_backup, current, private=True)
-            record.mark("toml-saved", toml_sha256=_sha(current))
-            _replace(paths.gateway_toml, candidate)
+            record.mark("toml-saved", toml_sha256=_sha(current), toml_created=created)
+            _replace(paths.gateway_toml, candidate, private=created)
         record.mark("registration")
         _replace(paths.dropin, gateway_dropin().encode("utf-8"))
         _check(_systemctl(host, "daemon-reload"), "systemctl --user daemon-reload")
@@ -881,9 +968,62 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
     decision = self_test(host)
     record.mark("self-test", self_test_decision_id=decision, connected=True)
     _say(out, f"gateway {gateway_id} is governed: the self-test write was refused by "
-              f"ArtzAIn decision {decision}. Its heartbeat and inventory reach the "
-              "dashboard within a minute.")
+              f"ArtzAIn decision {decision}.")
+
+    # 8. The first heartbeat and inventory: the sidecar sent them when it
+    # started. Say whether the engine took them; reporting is not governance,
+    # so one it has not taken yet is a note.
+    reports = _first_reports(host, int(record.data.get("port", port)))
+    record.mark("reported", reports=reports)
+    _say(out, _reports_said(reports))
     return dict(record.data)
+
+
+#: How long ``up`` waits for the sidecar to have tried both reports.
+REPORTS_WAIT_SECONDS = 30.0
+
+
+def _first_reports(host: Host, port: int) -> Optional[Dict[str, Any]]:
+    """What the sidecar says the engine took, once it has tried both the
+    heartbeat and the inventory, or what it last said after
+    :data:`REPORTS_WAIT_SECONDS`."""
+    seen: Dict[str, Any] = {}
+
+    def tried() -> bool:
+        seen["reports"] = answer = host.reports(port)
+        return isinstance(answer, dict) and (answer.get("reporting") is False or all(
+            answer.get(what) in ("ok", "failed") for what in ("heartbeat", "inventory")))
+
+    _wait(host, REPORTS_WAIT_SECONDS, tried)
+    return seen.get("reports")
+
+
+def _word(value: Any) -> str:
+    """A name the sidecar sent, safe to print."""
+    return re.sub(r"[^\w.]", "", str(value))[:60]
+
+
+def _reports_said(reports: Optional[Dict[str, Any]]) -> str:
+    status = "`artzain connect openshell status` shows when it has"
+    if not isinstance(reports, dict):
+        return ("note: the sidecar did not say what it reported to the engine: "
+                f"{status}")
+    if reports.get("reporting") is False:
+        return ("note: the sidecar sends no heartbeat or inventory (it holds no gateway "
+                f"credential): {status}")
+    missing = [what for what in ("heartbeat", "inventory") if reports.get(what) != "ok"]
+    if missing:
+        errors = [_word(reports[f"{what}_error"]) for what in missing
+                  if reports.get(f"{what}_error")]
+        return (f"note: the engine has not taken this gateway's {' or its '.join(missing)} "
+                f"yet{' (' + ', '.join(errors) + ')' if errors else ''}: {status}")
+    count = int(reports.get("sandboxes") or 0)
+    said = (f"the engine has this gateway's heartbeat, and its inventory: {count} "
+            f"sandbox{'' if count == 1 else 'es'}")
+    if reports.get("partial"):
+        error = _word(reports.get("listing_error") or "")
+        said += ", not every one" + (f" (the listing failed: {error})" if error else "")
+    return said
 
 
 def _saved(paths: Layout) -> Dict[str, str]:
@@ -935,14 +1075,15 @@ def remove(host: Host, *, keep_credential: bool = False,
 
     if paths.gateway_toml.exists():
         result["gateway.toml"] = _restore(paths.gateway_toml, paths.toml_backup,
-                                          data.get("toml_sha256", ""), False)
+                                          data.get("toml_sha256", ""),
+                                          bool(data.get("toml_created")))
     if paths.dropin.exists():
         paths.dropin.unlink()
         result["drop-in"] = "removed"
     _systemctl(host, "daemon-reload")
     if _systemctl(host, "is-active", GATEWAY_UNIT, timeout=10).stdout.strip() in (
             "active", "activating", "failed") and result.get("gateway.toml") in (
-            "restored", "kept-edits"):
+            "restored", "kept-edits", "removed"):
         _check(_systemctl(host, "restart", GATEWAY_UNIT, timeout=120), f"restarting {GATEWAY_UNIT}")
         if not _gateway_stays_up(host):
             raise ConnectError(f"{GATEWAY_UNIT} did not come back up unbound: see "
@@ -1011,6 +1152,8 @@ def status(host: Host) -> Dict[str, Any]:
         "sidecar_answers": host.healthy(port),
         "gateway": _systemctl(host, "is-active", GATEWAY_UNIT, timeout=10).stdout.strip() or "unknown",
         "record_error": record.get("error"),
+        # What the sidecar says the engine took: its last heartbeat and inventory.
+        "reports": host.reports(port),
     }
 
 

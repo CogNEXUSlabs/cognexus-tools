@@ -26,6 +26,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from artzain._private_files import replace_file
+
 __all__ = [
     "DEFAULT_BASE_URL",
     "CredentialConflictError",
@@ -59,13 +61,6 @@ _READ_RETRY_DELAYS: tuple[float, ...] = (
 #: While it is unchanged, a read is tried once, without the waits above: a lock
 #: another process keeps would otherwise add them to every call.
 _failed_read: Optional[tuple[str, int, int, int, int]] = None
-
-#: How long, and how often, a move of a new profile over the old one is tried
-#: again. Windows refuses the move while another process has the old one open,
-#: as every process reading it does for a moment: tried often, so that the
-#: moment between two readers is not missed.
-_REPLACE_RETRY_SECONDS = 5.0 if sys.platform == "win32" else 0.0
-_REPLACE_RETRY_INTERVAL = 0.002
 
 #: What Windows says of a path where no file can be: a name no file can have
 #: (ERROR_INVALID_NAME), a symlink loop (ERROR_CANT_RESOLVE_FILENAME).
@@ -504,7 +499,9 @@ def _fill(fd: int, data: bytes) -> None:
 
 
 def _move_into_place(fd: int, new: str, target: Path, data: bytes) -> None:
-    """Fill the new file *new* (open as *fd*) and move it over *target*.
+    """Fill the new file *new* (open as *fd*) and move it over *target*
+    (:func:`~artzain._private_files.replace_file`, which waits for a reader
+    on Windows to let go).
 
     Whatever fails, *new* is removed and *target* is as it was.
     """
@@ -513,19 +510,11 @@ def _move_into_place(fd: int, new: str, target: Path, data: bytes) -> None:
             _fill(fd, data)
         finally:
             os.close(fd)
-        deadline = time.monotonic() + _REPLACE_RETRY_SECONDS
-        while True:
-            try:
-                os.replace(new, target)
-                return
-            except PermissionError:
-                if time.monotonic() >= deadline:
-                    raise
-            time.sleep(_REPLACE_RETRY_INTERVAL)
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(new)
         raise
+    replace_file(new, target)
 
 
 def _write_in_place(target: Path, data: bytes) -> None:

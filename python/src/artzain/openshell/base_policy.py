@@ -36,7 +36,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple
 
-from artzain._private_files import private_dir, write_private
+from artzain._private_files import private_dir, replace_file, write_private
 
 logger = logging.getLogger("artzain.openshell.base_policy")
 
@@ -134,7 +134,7 @@ class BasePolicyStore:
             temporary = path.with_name(path.name + ".new")
             private_dir(path.parent)
             write_private(temporary, json.dumps(document).encode("utf-8"))
-            os.replace(temporary, path)
+            replace_file(temporary, path)
             self._save_failed = False
         except OSError as exc:
             if not self._save_failed:

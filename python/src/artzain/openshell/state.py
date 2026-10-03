@@ -16,20 +16,21 @@ private state file, which the next process reads back.
 * A file that cannot be read or written costs the memory across restarts and
   nothing else. The sidecar says so once and carries on.
 * ``complete`` records that the view was filled from a full listing of the
-  gateway (the connect-time import). Until then a snapshot built from this
-  view alone is sent as partial: a sandbox created before the sidecar was
-  bound is not in it.
+  gateway. Until then a snapshot built from this view alone is sent as
+  partial: a sandbox created before the sidecar was bound is not in it. A
+  sidecar that lists every workspace through the CLI
+  (``OPENSHELL_SIDECAR_LIST_CLI``) replaces the view with each listing
+  (:meth:`GatewayLedger.replace_all`) instead.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from artzain._private_files import private_dir, write_private
+from artzain._private_files import private_dir, replace_file, write_private
 from artzain.openshell.interceptor import DEFAULT_WORKSPACE, OperationLedger
 
 logger = logging.getLogger("artzain.openshell.state")
@@ -150,6 +151,25 @@ class GatewayLedger(OperationLedger):
             self._prune_hashes()
             self._changed()
 
+    def replace_all(self, listed: Iterable[Tuple[str, str, str]]) -> None:
+        """Make the whole view exactly the ``(workspace, name, id)`` triples a
+        full listing of every workspace returned. A sandbox the listing does
+        not have is gone; a hash is kept for an id that is still there."""
+        wanted = {(_text(workspace) or DEFAULT_WORKSPACE, _text(name)): _text(sandbox_id)
+                  for workspace, name, sandbox_id in listed
+                  if _text(name) and _text(sandbox_id)}
+        with self._lock:
+            if dict(self._sandboxes) == wanted:
+                return
+            for key in [key for key in self._sandboxes if key not in wanted]:
+                del self._sandboxes[key]
+            for key, sandbox_id in wanted.items():
+                self._sandboxes[key] = sandbox_id
+            while len(self._sandboxes) > self._max_sandboxes:
+                self._sandboxes.popitem(last=False)
+            self._prune_hashes()
+            self._changed()
+
     # -- the file ----------------------------------------------------------
 
     def _prune_hashes(self) -> None:
@@ -181,7 +201,7 @@ class GatewayLedger(OperationLedger):
         try:
             private_dir(path.parent)
             write_private(temporary, json.dumps(self._document()).encode("utf-8"))
-            os.replace(temporary, path)
+            replace_file(temporary, path)
             self._save_failed = False
         except OSError as exc:
             if not self._save_failed:

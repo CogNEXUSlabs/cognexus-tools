@@ -377,6 +377,19 @@ def test_a_file_that_cannot_be_written_costs_the_restart_and_nothing_else(tmp_pa
     assert caplog.text.count("report journal not written") == 1  # said once
 
 
+def test_a_write_another_program_holds_up_is_not_lost(path, artzain_held_replace, caplog):
+    """Windows refuses the rename while another program has the journal
+    open. It was given up at once, and the report did not survive a restart."""
+    journal = Journal(path=path, gateway_id="gw-a")
+    journal.append("projection", _report(1))
+    refused = artzain_held_replace(3)
+    with caplog.at_level(logging.WARNING, logger="artzain.openshell.journal"):
+        assert journal.append("projection", _report(2)) == 2
+    assert Journal(path=path, gateway_id="gw-a").pending() == journal.pending()
+    assert len(refused) == 3 and "report journal not written" not in caplog.text
+    assert os.listdir(os.path.dirname(path)) == ["journal.json"]
+
+
 # ---------------------------------------------------------------------------
 # Delivery
 # ---------------------------------------------------------------------------

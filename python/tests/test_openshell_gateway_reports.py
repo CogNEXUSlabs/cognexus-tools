@@ -287,6 +287,49 @@ def test_a_state_file_that_cannot_be_written_costs_only_the_memory(tmp_path, cap
     assert len([r for r in caplog.records if "state not written" in r.getMessage()]) == 1
 
 
+def test_a_state_write_another_program_holds_up_is_not_lost(state, artzain_held_replace,
+                                                              caplog):
+    """Windows refuses the rename while another program has the state file
+    open. It was given up at once, and the sandbox's name was not kept."""
+    ledger = GatewayLedger(state_path=state, gateway_id="gw-a")
+    ledger.learn_sandbox("default", "s0", OTHER_ID)
+    refused = artzain_held_replace(3)
+    with caplog.at_level("WARNING", logger="artzain.openshell.state"):
+        ledger.learn_sandbox("default", "s1", SANDBOX_ID)
+    assert GatewayLedger(state_path=state, gateway_id="gw-a").sandbox_id("default", "s1") == (
+        SANDBOX_ID)
+    assert len(refused) == 3 and "state not written" not in caplog.text
+    assert os.listdir(os.path.dirname(state)) == ["gw-a.json"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows sharing rules")
+def test_a_state_file_another_program_has_open_is_replaced_once_it_lets_go(state, monkeypatch):
+    """No stand-in: a file opened with Python's ``open()`` on Windows cannot be
+    renamed over until it is closed (seen 2 Oct 2026, a virus scanner reading
+    the file a test had just written)."""
+    ledger = GatewayLedger(state_path=state, gateway_id="gw-a")
+    ledger.learn_sandbox("default", "s0", OTHER_ID)
+    held = open(state, "rb")
+    real, refused = os.replace, []
+
+    def replace(source, target):
+        try:
+            real(source, target)
+        except PermissionError:
+            refused.append(target)
+            held.close()  # the other program lets go
+            raise
+
+    monkeypatch.setattr(os, "replace", replace)
+    try:
+        ledger.learn_sandbox("default", "s1", SANDBOX_ID)
+    finally:
+        held.close()
+    assert refused  # a virus scanner may refuse it again after the hold is gone
+    assert GatewayLedger(state_path=state, gateway_id="gw-a").sandbox_id("default", "s1") == (
+        SANDBOX_ID)
+
+
 def test_the_revision_moves_only_when_something_changed():
     ledger = GatewayLedger(gateway_id="gw-a")
     assert ledger.revision == 0

@@ -46,7 +46,7 @@ from typing import Any, Optional
 
 import pytest
 
-from artzain import _helpers, cloud, credentials
+from artzain import _helpers, _private_files, cloud, credentials
 from artzain._helpers import load_client_policy_rules
 from artzain.policy_enforcement import ClientPolicyRule, builtin_conduct_rules
 
@@ -700,8 +700,8 @@ def test_a_move_another_process_blocks_is_tried_again(
     """Windows refuses to move a file over one another process has open, which
     a reader does for a moment."""
     _login()
-    monkeypatch.setattr(credentials, "_REPLACE_RETRY_SECONDS", 5.0, raising=False)
-    monkeypatch.setattr(credentials, "_REPLACE_RETRY_INTERVAL", 0.0, raising=False)
+    monkeypatch.setattr(_private_files, "_REPLACE_RETRY_SECONDS", 5.0)
+    monkeypatch.setattr(_private_files, "_REPLACE_RETRY_INTERVAL", 0.0)
     real_replace = os.replace
     moves: list[Any] = []
 
@@ -726,8 +726,8 @@ def test_a_profile_that_stays_blocked_is_left_as_it_was(
     """Not rewritten in place instead: Windows truncates a file another process
     has locked and then refuses the write, which would leave it empty."""
     _login()
-    monkeypatch.setattr(credentials, "_REPLACE_RETRY_SECONDS", 0.05, raising=False)
-    monkeypatch.setattr(credentials, "_REPLACE_RETRY_INTERVAL", 0.001, raising=False)
+    monkeypatch.setattr(_private_files, "_REPLACE_RETRY_SECONDS", 0.05)
+    monkeypatch.setattr(_private_files, "_REPLACE_RETRY_INTERVAL", 0.001)
 
     def _blocked(src: Any, dst: Any) -> None:
         raise PermissionError(errno.EACCES, "The process cannot access the file")
@@ -744,8 +744,8 @@ def test_a_profile_that_stays_blocked_is_left_as_it_was(
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows byte-range locks")
 def test_a_locked_profile_is_not_emptied(profile: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _login()
-    monkeypatch.setattr(credentials, "_REPLACE_RETRY_SECONDS", 0.05, raising=False)
-    monkeypatch.setattr(credentials, "_REPLACE_RETRY_INTERVAL", 0.001, raising=False)
+    monkeypatch.setattr(_private_files, "_REPLACE_RETRY_SECONDS", 0.05)
+    monkeypatch.setattr(_private_files, "_REPLACE_RETRY_INTERVAL", 0.001)
 
     with _cannot_read(profile, "held"):
         with pytest.raises(OSError):
@@ -957,8 +957,8 @@ def test_a_move_blocked_again_and_again_is_tried_until_it_goes_through(
     """Readers that keep the profile open in turn block the move time after
     time: it is tried often for a few seconds, not a dozen times."""
     _login()
-    monkeypatch.setattr(credentials, "_REPLACE_RETRY_SECONDS", 5.0, raising=False)
-    monkeypatch.setattr(credentials, "_REPLACE_RETRY_INTERVAL", 0.0, raising=False)
+    monkeypatch.setattr(_private_files, "_REPLACE_RETRY_SECONDS", 5.0)
+    monkeypatch.setattr(_private_files, "_REPLACE_RETRY_INTERVAL", 0.0)
     real_replace = os.replace
     moves: list[Any] = []
 

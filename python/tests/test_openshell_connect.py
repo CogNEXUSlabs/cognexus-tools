@@ -27,10 +27,12 @@ import os
 import stat
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
 
+from artzain import _private_files
 from artzain.openshell import connect, registration
 
 needs_tomllib = pytest.mark.skipif(sys.version_info < (3, 11), reason="connect reads TOML")
@@ -43,6 +45,9 @@ CONFIG = {"kind": "artzain.openshell.connect", "version": 1,
           "decision_url": "https://engine.example", "openshell_version": "0.1.2",
           "interceptor_timeout_ms": 1500, "decide_timeout_ms": 1200, "telemetry": False}
 DIGEST = connect.config_digest(CONFIG)
+#: What a sidecar whose first heartbeat and inventory the engine took says.
+REPORTED = {"reporting": True, "heartbeat": "ok", "inventory": "ok", "sandboxes": 2,
+            "partial": False}
 
 GATEWAY_TOML = """\
 [openshell]
@@ -75,6 +80,15 @@ def _done(code=0, out="", err=""):
     return subprocess.CompletedProcess([], code, out, err)
 
 
+def _box(message, width=40):
+    """An error as the openshell CLI prints it: coloured, in a box, the
+    message wrapped between words at *width*."""
+    lines = textwrap.wrap(message, width, break_long_words=False)
+    return ("\x1b[31mError:\x1b[0m\n\u256d" + "\u2500" * (width + 2) + "\u256e\n"
+            + "".join(f"\u2502 {line.ljust(width)} \u2502\n" for line in lines)
+            + "\u2570" + "\u2500" * (width + 2) + "\u256f\n")
+
+
 class _Gateway:
     """A deb gateway as ``connect`` sees it, and an engine to redeem at."""
 
@@ -86,7 +100,8 @@ class _Gateway:
         unit.write_text("[Service]\nExecStartPre=openshell-gateway config preflight\n")
         self.toml = self.home / ".config" / "openshell" / "gateway.toml"
         self.toml.parent.mkdir(parents=True)
-        self.toml.write_bytes(toml.encode("utf-8"))
+        if toml is not None:  # None: a package install on its defaults
+            self.toml.write_bytes(toml.encode("utf-8"))
         self.calls = []
         self.posts = []
         self.units = {connect.GATEWAY_UNIT: "active", connect.SIDECAR_UNIT: "inactive"}
@@ -100,6 +115,11 @@ class _Gateway:
         self.redeem = (200, None)
         self.revoke_status = 200
         self.revoke_raises = False
+        self.cli_reaches = True     # the CLI is registered with the gateway
+        self.revision = 3
+        #: What the sidecar's /artzain/reports says, one answer per read (the
+        #: last one stays).
+        self.reported = [dict(REPORTED)]
 
     # the commands --------------------------------------------------------
     def run(self, argv, env, timeout):
@@ -129,27 +149,40 @@ class _Gateway:
                 self.units[verb[2]] = "inactive"
                 return _done()
             if verb[0] == "restart" and verb[1] == connect.GATEWAY_UNIT:
-                registered = connect.BLOCK_BEGIN in self.toml.read_text(encoding="utf-8")
+                registered = self.toml.exists() and connect.BLOCK_BEGIN in self.toml.read_text(
+                    encoding="utf-8")
                 sidecar_up = self.units[connect.SIDECAR_UNIT] == "active"
                 state = self.restart or ("failed" if registered and not sidecar_up else "active")
                 self.units[connect.GATEWAY_UNIT] = state
                 self.bound = registered and state == "active"
                 return _done(0)
+        if name == "openshell" and not self.cli_reaches:
+            return _done(1, "", _box("status: Unavailable, message: \"tcp connect error\""))
         if name == "openshell" and args[:2] == ["settings", "set"]:
+            if "--yes" not in args:  # the real CLI asks before a global change
+                return _done(1, "", "Error: refusing a global change without --yes")
             key, value = args[args.index("--key") + 1], args[args.index("--value") + 1]
             if self.bound and not self.engine_allows and value == "auto":
                 reason = (f"decision deny ({DECISION})" if self.decision_in_reason
                           else "interceptor transport error")
-                return _done(1, "", f"Error: PERMISSION_DENIED: {reason}")
+                return _done(1, "", _box(
+                    "status: PermissionDenied, message: \"gateway interceptor 'artzain' "
+                    f"denied the request: {reason}\""))
             self.settings[key] = value
-            return _done(0, "ok")
+            self.revision += 1
+            return _done(0, "\x1b[32m\u2713\x1b[0m Updated global setting\n")
         if name == "openshell" and args[:2] == ["settings", "get"]:
-            return _done(0, "Global settings (revision 3)\n" + "".join(
-                f"  {key}: {value}\n" for key, value in self.settings.items()))
+            return _done(0, f"\x1b[1mSettings Rev:\x1b[0m {self.revision}\n" + "".join(
+                f"  {key} = {value}\n" for key, value in self.settings.items()))
         raise AssertionError(f"unexpected command {argv}")
 
     def healthy(self, port):
         return self.units[connect.SIDECAR_UNIT] == "active"
+
+    def reports(self, port):
+        if self.units[connect.SIDECAR_UNIT] != "active":
+            return None
+        return dict(self.reported.pop(0) if len(self.reported) > 1 else self.reported[0])
 
     # the engine ----------------------------------------------------------
     def post_json(self, url, *, headers, body, proxy="", ca_bundle=""):
@@ -173,6 +206,7 @@ class _Gateway:
             environ={"HOME": str(self.home), "XDG_RUNTIME_DIR": "/run/user/1000",
                      "PATH": "/usr/bin"},
             root=str(self.root), runner=self.run, healthy=self.healthy,
+            reports=self.reports,
             post_json=self.post_json, which=lambda name: f"/usr/bin/{name}",
             sleep=lambda _s: None, clock=_Clock(), platform="linux",
             executable="/home/op/.local/share/uv/tools/artzain/bin/python", uid=1000)
@@ -270,6 +304,45 @@ def test_a_file_without_exactly_one_whole_block_is_left_alone(tmp_path, text):
     path.write_text(text, encoding="utf-8")
     assert connect._restore(path, tmp_path / "none", "", False) == "no-block"
     assert path.read_text(encoding="utf-8") == text
+
+
+def _held_for(times):
+    """``os.replace`` as Windows does it while another program (a virus
+    scanner reading the file just written, say) has the target open."""
+    real, refused = os.replace, []
+
+    def replace(source, target):
+        if len(refused) < times:
+            refused.append(target)
+            raise PermissionError(13, "Access is denied")
+        real(source, target)
+    return replace, refused
+
+
+def test_a_write_held_up_by_another_program_waits_for_it(tmp_path, monkeypatch):
+    path = tmp_path / "connect.json"
+    path.write_bytes(b"old")
+    replace, refused = _held_for(3)
+    monkeypatch.setattr(_private_files, "_REPLACE_RETRY_SECONDS", 5.0)
+    monkeypatch.setattr(connect.os, "replace", replace)
+    connect._replace(path, b"new", private=True)
+    assert path.read_bytes() == b"new" and len(refused) == 3
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["connect.json"]
+
+
+@pytest.mark.parametrize("seconds", [0.0, 0.05])  # not Windows; a program that never lets go
+def test_a_write_that_cannot_be_put_in_place_leaves_the_file_as_it_was(tmp_path, monkeypatch,
+                                                                         seconds):
+    path = tmp_path / "connect.json"
+    path.write_bytes(b"old")
+    replace, refused = _held_for(10 ** 6)
+    monkeypatch.setattr(_private_files, "_REPLACE_RETRY_SECONDS", seconds)
+    monkeypatch.setattr(connect.os, "replace", replace)
+    with pytest.raises(PermissionError):
+        connect._replace(path, b"new")
+    assert path.read_bytes() == b"old"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["connect.json"]
+    assert (len(refused) == 1) == (seconds == 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -510,8 +583,10 @@ def test_up_binds_the_gateway_and_checks_it_is_governed(gateway):
 
     assert record["connected"] is True and record["self_test_decision_id"] == DECISION
     assert record["steps"] == ["redeemed", "approval-manual", "gateway-env", "sidecar",
-                               "toml-saved", "registration", "gateway-restarted", "self-test"]
-    assert DECISION in said[-1] and GATEWAY in said[-1]
+                               "toml-saved", "registration", "gateway-restarted", "self-test",
+                               "reported"]
+    # The governed line, then what the engine took of the first reports.
+    assert DECISION in said[-2] and GATEWAY in said[-2]
     assert not any(CREDENTIAL in line or TOKEN in line for line in said)
     assert CREDENTIAL not in paths.record.read_text(encoding="utf-8")
 
@@ -631,8 +706,27 @@ def test_a_self_test_after_which_the_setting_is_not_manual_fails_the_run(gateway
     def moved(argv, env, timeout):
         done = real(argv, env, timeout)
         if argv[1:3] == ["settings", "get"]:
-            return _done(0, done.stdout.replace("proposal_approval_mode: manual",
-                                                "proposal_approval_mode: auto"))
+            return _done(0, done.stdout.replace("proposal_approval_mode = manual",
+                                                "proposal_approval_mode = auto"))
+        return done
+
+    with pytest.raises(connect.ConnectError, match="does not show"):
+        connect.up(gateway.host(runner=moved), token=TOKEN, digest=DIGEST,
+                   engine="https://engine.example", out=lambda _s: None)
+
+
+@needs_tomllib
+def test_the_self_test_reads_its_own_setting_not_the_next_one(gateway):
+    """The CLI lists every gateway-wide setting; another one reading
+    ``manual`` says nothing about ``proposal_approval_mode``."""
+    real = gateway.run
+
+    def moved(argv, env, timeout):
+        done = real(argv, env, timeout)
+        if argv[1:3] == ["settings", "get"]:
+            return _done(0, done.stdout.replace(
+                "proposal_approval_mode = manual",
+                "proposal_approval_mode = auto\n  sandbox_review_mode = manual"))
         return done
 
     with pytest.raises(connect.ConnectError, match="does not show"):
@@ -654,14 +748,106 @@ def test_a_host_this_release_cannot_bind_is_refused_before_anything(gateway, cha
 
 
 @needs_tomllib
-def test_a_missing_gateway_toml_or_version_is_refused(gateway):
+def test_a_gateway_that_does_not_say_its_version_is_refused(gateway):
     gateway.version = "openshell-gateway (unknown)"
     with pytest.raises(connect.ConnectError, match="did not say its version"):
         _up(gateway)
-    gateway.toml.unlink()
-    with pytest.raises(connect.ConnectError, match="gateway.toml is missing"):
-        _up(gateway)
     assert gateway.posts == []
+
+
+@needs_tomllib
+def test_a_package_install_on_its_defaults_gets_a_gateway_toml_and_loses_it_again(tmp_path):
+    """A package-managed gateway reads gateway.toml only when it exists, and
+    the package writes none."""
+    import tomllib
+
+    gateway = _Gateway(tmp_path, toml=None)
+    record, _said = _up(gateway)
+    doc = tomllib.loads(gateway.toml.read_text(encoding="utf-8"))
+    assert doc["openshell"]["version"] == 2
+    assert [i["name"] for i in doc["openshell"]["gateway"]["interceptors"]] == [
+        "artzain", "artzain-observe"]
+    assert record["toml_created"] is True and record["connected"] is True
+    if sys.platform != "win32":
+        assert stat.S_IMODE(os.stat(gateway.toml).st_mode) == 0o600
+
+    result = connect.remove(gateway.host(), out=lambda _s: None)
+    assert result["gateway.toml"] == "removed" and not gateway.toml.exists()
+    assert result["gateway"] == "restarted unbound" and gateway.bound is False
+
+
+@needs_tomllib
+def test_a_cli_that_cannot_reach_the_gateway_stops_up_before_the_token_is_spent(gateway):
+    gateway.cli_reaches = False
+    with pytest.raises(connect.ConnectError, match="cannot reach the gateway") as stopped:
+        _up(gateway)
+    assert "openshell gateway add" in str(stopped.value)
+    assert gateway.posts == [] and not gateway.paths.record.exists()
+
+
+@needs_tomllib
+def test_the_gateways_own_jwt_bundle_is_used_when_gateway_toml_names_none(tmp_path):
+    gateway = _Gateway(tmp_path, toml="[openshell]\nversion = 2\n")
+    bundle = gateway.home.joinpath(*connect.LOCAL_JWT_DIR)
+    bundle.mkdir(parents=True)
+    for name in ("signing.pem", "public.pem", "kid"):
+        (bundle / name).write_text("x")
+    _record, said = _up(gateway)
+    saved = connect._saved(gateway.paths)
+    assert saved["OPENSHELL_JWT_PUBLIC_KEY"] == (bundle / "public.pem").as_posix()
+    assert saved["OPENSHELL_JWT_GATEWAY_ID"] == "openshell"
+    assert not any("gateway_jwt" in line for line in said)
+
+
+@needs_tomllib
+def test_the_gateways_own_jwt_bundle_is_under_home_whatever_the_state_folder(tmp_path):
+    """The package's unit sets ``OPENSHELL_LOCAL_TLS_DIR=%h/.local/state/...``,
+    which ``XDG_STATE_HOME`` does not move."""
+    gateway = _Gateway(tmp_path, toml="[openshell]\nversion = 2\n")
+    bundle = gateway.home.joinpath(*connect.LOCAL_JWT_DIR)
+    bundle.mkdir(parents=True)
+    for name in ("signing.pem", "public.pem", "kid"):
+        (bundle / name).write_text("x")
+    host = gateway.host(environ={"HOME": str(gateway.home), "XDG_RUNTIME_DIR": "/run/user/1000",
+                                 "XDG_STATE_HOME": str(gateway.home / "elsewhere")})
+    connect.up(host, token=TOKEN, digest=DIGEST, out=lambda _s: None)
+    saved = connect._saved(connect.layout(host))
+    assert saved["OPENSHELL_JWT_PUBLIC_KEY"] == (bundle / "public.pem").as_posix()
+
+
+@needs_tomllib
+def test_a_partial_jwt_bundle_is_not_used(tmp_path):
+    gateway = _Gateway(tmp_path, toml="[openshell]\nversion = 2\n")
+    bundle = gateway.home.joinpath(*connect.LOCAL_JWT_DIR)
+    bundle.mkdir(parents=True)
+    (bundle / "public.pem").write_text("x")
+    _record, said = _up(gateway)
+    assert "OPENSHELL_JWT_PUBLIC_KEY" not in connect._saved(gateway.paths)
+    assert any("gateway_jwt" in line for line in said)
+
+
+@needs_tomllib
+def test_a_gateway_toml_that_names_a_key_wins_over_the_bundle(gateway):
+    bundle = gateway.home.joinpath(*connect.LOCAL_JWT_DIR)
+    bundle.mkdir(parents=True)
+    for name in ("signing.pem", "public.pem", "kid"):
+        (bundle / name).write_text("x")
+    _up(gateway)
+    assert connect._saved(gateway.paths)["OPENSHELL_JWT_GATEWAY_ID"] == "laptop"
+
+
+def test_the_cli_is_asked_without_colour():
+    assert connect.Host(environ={}).environ["NO_COLOR"] == "1"
+    assert connect.Host(environ={"NO_COLOR": ""}).environ["NO_COLOR"] == ""
+
+
+def test_a_boxed_coloured_refusal_is_read_as_one_line():
+    done = _done(1, "", _box("message: \"gateway interceptor 'artzain' denied the "
+                             f"request: decision deny ({DECISION})\"", width=33))
+    said = connect._said(done)
+    assert "\x1b" not in said and not any("\u2500" <= ch <= "\u257f" for ch in said)
+    assert said.startswith("Error: message:")
+    assert connect._DECISION_ID.search(said).group(1) == DECISION
 
 
 @needs_tomllib
@@ -737,6 +923,26 @@ def test_a_gateway_that_comes_up_and_falls_over_did_not_stay_up(gateway):
     with pytest.raises(connect.ConnectError, match="did not stay up"):
         connect.up(gateway.host(runner=flapping), token=TOKEN, digest=DIGEST,
                    out=lambda _s: None)
+
+
+@needs_tomllib
+def test_a_gateway_that_cannot_be_set_to_manual_approval_is_not_bound(gateway):
+    """Nothing governs the gateway until the restart: an automatic approval
+    meanwhile would go through unchecked, so ``up`` stops there."""
+    real = gateway.run
+
+    def refusing(argv, env, timeout):
+        if argv[1:3] == ["settings", "set"] and argv[argv.index("--value") + 1] == "manual":
+            return _done(1, "", _box("status: Internal, message: \"settings store is read-only\""))
+        return real(argv, env, timeout)
+
+    with pytest.raises(connect.ConnectError, match="setting proposal_approval_mode to manual"):
+        connect.up(gateway.host(runner=refusing), token=TOKEN, digest=DIGEST,
+                   out=lambda _s: None)
+    record = json.loads(gateway.paths.record.read_text(encoding="utf-8"))
+    assert "redeemed" in record["steps"] and "approval-manual" not in record["steps"]
+    assert not gateway.paths.dropin.exists() and connect.BLOCK_BEGIN not in (
+        gateway.toml.read_text(encoding="utf-8"))
 
 
 @needs_tomllib
@@ -835,8 +1041,140 @@ def test_status_says_what_is_installed_and_holds_no_credential(gateway):
         "self_test_decision_id": DECISION, "credential_saved": True,
         "registration_in_gateway_toml": True, "drop_in": True, "sidecar_unit": True,
         "sidecar": "active", "sidecar_answers": True, "gateway": "active",
-        "record_error": None}
+        "record_error": None, "reports": REPORTED}
     assert CREDENTIAL not in json.dumps(after)
+
+
+@needs_tomllib
+def test_the_sidecar_lists_sandboxes_with_the_operators_own_cli(gateway):
+    _up(gateway)
+    assert connect._saved(gateway.paths)["OPENSHELL_SIDECAR_LIST_CLI"] == "/usr/bin/openshell"
+
+
+@needs_tomllib
+@pytest.mark.parametrize("where", ['/opt/my"tools/{name}', "bin/{name}"],
+                         ids=["quote", "relative"])
+def test_a_cli_path_systemd_cannot_carry_stops_up_before_the_token_is_spent(gateway, where):
+    """A unit's environment has no working folder to resolve a relative path
+    against, and cannot carry a quote."""
+    host = gateway.host(which=lambda name: where.format(name=name))
+    with pytest.raises(connect.ConnectError, match="OPENSHELL_SIDECAR_LIST_CLI"):
+        connect.up(host, token=TOKEN, digest=DIGEST, out=lambda _s: None)
+    assert gateway.posts == []
+
+
+@needs_tomllib
+def test_up_says_the_engine_has_the_gateways_heartbeat_and_inventory(gateway):
+    record, said = _up(gateway)
+    assert said[-1] == ("the engine has this gateway's heartbeat, and its inventory: "
+                        "2 sandboxes")
+    assert record["reports"] == REPORTED
+    assert not any("within a minute" in line for line in said)
+
+
+@needs_tomllib
+def test_up_waits_for_the_first_reports(gateway):
+    pending = {"reporting": True, "heartbeat": "pending", "inventory": "pending"}
+    one = dict(REPORTED, sandboxes=1)
+    gateway.reported = [pending, pending, dict(pending, heartbeat="ok"), one]
+    record, said = _up(gateway)
+    assert said[-1].endswith("its inventory: 1 sandbox")
+    assert record["reports"] == one
+
+
+@needs_tomllib
+@pytest.mark.parametrize("reported, says", [
+    ({"reporting": True, "heartbeat": "pending", "inventory": "pending"},
+     "has not taken this gateway's heartbeat or its inventory yet"),
+    ({"reporting": True, "heartbeat": "failed", "heartbeat_error": "ConnectionError",
+      "inventory": "ok", "sandboxes": 0, "partial": False},
+     "has not taken this gateway's heartbeat yet (ConnectionError)"),
+    ({"reporting": False}, "the sidecar sends no heartbeat"),
+    (None, "the sidecar did not say what it reported"),
+], ids=["pending", "failed", "not-reporting", "no-answer"])
+def test_reports_the_engine_has_not_taken_are_a_note_not_a_failure(gateway, monkeypatch,
+                                                                   reported, says):
+    gateway.reported = [reported]
+    if reported is None:
+        monkeypatch.setattr(gateway, "reports", lambda port: None)
+    host = gateway.host(reports=gateway.reports)
+    said = []
+    record = connect.up(host, token=TOKEN, digest=DIGEST, out=said.append)
+    assert record["connected"] is True
+    assert said[-1].startswith("note: ") and says in said[-1]
+    assert "artzain connect openshell status" in said[-1]
+
+
+@needs_tomllib
+def test_a_partial_inventory_is_said_with_its_reason(gateway):
+    gateway.reported = [dict(REPORTED, partial=True, listing_error="TimeoutExpired")]
+    _record, said = _up(gateway)
+    assert said[-1] == ("the engine has this gateway's heartbeat, and its inventory: "
+                        "2 sandboxes, not every one (the listing failed: TimeoutExpired)")
+
+
+def test_the_sidecar_is_asked_on_loopback_and_never_through_a_proxy(monkeypatch):
+    """A host behind a proxy sets ``HTTP_PROXY``; 127.0.0.1 is not the
+    proxy's to answer."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Sidecar(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            return None
+
+        def do_GET(self):  # noqa: N802
+            body = {"/healthz": {"ok": True}, "/artzain/reports": REPORTED}.get(self.path)
+            raw = json.dumps(body).encode()
+            self.send_response(200 if body else 404)
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    for name in ("HTTP_PROXY", "http_proxy"):
+        monkeypatch.setenv(name, "http://127.0.0.1:9")  # nothing listens there
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Sidecar)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        assert connect._healthy(port) is True
+        assert connect._reports(port) == REPORTED
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+    assert connect._healthy(port) is False and connect._reports(port) is None
+
+
+@pytest.mark.parametrize("answer", [{}, {"ok": False}, {"ok": "yes"}, [True]])
+def test_a_port_that_answers_but_not_as_the_sidecar_is_not_healthy(answer):
+    """Something else on the sidecar's port is not the sidecar."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Other(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            return None
+
+        def do_GET(self):  # noqa: N802
+            raw = json.dumps(answer).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Other)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        assert connect._healthy(server.server_address[1]) is False
+        assert connect._reports(server.server_address[1]) == (
+            answer if isinstance(answer, dict) else None)
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
 
 
 def test_a_record_that_cannot_be_read_is_said(gateway):

@@ -18,6 +18,7 @@ exported for the whole suite.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 from typing import Any
@@ -148,6 +149,36 @@ def artzain_fresh_cloud_worker(monkeypatch: pytest.MonkeyPatch):
         yield worker
     finally:
         worker.close(timeout_sec=5.0)
+
+
+@pytest.fixture
+def artzain_held_replace(monkeypatch: pytest.MonkeyPatch):
+    """``os.replace`` as Windows does it while another program (a virus
+    scanner reading the file just written, say) has the target open.
+
+    ``artzain_held_replace(times)`` refuses the next *times* moves with
+    ``PermissionError`` and lets the ones after them through. It returns the
+    list of the targets it refused. A refused move is tried again for up to
+    5 s, as on Windows, whatever the platform the tests run on.
+    """
+
+    from artzain import _private_files
+
+    def hold(times: int) -> list:
+        real, refused = os.replace, []
+
+        def replace(source: Any, target: Any) -> None:
+            if len(refused) < times:
+                refused.append(target)
+                raise PermissionError(errno.EACCES, "Access is denied")
+            real(source, target)
+
+        monkeypatch.setattr(_private_files, "_REPLACE_RETRY_SECONDS", 5.0, raising=False)
+        monkeypatch.setattr(_private_files, "_REPLACE_RETRY_INTERVAL", 0.001, raising=False)
+        monkeypatch.setattr(os, "replace", replace)
+        return refused
+
+    return hold
 
 
 class _FakeHTTPResponse:
