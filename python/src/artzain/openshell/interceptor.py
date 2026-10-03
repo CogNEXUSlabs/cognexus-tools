@@ -23,7 +23,8 @@ a token. The only state is an :class:`OperationLedger`, in memory.
 * Only an ``allow`` from the Decision API proceeds. ``review``, ``deny``, a
   503 and a failed call are all denies. A refusal the engine sealed names
   its decision id in the reason, which the operator reads in a terminal. A
-  method outside the bound set is denied without a decision.
+  method outside the bound set is denied without a decision. A 429 (the
+  engine's rate limit) is a deny whose reason says so and how long to wait.
 * The stamp goes on a sandbox-scoped write only. The gateway rejects
   annotations on a gateway-global ``UpdateConfig``, so a global setting
   write is decided in ``validate``.
@@ -679,6 +680,8 @@ def _decide(request: Mapping[str, Any], method: str, body: Mapping[str, Any], *,
     status = int(decision.get("status_code") or decision.get("status") or 200)
     outcome = str(decision.get("outcome") or "")
     decision_id = _decision_id(decision.get("decision_id"))
+    if status == 429:
+        return _deny(_rate_limit_reason(decision), status_code=429), ""
     if status == 503 or not outcome:
         return _deny("decision unavailable", status_code=503 if status == 503 else 403), ""
     if outcome != "allow":
@@ -688,6 +691,24 @@ def _decide(request: Mapping[str, Any], method: str, body: Mapping[str, Any], *,
         return _deny(f"{reason} ({decision_id})",
                      annotations={"decision_id": decision_id}), ""
     return None, decision_id
+
+
+def _rate_limit_reason(decision: Mapping[str, Any]) -> str:
+    """What the operator reads when the engine's rate limit refused the
+    decision: the limit when it is known, and the seconds to wait."""
+    def whole(name: str) -> int:
+        value = decision.get(name)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return 0
+        return value if 0 < value < 10**9 else 0
+
+    limit, wait = whole("limit_per_hour"), whole("retry_after")
+    reason = "decision rate limit reached"
+    if limit:
+        reason += f" ({limit} per hour)"
+    if wait:
+        reason += f"; retry in {wait} s"
+    return reason
 
 
 def _confirmed(ledger: Optional[OperationLedger], method: str,
@@ -714,9 +735,9 @@ def evaluate(request: Mapping[str, Any], *, decide: DecideFn,
     *request* is ``{method, phase, body, gateway_id, agent_did, sandbox_id,
     request_id, decision_id, prover}``; ``body`` is the operation (or, for
     ``post_commit``, the committed response). ``post_commit`` always allows
-    and does not call ``decide``. ``review``, ``deny``, HTTP 503, and a decide
-    failure are interceptor denies. The leaf, when there is one, is sealed by
-    ``decide`` before this returns.
+    and does not call ``decide``. ``review``, ``deny``, HTTP 503, HTTP 429 and
+    a decide failure are interceptor denies. The leaf, when there is one, is
+    sealed by ``decide`` before this returns.
 
     With a *ledger*, a create or an update decided in ``modify_operation`` is
     confirmed in ``validate`` rather than decided twice.

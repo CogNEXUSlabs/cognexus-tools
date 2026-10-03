@@ -4,7 +4,8 @@ It answers the gateway's interceptor calls with :func:`handle_evaluate` (the
 rules are :mod:`artzain.openshell.interceptor`), asks the ArtzAIn Decision API,
 reports the committed policy hash after a governed write, keeps an inventory
 of the gateway's sandboxes for the catalog, and seals OpenShell FINDING and
-CONFIG events. It only ever calls out to the engine.
+CONFIG events. It only ever calls out to the engine, over a connection it
+keeps warm (:mod:`artzain.openshell.transport`).
 
 With a gateway credential (``cnxg_...``) it also sends the engine a heartbeat
 every minute and its inventory every five minutes and on change
@@ -37,7 +38,14 @@ Settings (environment):
   target, the agent (``openshell:<gateway id>``) and the inventory; a request
   cannot choose another.
 * ``ARTZAIN_DECISION_URL``: the engine origin, or its ``/api/v1/decisions``
-  URL. ``http`` or ``https`` only.
+  URL. ``http`` or ``https`` only. Every call goes to this origin and to
+  no other.
+* ``OPENSHELL_SIDECAR_PROXY``: how to reach the engine. Unset, the
+  connection is direct and the environment's proxy settings are ignored;
+  ``env`` uses them; ``http://[user:password@]host[:port]`` names an HTTP
+  proxy, which is asked to ``CONNECT``.
+* ``OPENSHELL_SIDECAR_CA_BUNDLE``: a PEM file of the certificate
+  authorities to trust for the engine, instead of the system's.
 * ``COGNEXUS_API_KEY``: the Decision API key. Never logged.
 * ``OPENSHELL_SIDECAR_DECIDE_TIMEOUT_MS``: the deadline for each engine call
   (default 1200, held to 50..30000). Keep it below the gateway
@@ -56,11 +64,24 @@ Settings (environment):
 * ``OPENSHELL_SIDECAR_BASE_POLICY``: a file to keep the delivered base
   policy in, so a restart has it before the engine answers. Unset, a
   restarted sidecar refuses a create with no policy until it does.
+* ``OPENSHELL_SIDECAR_JOURNAL``: a file to keep the reports the engine has
+  not taken yet, so a restart does not lose them. Unset, they wait in
+  memory (:mod:`artzain.openshell.journal`).
 
 A connection reset is retried once inside the same deadline, only for a
 decision that carries a ``request_id``: the Decision API replays a repeated
-id instead of sealing and billing it twice. Nothing else is retried. The
-handler never logs the key, the bearer, or a request body.
+id instead of sealing and billing it twice. No other call is sent twice
+within its deadline. The handler never logs the key, the bearer, or a
+request body.
+
+A projection report the engine could not be given waits in the journal
+and is sent again, in order, until the engine takes it or refuses it for
+good.
+
+When the engine answers 429 (the hourly rate is used up), the write is
+refused with a reason that says so and how long to wait, and the gateway
+reports it as ``RESOURCE_EXHAUSTED``. It is not retried here: the operator
+runs the command again.
 
 Run it with ``artzain openshell sidecar`` or
 ``python -m artzain.openshell.sidecar``.
@@ -69,6 +90,7 @@ Run it with ``artzain openshell sidecar`` or
 from __future__ import annotations
 
 import hmac
+import io
 import json
 import logging
 import os
@@ -76,13 +98,13 @@ import threading
 import time
 import urllib.error
 import urllib.parse
-import urllib.request
 import uuid
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from artzain.openshell import base_policy as base_policies
+from artzain.openshell import transport
 from artzain.openshell.interceptor import (
     BOUND_POST,
     DEFAULT_WORKSPACE,
@@ -92,6 +114,7 @@ from artzain.openshell.interceptor import (
     evaluate,
     method_name,
 )
+from artzain.openshell.journal import Journal
 from artzain.openshell.state import GatewayLedger
 
 logger = logging.getLogger("artzain.openshell.sidecar")
@@ -108,8 +131,16 @@ DECIDE_TIMEOUT_MS_DEFAULT = 1200
 _DECIDE_TIMEOUT_MS_MIN = 50
 _DECIDE_TIMEOUT_MS_MAX = 30_000
 #: A decision or projection answer is small; a larger body is refused.
-_MAX_ANSWER_BYTES = 256 * 1024
+_MAX_ANSWER_BYTES = transport.MAX_ANSWER_BYTES
 _READ_CHUNK = 16 * 1024
+#: How often the reports that wait in the journal are tried again.
+REPORT_RETRY_SECONDS = 15.0
+#: A report that has waited this long is given up: the engine has had
+#: three days to take it, and one that can never be taken must not hold
+#: back the ones behind it for ever.
+REPORT_MAX_AGE_SECONDS = 72 * 3600.0
+#: Statuses that refuse a report for good. Any other failure is tried again.
+_REPORT_REFUSED = frozenset({400, 403, 404, 410, 413, 422})
 #: What an OpenShell gateway's own credential starts with. Only it may send
 #: a heartbeat or an inventory.
 GATEWAY_KEY_PREFIX = "cnxg_"
@@ -280,13 +311,56 @@ def _engine_url(path: str) -> str:
     return url + path
 
 
-def _is_connection_reset(exc: BaseException) -> bool:
-    """A reset, or a close with no answer (``RemoteDisconnected``), raw or
-    wrapped by urllib. A timeout is not one."""
-    if isinstance(exc, ConnectionResetError):
-        return True
-    return (isinstance(exc, urllib.error.URLError)
-            and isinstance(getattr(exc, "reason", None), ConnectionResetError))
+#: The engine client, with the settings it was built for (:func:`_client`).
+_CLIENT: Optional[Tuple[Optional[transport.Settings],
+                         Optional[transport.EngineClient]]] = None
+_CLIENT_LOCK = threading.Lock()
+
+
+def _client() -> Optional[transport.EngineClient]:
+    """The client for the engine the environment names, or None when it
+    names none. Raises :class:`transport.SettingsError` for a proxy or a
+    certificate bundle that cannot be honoured.
+
+    It is built again only when a setting changes: building one builds a
+    TLS context, which loads the certificate store, and a new client has
+    no kept connection.
+    """
+    global _CLIENT
+    settings = transport.settings_from_environment()
+    with _CLIENT_LOCK:
+        built = _CLIENT
+        if built is not None and built[0] == settings:
+            return built[1]
+        if built is not None and built[1] is not None:
+            built[1].close()
+        _CLIENT = None  # so a settings error is met again, not a stale client
+        client = transport.EngineClient(settings) if settings is not None else None
+        _CLIENT = (settings, client)
+        return client
+
+
+def _engine_request(method: str, target: str, key: str, data: Optional[bytes], *,
+                    deadline: float, retry_on_reset: bool) -> Any:
+    """One JSON request to the engine, answered before *deadline*. Raises
+    on failure; a status that is not 2xx is an ``urllib.error.HTTPError``
+    that carries the answer's headers and what was read of its body."""
+    from artzain import cloud
+
+    client = _client()
+    if client is None:
+        raise RuntimeError("engine URL unset")
+    headers = cloud._api_request_headers(key)
+    headers["Accept"] = "application/json"
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    status, answer_headers, body = client.request(
+        method, target, headers=headers, body=data, deadline=deadline,
+        retry_on_reset=retry_on_reset)
+    if not 200 <= status < 300:
+        raise urllib.error.HTTPError(target, status, "engine answered %d" % status,
+                                     answer_headers, io.BytesIO(body))
+    return json.loads(body or b"null")
 
 
 def _read_answer(resp: Any, deadline: float) -> Any:
@@ -312,35 +386,58 @@ def _post_engine(target: str, key: str, payload: Mapping[str, Any], *,
 
     The deadline is the decision deadline unless *timeout* gives another.
 
-    The SDK's opener follows no redirect, so a 3xx is an error like any other
-    status. With *retry_on_reset*, a connection reset is retried once, at
-    once, in the time that is left. Nothing else is retried. The deadline
-    starts before the opener is built, which loads the certificate store
-    (see :func:`warm`).
+    Nothing is followed, so a 3xx is an error like any other status. With
+    *retry_on_reset*, a connection reset is retried once, at once, in the
+    time that is left. Nothing else is retried. The deadline starts before
+    the client is built, which loads the certificate store (see
+    :func:`warm`).
     """
-    from artzain import cloud
-
     deadline = time.monotonic() + (decide_timeout_seconds() if timeout is None else timeout)
-    headers = cloud._api_request_headers(key)
-    headers["Content-Type"] = "application/json"
-    headers["Accept"] = "application/json"
-    data = json.dumps(dict(payload)).encode("utf-8")
-    attempts = 2 if retry_on_reset else 1
-    for attempt in range(attempts):
-        opener = cloud._api_opener()
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        req = urllib.request.Request(target, data=data, method="POST", headers=headers)
-        try:
-            with opener.open(req, timeout=remaining) as resp:
-                return _read_answer(resp, deadline)
-        except Exception as exc:
-            if attempt + 1 < attempts and _is_connection_reset(exc):
-                logger.info("engine connection reset; retrying once")
-                continue
-            raise
-    raise TimeoutError("sidecar engine deadline passed")
+    return _engine_request("POST", target, key, json.dumps(dict(payload)).encode("utf-8"),
+                           deadline=deadline, retry_on_reset=retry_on_reset)
+
+
+def _rate_limited(exc: urllib.error.HTTPError, deadline: float) -> Dict[str, Any]:
+    """The deny for an engine 429: how long to wait, and the hourly limit
+    when the engine names it.
+
+    The wait is the ``Retry-After`` header (:func:`_retry_after_seconds`).
+    """
+    header = exc.headers.get("Retry-After") if exc.headers else None
+    limited: Dict[str, Any] = {"outcome": "deny", "status_code": 429, "decision_id": "",
+                               "retry_after": _retry_after_seconds(str(header or ""))}
+    limit = _named_limit(exc, deadline)
+    if limit:
+        limited["limit_per_hour"] = limit
+    return limited
+
+
+def _retry_after_seconds(raw: str) -> int:
+    """A ``Retry-After`` value as whole seconds, held to 1 s .. 24 h. A
+    value that is not a count of seconds (a date, a fraction, nothing)
+    means 1 s."""
+    raw = raw.strip()
+    if not (raw.isascii() and raw.isdigit()):
+        return 1
+    digits = raw.lstrip("0")
+    if len(digits) > 5:  # past 24 h whatever it says
+        return 86400
+    return max(1, min(int(digits or "0"), 86400))
+
+
+def _named_limit(exc: urllib.error.HTTPError, deadline: float) -> int:
+    """``detail.limit_per_hour`` of a 429's answer, read before *deadline*.
+    0 when the answer cannot be read or names no limit: the limit is a
+    detail of the reason, and the refusal stands without it."""
+    try:
+        answer = _read_answer(exc, deadline)
+    except Exception:  # noqa: BLE001 - see the docstring
+        return 0
+    detail = answer.get("detail") if isinstance(answer, dict) else None
+    limit = detail.get("limit_per_hour") if isinstance(detail, dict) else None
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        return 0
+    return limit if 0 < limit < 10**9 else 0
 
 
 def http_decide(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -356,6 +453,11 @@ def http_decide(payload: Dict[str, Any]) -> Dict[str, Any]:
             retry_on_reset=bool(str(payload.get("request_id") or "").strip()),
         )
     except Exception as exc:  # noqa: BLE001 - interceptor must deny, not raise
+        if isinstance(exc, urllib.error.HTTPError) and exc.code == 429:
+            limited = _rate_limited(exc, started + decide_timeout_seconds())
+            logger.warning("decision API rate limit reached; retry in %d s",
+                           limited["retry_after"])
+            return limited
         logger.warning("decision API unreachable: %s", type(exc).__name__)
         return {"outcome": "deny", "status_code": 503, "decision_id": ""}
     _LATENCY.add((time.monotonic() - started) * 1000.0)
@@ -366,23 +468,94 @@ def http_decide(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def http_report_projection(payload: Dict[str, Any]) -> bool:
-    """``POST`` the projection report. Fail open: never raises, never blocks commit.
+    """Report a committed policy hash. True when the engine took it now.
+    Fail open: never raises, never blocks commit.
 
-    Not retried: a decision id records one projection, so a report that
-    landed before a reset would be refused the second time anyway.
+    The report joins the journal behind any that wait, and the journal is
+    then delivered in order (:func:`deliver_reports`). So with nothing
+    waiting it is sent at once, and when the engine is out of reach it
+    waits its turn instead of being lost. A report that is not delivered
+    now is counted once, for the heartbeat.
+    """
+    if not (os.environ.get("COGNEXUS_API_KEY") or "") or not _engine_url(""):
+        logger.warning("projection report skipped: decision URL or key unset")
+        return False
+    seq = _JOURNAL.append("projection", payload)
+    if seq is None:
+        logger.warning("projection report dropped: the journal is full")
+        _UNDELIVERED.add()
+        return False
+    delivered = deliver_reports()
+    if seq in delivered:
+        return True
+    _UNDELIVERED.add()
+    return False
+
+
+def _send_report(entry: Mapping[str, Any]) -> str:
+    """Send one journal entry: ``delivered``, ``refused`` (for good) or
+    ``later``. Never raises.
+
+    A 409 is the engine saying this decision already recorded its
+    projection: an earlier try landed and its answer was lost, so it is
+    delivered. A report that has waited :data:`REPORT_MAX_AGE_SECONDS` is
+    given up.
     """
     key = os.environ.get("COGNEXUS_API_KEY") or ""
     target = _engine_url("/api/v1/openshell/projections")
+    if entry.get("kind") != "projection":
+        logger.warning("journal entry of a kind this sidecar does not send: dropped")
+        return "refused"
     if not target or not key:
-        logger.warning("projection report skipped: decision URL or key unset")
-        return False
+        return "later"
     try:
-        body = _post_engine(target, key, payload, retry_on_reset=False)
+        _post_engine(target, key, entry["body"], retry_on_reset=False)
+        return "delivered"
+    except urllib.error.HTTPError as exc:
+        if exc.code == 409:
+            return "delivered"
+        if exc.code in _REPORT_REFUSED:
+            logger.warning("projection report refused: HTTP %d", exc.code)
+            return "refused"
+        failure = "HTTP %d" % exc.code
     except Exception as exc:  # noqa: BLE001 - post_commit cannot fail closed
-        logger.warning("projection report failed: %s", type(exc).__name__)
-        _UNDELIVERED.add()
-        return False
-    return isinstance(body, dict) and bool(body.get("policy_hash") or body.get("sandbox_id"))
+        failure = type(exc).__name__
+    if time.time() * 1000 - int(entry.get("at_ms") or 0) > REPORT_MAX_AGE_SECONDS * 1000:
+        logger.warning("projection report given up after %d h: %s",
+                       REPORT_MAX_AGE_SECONDS // 3600, failure)
+        return "refused"
+    logger.warning("projection report failed: %s", failure)
+    return "later"
+
+
+def deliver_reports() -> List[int]:
+    """Send the reports that wait, oldest first, until one cannot be sent
+    now. Returns the ``seq`` of each one the engine took. Never raises.
+
+    One thread delivers at a time, so the order holds. A caller that finds
+    another already delivering returns at once: that one, or the next
+    turn of the housekeeping loop, sends what it added.
+    """
+    delivered: List[int] = []
+    if not _DELIVERING.acquire(blocking=False):
+        return delivered
+    try:
+        journal = _JOURNAL
+        while True:
+            entry = journal.first()
+            if entry is None:
+                break
+            outcome = _send_report(entry)
+            if outcome == "later":
+                break
+            journal.settle(entry["seq"])
+            if outcome == "delivered":
+                delivered.append(entry["seq"])
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.warning("report delivery error: %s", type(exc).__name__)
+    finally:
+        _DELIVERING.release()
+    return delivered
 
 
 class LatencyWindow:
@@ -432,6 +605,11 @@ _LEDGER: GatewayLedger = GatewayLedger()
 _LATENCY = LatencyWindow()
 #: Reports to the engine that failed since the last heartbeat it took.
 _UNDELIVERED = Counter()
+#: The reports the engine has not taken yet, in order. :func:`main` replaces
+#: it with one kept in ``OPENSHELL_SIDECAR_JOURNAL`` when that is set.
+_JOURNAL: Journal = Journal()
+#: Held by the one thread that is delivering the journal.
+_DELIVERING = threading.Lock()
 #: The base policy the engine delivered. None unless this sidecar holds a
 #: gateway credential (:func:`main`): a sidecar on an account key is not
 #: given one, and decides a create with no policy as it always did.
@@ -639,14 +817,8 @@ def _report(path: str, payload: Dict[str, Any]) -> Any:
 
 def _get_engine(target: str, key: str, *, timeout: float) -> Any:
     """``GET`` JSON from the engine inside *timeout*. Raises on failure."""
-    from artzain import cloud
-
-    deadline = time.monotonic() + timeout
-    headers = cloud._api_request_headers(key)
-    headers["Accept"] = "application/json"
-    req = urllib.request.Request(target, method="GET", headers=headers)
-    with cloud._api_opener().open(req, timeout=timeout) as resp:
-        return _read_answer(resp, deadline)
+    return _engine_request("GET", target, key, None,
+                           deadline=time.monotonic() + timeout, retry_on_reset=False)
 
 
 def fetch_base_policy() -> Any:
@@ -718,7 +890,8 @@ class Reporter:
     * The engine's answer may ask for another interval; it is held to
       30 s .. 1 h.
     * Nothing here raises, and nothing is retried before its next turn. A
-      report that fails is counted, not queued.
+      heartbeat or an inventory that fails is counted, not queued: the
+      next one carries the same state.
     * With a base policy store, the base policy is fetched first, at start
       and every five minutes.
     """
@@ -852,15 +1025,59 @@ def reporter_for_environment(ledger: GatewayLedger) -> Optional[Reporter]:
     return Reporter(ledger, base=_BASE)
 
 
-def warm() -> None:
-    """Build the engine opener before the first request.
+def warm() -> bool:
+    """Build the engine client and open a connection before a request
+    needs one. True when a connection is waiting.
 
-    Building it builds a TLS context, which loads the certificate store. Paid
-    inside the first governed write, that eats into the gateway's timeout.
+    Building the client builds a TLS context, which loads the certificate
+    store, and a new connection costs the TCP and TLS handshakes. Paid
+    inside a governed write, both eat into the gateway's timeout. Raises
+    :class:`transport.SettingsError` for a setting that cannot be
+    honoured; an engine that cannot be reached is not an error here.
     """
-    from artzain import cloud
+    client = _client()
+    return client.warm() if client is not None else False
 
-    cloud._api_opener()
+
+class Housekeeper:
+    """What the sidecar does between requests: renews the warm connection
+    every 30 s, and tries the reports that wait every 15 s."""
+
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic,
+                 warm_fn: Optional[Callable[[], Any]] = None,
+                 deliver: Optional[Callable[[], Any]] = None,
+                 waiting: Optional[Callable[[], int]] = None) -> None:
+        self._clock = clock
+        self._warm = warm_fn or warm
+        self._deliver = deliver or deliver_reports
+        self._waiting = waiting or (lambda: len(_JOURNAL))
+        self._next_warm = clock() + transport.WARM_EVERY_SECONDS
+        self._next_delivery = clock() + REPORT_RETRY_SECONDS
+
+    def step(self) -> float:
+        """Do what is due. Returns the seconds until something is."""
+        now = self._clock()
+        if now >= self._next_delivery:
+            self._next_delivery = now + REPORT_RETRY_SECONDS
+            if self._waiting():
+                self._deliver()
+        if now >= self._next_warm:
+            self._next_warm = now + transport.WARM_EVERY_SECONDS
+            try:
+                self._warm()
+            except transport.SettingsError as exc:
+                logger.warning("engine connection settings: %s", exc)
+        return max(0.0, min(self._next_warm, self._next_delivery) - self._clock())
+
+    def run(self, stop: threading.Event) -> None:
+        """Keep house until *stop* is set."""
+        while not stop.is_set():
+            try:
+                wait = self.step()
+            except Exception as exc:  # noqa: BLE001 - the loop goes on
+                logger.warning("housekeeping error: %s", type(exc).__name__)
+                wait = REPORT_RETRY_SECONDS
+            stop.wait(max(wait, 0.5))
 
 
 def start_grpc(endpoint: str) -> Any:
@@ -896,10 +1113,22 @@ def start_grpc(endpoint: str) -> Any:
 def main() -> None:
     host = os.environ.get("OPENSHELL_SIDECAR_HOST") or "127.0.0.1"
     port = int(os.environ.get("OPENSHELL_SIDECAR_PORT") or "8088")
-    warm()
-    global _LEDGER
+    try:
+        warm()
+    except transport.SettingsError as exc:
+        # Not a direct connection instead, and not the system's authorities.
+        raise SystemExit(f"engine connection settings: {exc}") from exc
+    built = _CLIENT
+    logger.info("engine connection: %s",
+                json.dumps(transport.describe(built[0] if built else None)))
+    global _LEDGER, _JOURNAL
     state_path = (os.environ.get("OPENSHELL_SIDECAR_STATE") or "").strip()
     _LEDGER = GatewayLedger(state_path=state_path or None, gateway_id=_gateway_id())
+    journal_path = (os.environ.get("OPENSHELL_SIDECAR_JOURNAL") or "").strip()
+    _JOURNAL = Journal(path=journal_path or None, gateway_id=_gateway_id())
+    if len(_JOURNAL):
+        logger.info("%d report(s) from before the restart wait for the engine",
+                    len(_JOURNAL))
     if not state_path:
         logger.info("OPENSHELL_SIDECAR_STATE is unset: sandbox names are kept in "
                     "memory only, and a restart loses them")
@@ -910,6 +1139,8 @@ def main() -> None:
     server = ThreadingHTTPServer((host, port), handler)
     restore = _stop_on_signal(server)
     stop_reports = threading.Event()
+    threading.Thread(target=Housekeeper().run, args=(stop_reports,), daemon=True,
+                     name="openshell-housekeeping").start()
     reporter = reporter_for_environment(_LEDGER)
     if reporter is not None:
         threading.Thread(target=reporter.run, args=(stop_reports,), daemon=True,

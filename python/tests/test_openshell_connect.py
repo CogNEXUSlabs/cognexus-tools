@@ -1,0 +1,883 @@
+"""``artzain connect openshell``: bind the deb gateway on this host, and undo it.
+
+These run ``up``, ``remove`` and ``status`` against a scripted deb gateway in
+a temporary home: ``systemctl --user``, ``openshell-gateway`` and
+``openshell`` are played by :class:`_Gateway`, which keeps the units' states,
+the gateway's settings, and what a restarted gateway is bound to. The engine
+is a function that answers the redeem and the revoke.
+
+What has to hold:
+
+* the token is spent only on a host that can be bound, and the credential
+  is saved before anything else can fail, so a run that stops needs no new
+  token;
+* nothing reaches ``gateway.toml`` that the gateway's own preflight has not
+  passed, and the file keeps everything that was in it;
+* ``remove`` gives ``gateway.toml`` back byte for byte, and keeps an
+  operator's own edits when there are any;
+* the self-test is a write the engine denies, refused with its decision id,
+  and the setting does not move.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from artzain.openshell import connect, registration
+
+needs_tomllib = pytest.mark.skipif(sys.version_info < (3, 11), reason="connect reads TOML")
+
+GATEWAY = "gw_01ABCDEFGHJKMNPQRSTVWXYZ00"
+CREDENTIAL = "cnxg_" + "k" * 43
+TOKEN = "cnxt_" + "t" * 43
+DECISION = "01JBCDEFGHJKMNPQRSTVWXYZ00"
+CONFIG = {"kind": "artzain.openshell.connect", "version": 1,
+          "decision_url": "https://engine.example", "openshell_version": "0.1.2",
+          "interceptor_timeout_ms": 1500, "decide_timeout_ms": 1200, "telemetry": False}
+DIGEST = connect.config_digest(CONFIG)
+
+GATEWAY_TOML = """\
+[openshell]
+version = 2
+
+[openshell.gateway]
+bind_address = "127.0.0.1:8080"
+compute_driver = "docker"
+
+[openshell.gateway.gateway_jwt]
+signing_key_path = "/home/op/.config/openshell/jwt/signing.pem"
+public_key_path = "/home/op/.config/openshell/jwt/public.pem"
+gateway_id = "laptop"
+
+[[openshell.gateway.interceptors]]
+name = "audit"
+grpc_endpoint = "unix:///run/user/1000/audit.sock"
+order = 5
+binding_policy = "allowlist"
+failure_policy = "fail_open"
+timeout = "500ms"
+
+[[openshell.gateway.interceptors.bindings]]
+rpc = "openshell.v1.OpenShell/CreateSandbox"
+phases = ["post_commit"]
+"""
+
+
+def _done(code=0, out="", err=""):
+    return subprocess.CompletedProcess([], code, out, err)
+
+
+class _Gateway:
+    """A deb gateway as ``connect`` sees it, and an engine to redeem at."""
+
+    def __init__(self, tmp_path: Path, toml: str = GATEWAY_TOML):
+        self.home = tmp_path / "home"
+        self.root = tmp_path / "root"
+        unit = self.root / "usr" / "lib" / "systemd" / "user" / "openshell-gateway.service"
+        unit.parent.mkdir(parents=True)
+        unit.write_text("[Service]\nExecStartPre=openshell-gateway config preflight\n")
+        self.toml = self.home / ".config" / "openshell" / "gateway.toml"
+        self.toml.parent.mkdir(parents=True)
+        self.toml.write_bytes(toml.encode("utf-8"))
+        self.calls = []
+        self.posts = []
+        self.units = {connect.GATEWAY_UNIT: "active", connect.SIDECAR_UNIT: "inactive"}
+        self.settings = {"proposal_approval_mode": "manual"}
+        self.bound = False          # what the running gateway was started with
+        self.version = "openshell-gateway 0.1.2"
+        self.preflight = None       # None: check the file; or an exit code
+        self.restart = None         # None: as the bound state says; or "failed"
+        self.engine_allows = False  # what the engine decides for the self-test
+        self.decision_in_reason = True
+        self.redeem = (200, None)
+        self.revoke_status = 200
+        self.revoke_raises = False
+
+    # the commands --------------------------------------------------------
+    def run(self, argv, env, timeout):
+        self.calls.append(list(argv))
+        name, args = argv[0], argv[1:]
+        if name == "openshell-gateway":
+            if args == ["--version"]:
+                return _done(0, self.version + "\n")
+            if args[:3] == ["config", "preflight", "--path"]:
+                if self.preflight is not None:
+                    return _done(self.preflight, "", "preflight: bad registration")
+                import tomllib
+                tomllib.loads(Path(args[3]).read_text(encoding="utf-8"))
+                return _done(0, "ok")
+        if name == "systemctl":
+            assert args[0] == "--user"
+            verb = args[1:]
+            if verb == ["daemon-reload"]:
+                return _done()
+            if verb[0] == "is-active":
+                return _done(0 if self.units.get(verb[1]) == "active" else 3,
+                             self.units.get(verb[1], "inactive") + "\n")
+            if verb[:2] == ["enable", "--now"]:
+                self.units[verb[2]] = "active"
+                return _done()
+            if verb[:2] == ["disable", "--now"]:
+                self.units[verb[2]] = "inactive"
+                return _done()
+            if verb[0] == "restart" and verb[1] == connect.GATEWAY_UNIT:
+                registered = connect.BLOCK_BEGIN in self.toml.read_text(encoding="utf-8")
+                sidecar_up = self.units[connect.SIDECAR_UNIT] == "active"
+                state = self.restart or ("failed" if registered and not sidecar_up else "active")
+                self.units[connect.GATEWAY_UNIT] = state
+                self.bound = registered and state == "active"
+                return _done(0)
+        if name == "openshell" and args[:2] == ["settings", "set"]:
+            key, value = args[args.index("--key") + 1], args[args.index("--value") + 1]
+            if self.bound and not self.engine_allows and value == "auto":
+                reason = (f"decision deny ({DECISION})" if self.decision_in_reason
+                          else "interceptor transport error")
+                return _done(1, "", f"Error: PERMISSION_DENIED: {reason}")
+            self.settings[key] = value
+            return _done(0, "ok")
+        if name == "openshell" and args[:2] == ["settings", "get"]:
+            return _done(0, "Global settings (revision 3)\n" + "".join(
+                f"  {key}: {value}\n" for key, value in self.settings.items()))
+        raise AssertionError(f"unexpected command {argv}")
+
+    def healthy(self, port):
+        return self.units[connect.SIDECAR_UNIT] == "active"
+
+    # the engine ----------------------------------------------------------
+    def post_json(self, url, *, headers, body, proxy="", ca_bundle=""):
+        self.posts.append({"url": url, "headers": dict(headers), "body": dict(body),
+                           "proxy": proxy, "ca_bundle": ca_bundle})
+        if url.endswith(connect.REDEEM_PATH):
+            status, answer = self.redeem
+            if answer is None:
+                answer = {"gateway_id": GATEWAY, "agent_did": f"openshell:{GATEWAY}",
+                          "credential": CREDENTIAL, "key_prefix": CREDENTIAL[:12],
+                          "config_digest": DIGEST, "config": CONFIG}
+            return status, answer
+        if url.endswith("/revoke"):
+            if self.revoke_raises:
+                raise OSError("engine down")
+            return self.revoke_status, {"revoked": True}
+        raise AssertionError(url)
+
+    def host(self, **overrides) -> connect.Host:
+        settings = dict(
+            environ={"HOME": str(self.home), "XDG_RUNTIME_DIR": "/run/user/1000",
+                     "PATH": "/usr/bin"},
+            root=str(self.root), runner=self.run, healthy=self.healthy,
+            post_json=self.post_json, which=lambda name: f"/usr/bin/{name}",
+            sleep=lambda _s: None, clock=_Clock(), platform="linux",
+            executable="/home/op/.local/share/uv/tools/artzain/bin/python", uid=1000)
+        settings.update(overrides)
+        return connect.Host(**settings)
+
+    @property
+    def paths(self) -> connect.Layout:
+        return connect.layout(self.host())
+
+    def commands(self, name):
+        return [call for call in self.calls if call[0] == name]
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        self.now += 1.0
+        return self.now
+
+
+@pytest.fixture
+def gateway(tmp_path):
+    return _Gateway(tmp_path)
+
+
+def _up(gateway, *, token=TOKEN, **kwargs):
+    said = []
+    record = connect.up(gateway.host(), token=token, digest=DIGEST,
+                        engine="https://engine.example/", out=said.append, **kwargs)
+    return record, said
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# The managed block
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("original", [b"", b"a = 1", b"a = 1\n", b"a = 1\n\n", b"[x]\ny = 2\n\n\n",
+                                      "s = \"café\"\n".encode("utf-8")])
+def test_a_file_nobody_touched_comes_back_byte_for_byte(tmp_path, original):
+    path, backup = tmp_path / "f.toml", tmp_path / "f.before"
+    path.write_bytes(connect.add_block(original, "[[x.y]]\nz = 1"))
+    backup.write_bytes(original)
+    assert connect.BLOCK_BEGIN in path.read_text(encoding="utf-8")
+    outcome = connect._restore(path, backup, hashlib.sha256(original).hexdigest(),
+                               created=not original)
+    if not original:
+        assert outcome == "removed" and not path.exists()
+    else:
+        assert outcome == "restored" and path.read_bytes() == original
+
+
+def test_the_block_goes_after_one_empty_line():
+    assert connect.add_block(b"a = 1\n", "b = 2") == (
+        b"a = 1\n\n" + connect.BLOCK_BEGIN.encode() + b"\nb = 2\n" + connect.BLOCK_END.encode() + b"\n")
+    assert connect.add_block(b"a = 1", "b = 2").startswith(b"a = 1\n\n" + connect.BLOCK_BEGIN.encode())
+    assert connect.add_block(b"", "b = 2").startswith(connect.BLOCK_BEGIN.encode())
+
+
+def test_edits_outside_the_block_are_kept_and_the_block_goes(tmp_path):
+    path, backup = tmp_path / "f.toml", tmp_path / "f.before"
+    original = b"a = 1\n"
+    backup.write_bytes(original)
+    edited = connect.add_block(original, "b = 2").replace(b"a = 1", b"a = 9") + b"c = 3\n"
+    path.write_bytes(edited)
+    assert connect._restore(path, backup, hashlib.sha256(original).hexdigest(), False) == "kept-edits"
+    assert path.read_bytes() == b"a = 9\nc = 3\n"
+
+
+def test_a_saved_copy_that_does_not_match_its_hash_is_not_used(tmp_path):
+    path, backup = tmp_path / "f.toml", tmp_path / "f.before"
+    path.write_bytes(connect.add_block(b"a = 1", "b = 2"))
+    backup.write_bytes(b"a = 1")
+    assert connect._restore(path, backup, "0" * 64, False) == "kept-edits"
+    assert path.read_bytes() == b"a = 1\n"
+
+
+@pytest.mark.parametrize("text", [
+    "a = 1\n",                                                         # no block
+    f"{connect.BLOCK_BEGIN}\nx\n{connect.BLOCK_END}\n{connect.BLOCK_BEGIN}\ny\n{connect.BLOCK_END}\n",
+    f"{connect.BLOCK_END}\nx\n{connect.BLOCK_BEGIN}\n",                # the wrong way round
+    f"a = 1 {connect.BLOCK_BEGIN}\nx\n{connect.BLOCK_END}\n",          # not at the start of a line
+    f"{connect.BLOCK_BEGIN}\nx\n",                                     # no end
+])
+def test_a_file_without_exactly_one_whole_block_is_left_alone(tmp_path, text):
+    assert connect.strip_block(text.encode("utf-8")) is None
+    path = tmp_path / "f.toml"
+    path.write_text(text, encoding="utf-8")
+    assert connect._restore(path, tmp_path / "none", "", False) == "no-block"
+    assert path.read_text(encoding="utf-8") == text
+
+
+# ---------------------------------------------------------------------------
+# The configuration
+# ---------------------------------------------------------------------------
+
+
+def test_the_digest_is_the_engines_recipe():
+    config = {"b": 1, "a": "café", "c": [1, {"z": True, "y": None}]}
+    text = '{"a":"café","b":1,"c":[1,{"y":null,"z":true}]}'
+    assert connect.config_digest(config) == hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def test_a_whole_configuration_is_read():
+    config = connect.parse_config({**CONFIG, "telemetry": True, "decide_timeout_ms": 900})
+    assert config == connect.ConnectConfig("https://engine.example", "0.1.2", 1500, 900, True)
+    minimal = {k: CONFIG[k] for k in ("kind", "version", "decision_url", "openshell_version")}
+    assert connect.parse_config(minimal) == connect.ConnectConfig(
+        "https://engine.example", "0.1.2", 1500, 1200, False)
+
+
+@pytest.mark.parametrize("change, says", [
+    ({"kind": "something.else"}, "not a artzain.openshell.connect"),
+    ({"version": 2}, "too old"),
+    ({"base_policy": {}}, "upgrade artzain"),
+    ({"decision_url": "ftp://engine.example"}, "decision_url"),
+    ({"decision_url": "https://"}, "decision_url"),
+    ({"decision_url": 'https://engine.example/"x'}, "decision_url"),
+    ({"decision_url": 7}, "decision_url"),
+    ({"decision_url": "https://engine.example/a b"}, "decision_url"),
+    ({"openshell_version": "latest"}, "openshell_version"),
+    ({"interceptor_timeout_ms": 4}, "interceptor_timeout_ms"),
+    ({"interceptor_timeout_ms": 60_001}, "interceptor_timeout_ms"),
+    ({"interceptor_timeout_ms": True}, "interceptor_timeout_ms"),
+    ({"interceptor_timeout_ms": "1500"}, "interceptor_timeout_ms"),
+    ({"decide_timeout_ms": 49}, "decide_timeout_ms"),
+    ({"decide_timeout_ms": 1500}, "below"),
+    ({"telemetry": "no"}, "telemetry"),
+])
+def test_a_configuration_that_is_not_one_is_refused(change, says):
+    with pytest.raises(connect.ConnectError, match=says):
+        connect.parse_config({**CONFIG, **change})
+
+
+def test_a_configuration_that_is_not_an_object_is_refused():
+    for value in (None, [], "x", 1):
+        with pytest.raises(connect.ConnectError, match="not an object"):
+            connect.parse_config(value)
+
+
+# ---------------------------------------------------------------------------
+# The redeem
+# ---------------------------------------------------------------------------
+
+
+def _redeem(gateway, **kwargs):
+    arguments = dict(engine="https://engine.example/", token=TOKEN, digest=DIGEST)
+    arguments.update(kwargs)
+    return connect.redeem(gateway.host(), **arguments)
+
+
+def test_the_redeem_sends_the_token_as_a_bearer_and_checks_what_comes_back(gateway):
+    got = _redeem(gateway, proxy="env", ca_bundle="/etc/ssl/corp.pem")
+    assert (got.gateway_id, got.credential, got.raw_config) == (GATEWAY, CREDENTIAL, CONFIG)
+    assert got.config == connect.parse_config(CONFIG)
+    (sent,) = gateway.posts
+    assert sent == {"url": "https://engine.example/api/v1/openshell/connect/redeem",
+                    "headers": {"Authorization": f"Bearer {TOKEN}"},
+                    "body": {"config_digest": DIGEST}, "proxy": "env",
+                    "ca_bundle": "/etc/ssl/corp.pem"}
+    assert CREDENTIAL not in repr(got)
+
+
+@pytest.mark.parametrize("token", ["", "cnx_" + "t" * 44, "cnxg_" + "t" * 43, "cnxt_short",
+                                   "cnxt_" + "t" * 40 + "'x", "cnxt_" + "t" * 40 + "\nx"])
+def test_a_token_that_is_not_an_enroll_token_is_not_sent(gateway, token):
+    with pytest.raises(connect.ConnectError, match="not an enroll token") as refused:
+        _redeem(gateway, token=token)
+    assert gateway.posts == [] and token[5:] not in str(refused.value) or not token
+
+
+@pytest.mark.parametrize("digest", ["", "A" * 64, "a" * 63, "g" * 64, DIGEST + " "])
+def test_a_digest_that_is_not_one_is_not_sent(gateway, digest):
+    with pytest.raises(connect.ConnectError, match="config-digest"):
+        _redeem(gateway, digest=digest)
+    assert gateway.posts == []
+
+
+@pytest.mark.parametrize("status, says", [
+    (401, "not one the engine knows"), (409, "already used"), (410, "expired"),
+    (422, "64 lowercase hex"), (429, "too many redeems"), (500, "HTTP 500"),
+])
+def test_a_refused_redeem_says_why(gateway, status, says):
+    gateway.redeem = (status, {"detail": "x"})
+    with pytest.raises(connect.ConnectError, match=says):
+        _redeem(gateway)
+
+
+def test_an_unreachable_engine_is_said_without_the_token(gateway, monkeypatch):
+    def down(url, **_kwargs):
+        raise OSError("Connection refused " + TOKEN)
+
+    with pytest.raises(connect.ConnectError, match="could not be reached") as refused:
+        connect.redeem(gateway.host(post_json=down), engine="https://engine.example",
+                       token=TOKEN, digest=DIGEST)
+    assert TOKEN not in str(refused.value) and "OSError" in str(refused.value)
+
+
+@pytest.mark.parametrize("answer, says", [
+    ([], "not an object"),
+    ({"gateway_id": "gw_x", "credential": CREDENTIAL, "config_digest": DIGEST, "config": CONFIG},
+     "names no gateway"),
+    ({"gateway_id": GATEWAY, "credential": "cnx_account", "config_digest": DIGEST,
+      "config": CONFIG}, "no gateway credential"),
+    ({"gateway_id": GATEWAY, "credential": CREDENTIAL + '"', "config_digest": DIGEST,
+      "config": CONFIG}, "no gateway credential"),
+    ({"gateway_id": GATEWAY, "credential": CREDENTIAL, "config_digest": "b" * 64,
+      "config": CONFIG}, "not the one the digest names"),
+    ({"gateway_id": GATEWAY, "credential": CREDENTIAL, "config_digest": DIGEST,
+      "config": {**CONFIG, "telemetry": True}}, "not the one the digest names"),
+])
+def test_an_answer_that_is_not_what_was_asked_for_is_refused(gateway, answer, says):
+    gateway.redeem = (200, answer)
+    with pytest.raises(connect.ConnectError, match=says):
+        _redeem(gateway)
+
+
+def test_an_approved_configuration_this_artzain_cannot_read_is_refused(gateway):
+    newer = {**CONFIG, "version": 2}
+    gateway.redeem = (200, {"gateway_id": GATEWAY, "credential": CREDENTIAL,
+                            "config_digest": connect.config_digest(newer), "config": newer})
+    with pytest.raises(connect.ConnectError, match="too old"):
+        _redeem(gateway, digest=connect.config_digest(newer))
+
+
+# ---------------------------------------------------------------------------
+# The registration
+# ---------------------------------------------------------------------------
+
+
+@needs_tomllib
+def test_the_registration_binds_what_the_sidecar_decides():
+    import tomllib
+
+    text = registration.render("unix:///run/user/1000/artzain/openshell.sock", version_table=True)
+    doc = tomllib.loads(text)
+    assert doc["openshell"]["version"] == 2
+    deciding, observing = doc["openshell"]["gateway"]["interceptors"]
+    assert (deciding["name"], deciding["failure_policy"], deciding["order"]) == (
+        "artzain", "fail_closed", 10)
+    assert (observing["name"], observing["failure_policy"], observing["order"]) == (
+        "artzain-observe", "fail_open", 20)
+    for reg in (deciding, observing):
+        assert reg["grpc_endpoint"] == "unix:///run/user/1000/artzain/openshell.sock"
+        assert reg["binding_policy"] == "allowlist" and reg["timeout"] == "1500ms"
+
+    def bound(reg):
+        return sorted((b["rpc"].split("/")[1], tuple(b["phases"])) for b in reg["bindings"])
+
+    assert bound(deciding) == sorted(
+        (m, tuple(p)) for m, p in registration.bindings(("modify_operation", "validate")))
+    assert bound(observing) == sorted(
+        (m, tuple(p)) for m, p in registration.bindings(("post_commit",)))
+
+
+@pytest.mark.parametrize("endpoint", ["unix://relative", "http://127.0.0.1:1",
+                                      'unix:///run/a"b', "unix:///run/a b", "unix:///run/a\nb"])
+def test_an_endpoint_the_gateway_would_refuse_is_not_written(endpoint):
+    with pytest.raises(ValueError, match="endpoint"):
+        registration.render(endpoint)
+
+
+@pytest.mark.parametrize("timeout", [4, 60_001, True, 1500.0, "1500"])
+def test_a_timeout_the_gateway_would_refuse_is_not_written(timeout):
+    with pytest.raises(ValueError, match="timeout"):
+        registration.render("unix:///run/x.sock", timeout_ms=timeout)
+
+
+def test_the_servicer_describes_the_same_bindings():
+    servicer = pytest.importorskip("artzain.openshell.servicer")
+    assert servicer.bindings is registration.bindings
+
+
+# ---------------------------------------------------------------------------
+# up
+# ---------------------------------------------------------------------------
+
+
+@needs_tomllib
+def test_up_binds_the_gateway_and_checks_it_is_governed(gateway):
+    before = gateway.toml.read_bytes()
+    record, said = _up(gateway)
+    paths = gateway.paths
+
+    # The gateway.toml: what it had, then the block, which preflight passed.
+    after = gateway.toml.read_bytes()
+    assert after.startswith(before) and connect.strip_block(after) == before
+    import tomllib
+    names = [i["name"] for i in tomllib.loads(after.decode())["openshell"]["gateway"]["interceptors"]]
+    assert names == ["audit", "artzain", "artzain-observe"]
+    preflights = gateway.commands("openshell-gateway")[1:]
+    assert len(preflights) == 1 and preflights[0][:3] == ["openshell-gateway", "config", "preflight"]
+    assert preflights[0][4].endswith("gateway.toml.candidate")  # never the live file
+    assert not Path(preflights[0][4]).exists()
+    assert paths.toml_backup.read_bytes() == before
+
+    # The sidecar: its settings, its unit, and the gateway's drop-in.
+    env = paths.sidecar_env.read_text(encoding="utf-8")
+    assert f'COGNEXUS_API_KEY="{CREDENTIAL}"\n' in env
+    assert f'OPENSHELL_GATEWAY_ID="{GATEWAY}"\n' in env
+    assert 'ARTZAIN_DECISION_URL="https://engine.example"\n' in env
+    assert 'OPENSHELL_SIDECAR_GRPC="unix:///run/user/1000/artzain/openshell.sock"\n' in env
+    assert 'OPENSHELL_SIDECAR_DECIDE_TIMEOUT_MS="1200"\n' in env
+    assert 'OPENSHELL_JWT_PUBLIC_KEY="/home/op/.config/openshell/jwt/public.pem"\n' in env
+    assert 'OPENSHELL_JWT_GATEWAY_ID="laptop"\n' in env
+    assert ('OPENSHELL_REGISTRATION_DIGEST="' + registration.digest(registration.render(
+        "unix:///run/user/1000/artzain/openshell.sock")) + '"\n') in env
+    assert connect._saved(paths)["COGNEXUS_API_KEY"] == CREDENTIAL
+    unit = paths.sidecar_unit.read_text(encoding="utf-8")
+    assert f"EnvironmentFile={paths.sidecar_env.as_posix()}\n" in unit
+    assert ('ExecStart="/home/op/.local/share/uv/tools/artzain/bin/python" '
+            "-m artzain.cli openshell sidecar\n") in unit
+    assert paths.dropin.read_text(encoding="utf-8").endswith(
+        f"[Unit]\nRequires={connect.SIDECAR_UNIT}\nAfter={connect.SIDECAR_UNIT}\n")
+    gateway_env = paths.gateway_env.read_text(encoding="utf-8")
+    assert "OPENSHELL_TELEMETRY_ENABLED=false\n" in gateway_env
+
+    # The order: approvals manual while unbound; the sidecar up before the
+    # gateway is restarted bound; then the self-test.
+    sequence = [" ".join(c[:4]) for c in gateway.calls]
+    assert sequence.index("openshell settings set --global") < sequence.index(
+        "systemctl --user enable --now")
+    assert sequence.index("systemctl --user enable --now") < sequence.index(
+        "openshell-gateway config preflight --path")
+    assert sequence.index("openshell-gateway config preflight --path") < sequence.index(
+        f"systemctl --user restart {connect.GATEWAY_UNIT}")
+    assert gateway.settings["proposal_approval_mode"] == "manual"
+
+    assert record["connected"] is True and record["self_test_decision_id"] == DECISION
+    assert record["steps"] == ["redeemed", "approval-manual", "gateway-env", "sidecar",
+                               "toml-saved", "registration", "gateway-restarted", "self-test"]
+    assert DECISION in said[-1] and GATEWAY in said[-1]
+    assert not any(CREDENTIAL in line or TOKEN in line for line in said)
+    assert CREDENTIAL not in paths.record.read_text(encoding="utf-8")
+
+
+@needs_tomllib
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+def test_what_up_writes_that_holds_the_credential_is_the_owners_alone(gateway):
+    _up(gateway)
+    paths = gateway.paths
+    for path in (paths.sidecar_env, paths.record, paths.toml_backup):
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600, path
+    assert stat.S_IMODE(os.stat(paths.artzain_dir).st_mode) == 0o700
+    assert stat.S_IMODE(os.stat(paths.state_dir).st_mode) == 0o700
+    assert stat.S_IMODE(os.stat(paths.gateway_env).st_mode) == 0o600  # it created it
+
+
+@needs_tomllib
+def test_a_file_without_an_openshell_table_gets_one(tmp_path):
+    gateway = _Gateway(tmp_path, toml='[logging]\nlevel = "info"\n')
+    _up(gateway)
+    import tomllib
+    doc = tomllib.loads(gateway.toml.read_text(encoding="utf-8"))
+    assert doc["openshell"]["version"] == 2 and doc["logging"] == {"level": "info"}
+
+
+@needs_tomllib
+@pytest.mark.parametrize("toml, says", [
+    ("[openshell]\nversion = 1\n", "version = 2"),
+    ("openshell = 3\n", "not a table"),
+    ("[openshell]\nversion = 2\n[openshell.gateway]\ninterceptors = 3\n", "laid out"),
+    ('[openshell]\nversion = 2\n[[openshell.gateway.interceptors]]\nname = "artzain"\n',
+     "already registers artzain"),
+    ("[openshell\n", "not valid TOML"),
+])
+def test_a_gateway_toml_the_block_cannot_go_into_stops_before_the_token_is_spent(
+        tmp_path, toml, says):
+    gateway = _Gateway(tmp_path, toml=toml)
+    with pytest.raises(connect.ConnectError, match=says):
+        _up(gateway)
+    assert gateway.posts == [] and not gateway.paths.record.exists()
+
+
+@needs_tomllib
+def test_a_failed_preflight_leaves_the_live_file_alone(gateway):
+    gateway.preflight = 1
+    before = gateway.toml.read_bytes()
+    with pytest.raises(connect.ConnectError, match="config preflight failed"):
+        _up(gateway)
+    paths = gateway.paths
+    assert gateway.toml.read_bytes() == before
+    assert not paths.toml_backup.exists() and not (paths.artzain_dir / "gateway.toml.candidate").exists()
+    assert gateway.commands("systemctl")[-1][2] != "restart"
+
+
+@needs_tomllib
+def test_a_run_that_stopped_after_the_redeem_finishes_without_a_new_token(gateway):
+    gateway.version = "openshell-gateway 0.2.0"
+    with pytest.raises(connect.ConnectError, match="approved for 0.1.2") as stopped:
+        _up(gateway)
+    assert "no new token needed" in str(stopped.value)
+    assert gateway.paths.sidecar_env.exists() and len(gateway.posts) == 1
+
+    gateway.version = "openshell-gateway 0.1.5"  # the same line
+    record, said = _up(gateway, token="")
+    assert record["connected"] is True and len(gateway.posts) == 1
+    assert "already redeemed" in said[0]
+
+
+@needs_tomllib
+def test_a_gateway_that_does_not_stay_up_is_undone_by_remove_byte_for_byte(gateway):
+    before = gateway.toml.read_bytes()
+    gateway.restart = "failed"
+    with pytest.raises(connect.ConnectError, match="did not stay up") as stopped:
+        _up(gateway)
+    assert "remove" in str(stopped.value)
+    assert connect.BLOCK_BEGIN in gateway.toml.read_text(encoding="utf-8")
+
+    gateway.restart = None
+    connect.remove(gateway.host(), out=lambda _s: None)
+    assert gateway.toml.read_bytes() == before
+    assert not gateway.paths.gateway_env.exists()
+    assert gateway.units[connect.GATEWAY_UNIT] == "active"
+
+
+@needs_tomllib
+def test_a_run_that_stopped_after_the_toml_write_is_finished_by_a_second_run(gateway):
+    gateway.restart = "failed"
+    with pytest.raises(connect.ConnectError):
+        _up(gateway)
+    gateway.restart = None
+    record, _said = _up(gateway, token="")
+    text = gateway.toml.read_text(encoding="utf-8")
+    assert text.count(connect.BLOCK_BEGIN) == 1 and record["connected"] is True
+    assert len(gateway.commands("openshell-gateway")) == 1 + 1 + 1  # two version reads, one preflight
+
+
+@needs_tomllib
+def test_a_self_test_write_that_commits_is_put_back_and_fails_the_run(gateway):
+    gateway.engine_allows = True
+    with pytest.raises(connect.ConnectError, match="ALLOWED"):
+        _up(gateway)
+    assert gateway.settings["proposal_approval_mode"] == "manual"
+    assert "self-test" not in connect.Record.load(gateway.paths.record).data["steps"]
+
+
+@needs_tomllib
+def test_a_self_test_refused_without_an_artzain_decision_fails_the_run(gateway):
+    gateway.decision_in_reason = False
+    with pytest.raises(connect.ConnectError, match="not by an ArtzAIn decision"):
+        _up(gateway)
+
+
+@needs_tomllib
+def test_a_self_test_after_which_the_setting_is_not_manual_fails_the_run(gateway, monkeypatch):
+    real = gateway.run
+
+    def moved(argv, env, timeout):
+        done = real(argv, env, timeout)
+        if argv[1:3] == ["settings", "get"]:
+            return _done(0, done.stdout.replace("proposal_approval_mode: manual",
+                                                "proposal_approval_mode: auto"))
+        return done
+
+    with pytest.raises(connect.ConnectError, match="does not show"):
+        connect.up(gateway.host(runner=moved), token=TOKEN, digest=DIGEST,
+                   engine="https://engine.example", out=lambda _s: None)
+
+
+@needs_tomllib
+@pytest.mark.parametrize("change, says", [
+    ({"platform": "darwin"}, "Linux only"),
+    ({"which": lambda name: None if name == "openshell" else f"/usr/bin/{name}"},
+     "openshell is not on PATH"),
+    ({"root": "/nonexistent-root"}, "not a deb or rpm gateway"),
+])
+def test_a_host_this_release_cannot_bind_is_refused_before_anything(gateway, change, says):
+    with pytest.raises(connect.ConnectError, match=says):
+        connect.up(gateway.host(**change), token=TOKEN, digest=DIGEST, out=lambda _s: None)
+    assert gateway.posts == []
+
+
+@needs_tomllib
+def test_a_missing_gateway_toml_or_version_is_refused(gateway):
+    gateway.version = "openshell-gateway (unknown)"
+    with pytest.raises(connect.ConnectError, match="did not say its version"):
+        _up(gateway)
+    gateway.toml.unlink()
+    with pytest.raises(connect.ConnectError, match="gateway.toml is missing"):
+        _up(gateway)
+    assert gateway.posts == []
+
+
+@needs_tomllib
+@pytest.mark.parametrize("executable, says", [
+    ("/home/op/.cache/uv/archive-v0/abc/bin/python", "temporary uv environment"),
+    ('/opt/a"b/python', "cannot name"),
+    ("relative/python", "cannot name"),
+])
+def test_a_python_the_service_cannot_keep_using_is_refused(gateway, executable, says):
+    with pytest.raises(connect.ConnectError, match=says):
+        connect.up(gateway.host(executable=executable), token=TOKEN, digest=DIGEST,
+                   out=lambda _s: None)
+
+
+@needs_tomllib
+def test_a_sidecar_that_never_answers_stops_the_run_before_the_gateway_is_touched(gateway):
+    before = gateway.toml.read_bytes()
+    with pytest.raises(connect.ConnectError, match="did not answer"):
+        connect.up(gateway.host(healthy=lambda _port: False), token=TOKEN, digest=DIGEST,
+                   out=lambda _s: None)
+    assert gateway.toml.read_bytes() == before
+    assert not any(c[:3] == ["systemctl", "--user", "restart"] for c in gateway.calls)
+
+
+@needs_tomllib
+@pytest.mark.parametrize("change, says", [
+    ({"port": 0}, "--port"), ({"port": 65536}, "--port"),
+    ({"ca_bundle": '/etc/ssl/corp"x.pem'}, "OPENSHELL_SIDECAR_CA_BUNDLE"),
+    ({"proxy": "http://proxy.example:3128/$HOME"}, "OPENSHELL_SIDECAR_PROXY"),
+    ({"ca_bundle": "/etc/ssl/corp\n.pem"}, "OPENSHELL_SIDECAR_CA_BUNDLE"),
+])
+def test_a_setting_systemd_cannot_carry_stops_up_before_the_token_is_spent(
+        gateway, change, says):
+    with pytest.raises(connect.ConnectError, match=says):
+        _up(gateway, **change)
+    assert gateway.posts == [] and not gateway.paths.sidecar_env.exists()
+
+
+@needs_tomllib
+def test_a_settings_folder_with_a_space_stops_up_before_the_token_is_spent(gateway):
+    host = gateway.host(environ={"HOME": str(gateway.home), "XDG_RUNTIME_DIR": "/run/user/1000",
+                                 "XDG_CONFIG_HOME": str(gateway.home / "my config")})
+    (gateway.home / "my config" / "openshell").mkdir(parents=True)
+    (gateway.home / "my config" / "openshell" / "gateway.toml").write_text(GATEWAY_TOML)
+    with pytest.raises(connect.ConnectError, match="XDG_CONFIG_HOME"):
+        connect.up(host, token=TOKEN, digest=DIGEST, out=lambda _s: None)
+    assert gateway.posts == []
+
+
+@needs_tomllib
+def test_a_state_folder_with_a_space_is_carried_quoted(gateway):
+    host = gateway.host(environ={"HOME": str(gateway.home), "XDG_RUNTIME_DIR": "/run/user/1000",
+                                 "XDG_STATE_HOME": str(gateway.home / "my state")})
+    connect.up(host, token=TOKEN, digest=DIGEST, out=lambda _s: None)
+    saved = connect._saved(connect.layout(host))
+    assert saved["OPENSHELL_SIDECAR_STATE"].endswith("my state/artzain/openshell/state.json")
+    assert saved["COGNEXUS_API_KEY"] == CREDENTIAL
+
+
+@needs_tomllib
+def test_a_gateway_that_comes_up_and_falls_over_did_not_stay_up(gateway):
+    real = gateway.run
+    seen = {"active": 0}
+
+    def flapping(argv, env, timeout):
+        done = real(argv, env, timeout)
+        if argv[2:4] == ["is-active", connect.GATEWAY_UNIT] and gateway.bound:
+            seen["active"] += 1
+            if seen["active"] > 1:  # up at first, then the restart loop
+                return _done(3, "activating\n")
+        return done
+
+    with pytest.raises(connect.ConnectError, match="did not stay up"):
+        connect.up(gateway.host(runner=flapping), token=TOKEN, digest=DIGEST,
+                   out=lambda _s: None)
+
+
+@needs_tomllib
+def test_the_token_is_needed_on_a_first_run(gateway):
+    with pytest.raises(connect.ConnectError, match="ARTZAIN_ENROLL_TOKEN"):
+        _up(gateway, token="")
+
+
+# ---------------------------------------------------------------------------
+# remove and status
+# ---------------------------------------------------------------------------
+
+
+@needs_tomllib
+def test_remove_after_up_puts_everything_back(gateway):
+    before = gateway.toml.read_bytes()
+    _up(gateway)
+    paths = gateway.paths
+    said = []
+    result = connect.remove(gateway.host(), out=said.append)
+    assert gateway.toml.read_bytes() == before
+    assert hashlib.sha256(gateway.toml.read_bytes()).hexdigest() == hashlib.sha256(before).hexdigest()
+    assert result == {"gateway.toml": "restored", "drop-in": "removed",
+                      "gateway": "restarted unbound", "sidecar": "removed",
+                      "gateway.env": "removed", "credential": "revoked"}
+    for path in (paths.dropin, paths.sidecar_unit, paths.sidecar_env, paths.record,
+                 paths.toml_backup, paths.env_backup, paths.gateway_env, paths.state_dir):
+        assert not path.exists(), path
+    assert gateway.units == {connect.GATEWAY_UNIT: "active", connect.SIDECAR_UNIT: "inactive"}
+    assert gateway.bound is False
+    revoke = gateway.posts[-1]
+    assert revoke["url"] == f"https://engine.example/api/v1/openshell/gateways/{GATEWAY}/revoke"
+    assert revoke["headers"] == {"X-Api-Key": CREDENTIAL}
+    assert not any(CREDENTIAL in line for line in said)
+
+
+@needs_tomllib
+def test_remove_keeps_a_gateway_env_that_was_there_and_the_operators_edits(gateway):
+    paths = gateway.paths
+    paths.gateway_env.write_text("RUST_LOG=info\n", encoding="utf-8")
+    _up(gateway)
+    with gateway.toml.open("a", encoding="utf-8") as handle:
+        handle.write('\n[openshell.drivers.docker]\nimage_pull_policy = "always"\n')
+    result = connect.remove(gateway.host(), out=lambda _s: None)
+    assert result["gateway.toml"] == "kept-edits" and result["gateway.env"] == "restored"
+    text = gateway.toml.read_text(encoding="utf-8")
+    assert connect.BLOCK_BEGIN not in text and 'image_pull_policy = "always"' in text
+    assert paths.gateway_env.read_text(encoding="utf-8") == "RUST_LOG=info\n"
+
+
+@needs_tomllib
+@pytest.mark.parametrize("failure", ["raises", 503])
+def test_a_revoke_that_did_not_happen_is_kept_for_the_next_remove(gateway, failure):
+    _up(gateway)
+    if failure == "raises":
+        gateway.revoke_raises = True
+    else:
+        gateway.revoke_status = failure
+    said = []
+    result = connect.remove(gateway.host(), out=said.append)
+    assert result["credential"] == "NOT revoked"
+    paths = gateway.paths
+    assert paths.sidecar_env.exists() and paths.record.exists()
+    assert "revoke-pending" in connect.Record.load(paths.record).data["steps"]
+    assert "remove` again" in said[-1]
+
+    gateway.revoke_raises, gateway.revoke_status = False, 401  # already revoked is revoked
+    result = connect.remove(gateway.host(), out=lambda _s: None)
+    assert result == {"gateway.toml": "no-block", "credential": "revoked"}
+    assert not paths.sidecar_env.exists() and not paths.record.exists()
+
+
+@needs_tomllib
+def test_remove_can_leave_the_credential_live(gateway):
+    _up(gateway)
+    posts = len(gateway.posts)
+    result = connect.remove(gateway.host(), keep_credential=True, out=lambda _s: None)
+    assert "credential" not in result and len(gateway.posts) == posts
+    assert not gateway.paths.sidecar_env.exists()
+
+
+def test_remove_with_nothing_installed_does_nothing(gateway):
+    said = []
+    assert connect.remove(gateway.host(), out=said.append) == {"gateway.toml": "no-block"}
+    assert gateway.posts == []
+
+
+@needs_tomllib
+def test_status_says_what_is_installed_and_holds_no_credential(gateway):
+    before = connect.status(gateway.host())
+    assert before["connected"] is False and before["registration_in_gateway_toml"] is False
+    _up(gateway)
+    after = connect.status(gateway.host())
+    assert after == {
+        "gateway_id": GATEWAY, "steps": after["steps"], "connected": True,
+        "self_test_decision_id": DECISION, "credential_saved": True,
+        "registration_in_gateway_toml": True, "drop_in": True, "sidecar_unit": True,
+        "sidecar": "active", "sidecar_answers": True, "gateway": "active",
+        "record_error": None}
+    assert CREDENTIAL not in json.dumps(after)
+
+
+def test_a_record_that_cannot_be_read_is_said(gateway):
+    paths = gateway.paths
+    paths.record.parent.mkdir(parents=True)
+    paths.record.write_text("{not json", encoding="utf-8")
+    assert "cannot be read" in connect.status(gateway.host())["record_error"]
+    with pytest.raises(connect.ConnectError, match="cannot be read"):
+        connect.remove(gateway.host(), out=lambda _s: None)
+
+
+# ---------------------------------------------------------------------------
+# The command line
+# ---------------------------------------------------------------------------
+
+
+def test_the_command_takes_the_token_from_the_environment_only(monkeypatch):
+    from artzain import cli
+
+    seen = {}
+
+    def up(host, **kwargs):
+        seen.update(kwargs)
+
+    monkeypatch.setattr(connect, "up", up)
+    monkeypatch.setenv("ARTZAIN_ENROLL_TOKEN", f"  {TOKEN}  ")
+    cli.main(["connect", "openshell", "up", "--config-digest", DIGEST.upper(),
+              "--engine", "https://engine.example", "--proxy", "env", "--port", "8090"])
+    assert seen == {"token": TOKEN, "digest": DIGEST, "engine": "https://engine.example",
+                    "proxy": "env", "ca_bundle": "", "port": 8090}
+    with pytest.raises(SystemExit):
+        cli.main(["connect", "openshell", "up", "--token", TOKEN])
+
+
+def test_a_refusal_ends_the_command_with_its_reason(monkeypatch):
+    from artzain import cli
+
+    def up(host, **kwargs):
+        raise connect.ConnectError("the enroll token expired")
+
+    monkeypatch.setattr(connect, "up", up)
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["connect", "openshell", "up"])
+    assert str(stopped.value) == "artzain connect openshell up: the enroll token expired"

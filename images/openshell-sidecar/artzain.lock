@@ -1,0 +1,3 @@
+# Written by scripts/lock_openshell_sidecar_image.py --artzain. Do not edit by hand.
+# No artzain release is locked yet. The image is built from the wheel PyPI serves,
+# so this file is written after that version is published.

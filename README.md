@@ -325,6 +325,7 @@ cd ../grokbot && npm ci && npm test && npm run build
 - OpenClaw plugin: push tag `openclaw-v<version>` (must match `openclaw/package.json`).
 - n8n nodes: push tag `n8n-v<version>` (must match `n8n/package.json`).
 - Grok Bot skill: push tag `grokbot-v<version>` (must match `grokbot/package.json`).
+- OpenShell sidecar image: push tag `sidecar-v<version>` (must be the `artzain` version `images/openshell-sidecar/artzain.lock` names, which is written after that version is on PyPI). `sidecar-image.yml` builds it from the published wheel for linux/amd64 and linux/arm64, pushes it to `ghcr.io/cognexuslabs/artzain-openshell-sidecar`, runs what it pushed, then signs the digest and attests an SBOM, keyless, as that workflow at that tag.
 - All four npm packages publish through the same `publish-npm.yml` (npm **Trusted Publishing**, OIDC, no token) — each package's npmjs.com binding names that one workflow file. The **first** publish of a new package is an owner bootstrap, because npm only binds a trusted publisher to a package that already exists; the steps live in the engine repo's `scripts/cognexus-tools-seed/APPLY.md`. Do not publish from the engine repo, and never use a bare `v*` tag here.
 
 Nothing publishes from a developer machine (WS-8): the tag is the release, and
