@@ -1796,6 +1796,16 @@ def cmd_connect_openshell(args: argparse.Namespace) -> None:
                        ca_bundle=args.ca_bundle or "", port=args.port)
         elif args.connect_command == "remove":
             connect.remove(host, keep_credential=args.keep_credential)
+        elif args.connect_command == "doctor":
+            found = connect.doctor(host)
+            if args.json:
+                print(_json.dumps(found, indent=2))
+            else:
+                for check in found["checks"]:
+                    label = "FAIL" if check["result"] == "fail" else check["result"]
+                    print(f"{label:<5} {check['check']:<13} {check['says']}")
+            if not found["ok"]:
+                raise SystemExit(1)
         else:
             print(_json.dumps(connect.status(host), indent=2))
     except connect.ConnectError as exc:
@@ -2255,7 +2265,10 @@ def main(argv: list[str] | None = None) -> None:
             "  remove  put gateway.toml and gateway.env back as they were, remove\n"
             "          the sidecar, restart the gateway unbound and revoke the\n"
             "          credential.\n"
-            "  status  what is installed, and whether it is up (JSON).\n\n"
+            "  status  what is installed, and whether it is up (JSON).\n"
+            "  doctor  check the services, the socket, the credential file, the\n"
+            "          registration, the OpenShell release, the engine through the\n"
+            "          proxy and the clock; exits 1 when a check fails.\n\n"
             "The enroll token is read from ARTZAIN_ENROLL_TOKEN.\n"
             "Operator steps: the ArtzAIn operator manual, chapter 17."
         ),
@@ -2283,6 +2296,9 @@ def main(argv: list[str] | None = None) -> None:
     c_remove.set_defaults(func=cmd_connect_openshell)
     c_status = c_os_sub.add_parser("status", help="What is installed, and whether it is up.")
     c_status.set_defaults(func=cmd_connect_openshell)
+    c_doctor = c_os_sub.add_parser("doctor", help="Check what binds the gateway; exit 1 on a failure.")
+    c_doctor.add_argument("--json", action="store_true", help="print the checks as JSON")
+    c_doctor.set_defaults(func=cmd_connect_openshell)
 
     args = parser.parse_args(argv)
     args.func(args)

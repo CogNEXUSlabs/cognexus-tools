@@ -51,9 +51,11 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -117,9 +119,12 @@ class Host:
                  healthy: Optional[Callable[[int], bool]] = None,
                  reports: Optional[Callable[[int], Optional[Dict[str, Any]]]] = None,
                  post_json: Optional[Callable[..., Tuple[int, Any]]] = None,
+                 get_engine: Optional[Callable[..., Tuple[int, Mapping[str, str]]]] = None,
                  which: Optional[Callable[[str], Optional[str]]] = None,
+                 stat: Optional[Callable[[Path], os.stat_result]] = None,
                  sleep: Callable[[float], None] = time.sleep,
                  clock: Callable[[], float] = time.monotonic,
+                 wall: Callable[[], float] = time.time,
                  platform: Optional[str] = None,
                  executable: Optional[str] = None,
                  uid: Optional[int] = None) -> None:
@@ -131,9 +136,12 @@ class Host:
         self._healthy = healthy or _healthy
         self._reports = reports or _reports
         self._post_json = post_json or _post_json
+        self._get_engine = get_engine or _get_engine
         self._which = which
+        self._stat = stat or os.stat
         self.sleep = sleep
         self.clock = clock
+        self.wall = wall
         self.platform = platform or sys.platform
         self.executable = executable or sys.executable
         self.uid = uid if uid is not None else (os.getuid() if hasattr(os, "getuid") else 0)
@@ -184,6 +192,15 @@ class Host:
                   proxy: str = "", ca_bundle: str = "") -> Tuple[int, Any]:
         return self._post_json(url, headers=headers, body=body, proxy=proxy, ca_bundle=ca_bundle)
 
+    def get_engine(self, url: str, *, proxy: str = "",
+                   ca_bundle: str = "") -> Tuple[int, Mapping[str, str]]:
+        """``(status, {"Date": ...})`` of a ``GET`` to the engine, the way the
+        sidecar reaches it. Raises when it cannot be reached."""
+        return self._get_engine(url, proxy=proxy, ca_bundle=ca_bundle)
+
+    def stat(self, path: Path) -> os.stat_result:
+        return self._stat(path)
+
 
 def _run(argv: List[str], *, env: Mapping[str, str], timeout: float) -> subprocess.CompletedProcess:
     try:
@@ -218,6 +235,23 @@ def _reports(port: int) -> Optional[Dict[str, Any]]:
     except Exception:  # noqa: BLE001 - it does not say
         return None
     return answer if isinstance(answer, dict) else None
+
+
+def _get_engine(url: str, *, proxy: str = "", ca_bundle: str = "") -> Tuple[int, Mapping[str, str]]:
+    """``(status, {"Date": ...})`` of a ``GET`` to the engine through the
+    sidecar's own client: one origin, the proxy and the bundle given here."""
+    environ = {"ARTZAIN_DECISION_URL": url, "OPENSHELL_SIDECAR_PROXY": proxy,
+               "OPENSHELL_SIDECAR_CA_BUNDLE": ca_bundle}
+    settings = transport.settings_from_environment(environ)
+    if settings is None:
+        raise ConnectError("the engine URL must be http:// or https:// with a host")
+    client = transport.EngineClient(settings)
+    try:
+        status, headers, _data = client.request("GET", url, headers={"Accept": "application/json"},
+                                                deadline=time.monotonic() + 10.0)
+    finally:
+        client.close()
+    return status, {"Date": (headers.get("Date") if headers is not None else None) or ""}
 
 
 def _post_json(url: str, *, headers: Mapping[str, str], body: Mapping[str, Any],
@@ -1157,7 +1191,244 @@ def status(host: Host) -> Dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# doctor
+# ---------------------------------------------------------------------------
+
+#: How far this host's clock may be from the engine's before doctor warns,
+#: and before it fails.
+CLOCK_WARN_SECONDS = 60.0
+CLOCK_FAIL_SECONDS = 300.0
+
+
+def _block_body(current: bytes) -> Optional[str]:
+    """What is between the managed block's marker lines, or None when the
+    file does not hold exactly one whole block."""
+    if strip_block(current) is None:
+        return None
+    text = current.decode("utf-8")
+    start = text.index(BLOCK_BEGIN + "\n") + len(BLOCK_BEGIN) + 1
+    return text[start:text.index(BLOCK_END + "\n", start)]
+
+
+def _origin(url: str) -> str:
+    """``scheme://host[:port]`` of *url*, with no user or password."""
+    parts = urllib.parse.urlsplit(url)
+    port = f":{parts.port}" if parts.port else ""
+    return f"{parts.scheme}://{parts.hostname}{port}"
+
+
+def _through(proxy: str) -> str:
+    """How the engine is reached, for a sentence. Never a proxy password."""
+    if not proxy:
+        return ""
+    if proxy == "env":
+        return " through the environment's proxy"
+    parts = urllib.parse.urlsplit(proxy)
+    return f" through the proxy {parts.hostname}:{parts.port or 80}"
+
+
+def _engine_time(date: str) -> Optional[float]:
+    import email.utils
+
+    try:
+        return email.utils.parsedate_to_datetime(date).timestamp() if date else None
+    except (TypeError, ValueError):
+        return None
+
+
+def doctor(host: Host) -> Dict[str, Any]:
+    """Check what binds this host's gateway: the record, both services, the
+    credential file, the interceptor socket, the drop-in, the registration,
+    the OpenShell release, the CLI, the engine through the sidecar's proxy,
+    the clock against the engine's, and the sidecar's reports. Each check is
+    ``ok``, ``warn`` or ``fail`` with what it found; ``ok`` is false when
+    one fails. Changes nothing, and holds no credential."""
+    paths = layout(host)
+    checks: List[Dict[str, str]] = []
+
+    def found(check: str, result: str, says: str) -> None:
+        checks.append({"check": check, "result": result, "says": says})
+
+    # The record.
+    try:
+        data = Record.load(paths.record).data
+    except ConnectError as exc:
+        data = {}
+        found("record", "fail", str(exc))
+    else:
+        if data.get("connected"):
+            found("record", "ok", f"gateway {data.get('gateway_id')} is connected (self-test "
+                                  f"decision {data.get('self_test_decision_id')})")
+        else:
+            found("record", "fail", "this host's gateway is not connected: run "
+                                    "`artzain connect openshell up`")
+    try:
+        config: Optional[ConnectConfig] = parse_config(data["config"]) if data.get("config") else None
+    except ConnectError:
+        config = None
+    port = int(data.get("port") or DEFAULT_PORT)
+
+    # The two services.
+    state = _systemctl(host, "is-active", GATEWAY_UNIT, timeout=10).stdout.strip() or "unknown"
+    found("gateway", "ok" if state == "active" else "fail", f"{GATEWAY_UNIT} is {state}")
+    state = _systemctl(host, "is-active", SIDECAR_UNIT, timeout=10).stdout.strip() or "unknown"
+    answers = host.healthy(port)
+    found("sidecar", "ok" if state == "active" and answers else "fail",
+          f"{SIDECAR_UNIT} is {state}, and "
+          + (f"answers on 127.0.0.1:{port}" if answers else f"nothing answers on 127.0.0.1:{port}"))
+
+    # The credential file.
+    saved: Dict[str, str] = {}
+    try:
+        saved = _saved(paths)
+        mode = stat.S_IMODE(host.stat(paths.sidecar_env).st_mode)
+    except (ConnectError, OSError) as exc:
+        found("credential", "fail", str(exc) if isinstance(exc, ConnectError)
+              else f"{paths.sidecar_env} cannot be read")
+    else:
+        if mode & 0o077:
+            found("credential", "fail", f"{paths.sidecar_env} is {mode:04o}: other users can "
+                                        "read the gateway's credential (chmod 600 it)")
+        else:
+            found("credential", "ok", f"{paths.sidecar_env} holds a credential and is the "
+                                      "owner's alone")
+
+    # The socket the gateway calls the interceptor on.
+    try:
+        socket_stat = host.stat(paths.socket)
+    except OSError:
+        found("socket", "fail", f"{paths.socket} is missing: the sidecar is not serving the "
+                                "gateway")
+    else:
+        problems = []
+        if not stat.S_ISSOCK(socket_stat.st_mode):
+            problems.append("it is not a socket")
+        mode = stat.S_IMODE(socket_stat.st_mode)
+        if mode & 0o077:
+            problems.append(f"it is {mode:04o}, so other users can call the interceptor")
+        if socket_stat.st_uid != host.uid:
+            problems.append("it belongs to another user")
+        try:
+            folder = stat.S_IMODE(host.stat(paths.socket.parent).st_mode)
+        except OSError:
+            problems.append("its folder cannot be read")
+        else:
+            if folder & 0o077:
+                problems.append(f"its folder is {folder:04o}")
+        found("socket", "fail" if problems else "ok",
+              f"{paths.socket}: " + ("; ".join(problems) if problems
+                                     else "the owner's alone, in a folder of the owner's alone"))
+
+    # The drop-in that makes the gateway wait for the sidecar.
+    found("drop_in", "ok" if paths.dropin.is_file() else "fail",
+          f"{paths.dropin} " + ("is in place" if paths.dropin.is_file() else
+                                "is missing: the gateway does not wait for the sidecar"))
+
+    # The registration: what gateway.toml holds, and what the sidecar was
+    # installed with.
+    current = paths.gateway_toml.read_bytes() if paths.gateway_toml.is_file() else b""
+    body = _block_body(current)
+    if config is None:
+        found("registration", "fail", "the record holds no approved configuration to check "
+                                      "the registration against")
+    elif body is None:
+        found("registration", "fail", f"{paths.gateway_toml} holds no ArtzAIn registration")
+    else:
+        expected = registration.render(f"unix://{paths.socket.as_posix()}",
+                                       timeout_ms=config.interceptor_timeout_ms)
+        if expected.strip() not in body:
+            found("registration", "fail", f"the registration in {paths.gateway_toml} is not "
+                                          "the one `up` wrote: run `artzain connect openshell "
+                                          "remove`, then `up` with a new token")
+        elif saved.get("OPENSHELL_REGISTRATION_DIGEST") != registration.digest(expected):
+            found("registration", "fail", "the sidecar was installed for another registration "
+                                          f"than the one in {paths.gateway_toml}")
+        else:
+            found("registration", "ok", f"{paths.gateway_toml} registers this sidecar, as it "
+                                        "was installed")
+
+    # The OpenShell release against the approved one.
+    done = host.run("openshell-gateway", "--version", timeout=30)
+    version = _VERSION.search((done.stdout or "") + " " + (done.stderr or ""))
+    if done.returncode != 0 or not version:
+        found("versions", "fail", "openshell-gateway --version did not say its version")
+    elif config is None:
+        found("versions", "warn", f"the gateway is OpenShell {version.group(0)}; the record "
+                                  "holds no approved release to compare with")
+    elif not _same_line(version.group(0), config.openshell_version):
+        found("versions", "fail", f"the gateway is OpenShell {version.group(0)}, and the "
+                                  f"configuration was approved for {config.openshell_version}")
+    else:
+        found("versions", "ok", f"the gateway is OpenShell {version.group(0)}, as approved "
+                                f"({config.openshell_version})")
+
+    # The CLI that the sidecar lists sandboxes with.
+    done = host.run("openshell", "settings", "get", "--global", timeout=60)
+    found("cli", "ok" if done.returncode == 0 else "fail",
+          "the openshell CLI reaches the gateway" if done.returncode == 0 else
+          "the openshell CLI cannot reach the gateway: register it (openshell gateway add "
+          "https://127.0.0.1:17670 --local --name openshell): " + _said(done)[-200:])
+
+    # The engine, the way the sidecar reaches it, and the clock against it.
+    url = saved.get("ARTZAIN_DECISION_URL") or (config.decision_url if config else "")
+    proxy = saved.get("OPENSHELL_SIDECAR_PROXY", "")
+    engine_time = None
+    if not url:
+        found("engine", "fail", "no engine URL is saved for the sidecar")
+    else:
+        origin = _origin(url)
+        try:
+            status, headers = host.get_engine(origin + "/health", proxy=proxy,
+                                              ca_bundle=saved.get("OPENSHELL_SIDECAR_CA_BUNDLE", ""))
+        except Exception as exc:  # noqa: BLE001 - the check says what failed, never a credential
+            found("engine", "fail", f"{origin} cannot be reached{_through(proxy)} "
+                                    f"({type(exc).__name__})")
+        else:
+            engine_time = _engine_time(str(headers.get("Date") or ""))
+            found("engine", "ok" if status == 200 else "fail",
+                  f"{origin} answers{_through(proxy)}" if status == 200 else
+                  f"{origin} answered HTTP {status}{_through(proxy)}")
+    if engine_time is None:
+        found("clock", "warn", "the engine gave no time to compare this host's clock with")
+    else:
+        skew = abs(host.wall() - engine_time)
+        result = ("ok" if skew <= CLOCK_WARN_SECONDS else
+                  "warn" if skew <= CLOCK_FAIL_SECONDS else "fail")
+        found("clock", result, f"this host's clock is {int(skew)} s off the engine's")
+
+    # What the sidecar reported.
+    reports = host.reports(port)
+    if not isinstance(reports, dict):
+        found("reports", "fail", "the sidecar did not say what it reported")
+    elif reports.get("reporting") is False:
+        found("reports", "fail", "the sidecar sends no heartbeat or inventory: it holds no "
+                                 "gateway credential")
+    else:
+        failed = [what for what in ("heartbeat", "inventory") if reports.get(what) == "failed"]
+        waiting = [what for what in ("heartbeat", "inventory")
+                   if reports.get(what) not in ("ok", "failed")]
+        if failed:
+            errors = [_word(reports[f"{what}_error"]) for what in failed
+                      if reports.get(f"{what}_error")]
+            found("reports", "fail", f"the engine did not take the last {' or '.join(failed)}"
+                                     + (f" ({', '.join(errors)})" if errors else ""))
+        elif waiting:
+            found("reports", "warn", f"the {' and the '.join(waiting)} not yet taken by the "
+                                     "engine")
+        elif reports.get("partial"):
+            error = _word(reports.get("listing_error") or "")
+            found("reports", "warn", "the last inventory was not every sandbox"
+                                     + (f" (the listing failed: {error})" if error else ""))
+        else:
+            count = int(reports.get("sandboxes") or 0)
+            found("reports", "ok", "the engine took the last heartbeat and inventory "
+                                   f"({count} sandbox{'' if count == 1 else 'es'})")
+
+    return {"ok": all(check["result"] != "fail" for check in checks), "checks": checks}
+
+
 __all__ = ["CONFIG_KIND", "CONFIG_VERSION", "ConnectConfig", "ConnectError", "Host", "Layout",
            "Record", "Redeemed", "Shape", "add_block", "config_digest", "detect", "layout",
-           "parse_config", "redeem", "remove", "revoke", "self_test", "status", "strip_block",
-           "up"]
+           "doctor", "parse_config", "redeem", "remove", "revoke", "self_test", "status",
+           "strip_block", "up"]
