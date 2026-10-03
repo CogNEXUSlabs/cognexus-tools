@@ -80,6 +80,10 @@ def _done(code=0, out="", err=""):
     return subprocess.CompletedProcess([], code, out, err)
 
 
+def _stat(mode, uid):
+    return os.stat_result((mode, 0, 0, 1, uid, 1000, 0, 0, 0, 0))
+
+
 def _box(message, width=40):
     """An error as the openshell CLI prints it: coloured, in a box, the
     message wrapped between words at *width*."""
@@ -120,6 +124,18 @@ class _Gateway:
         #: What the sidecar's /artzain/reports says, one answer per read (the
         #: last one stays).
         self.reported = [dict(REPORTED)]
+        # What doctor reads: the socket as the sidecar made it, file modes
+        # (a POSIX file's, whatever this test runs on), the engine's /health
+        # and the clock.
+        self.socket_kind, self.socket_mode, self.socket_uid = stat.S_IFSOCK, 0o600, 1000
+        self.socket_dir_mode = 0o700
+        self.silent = False  # the sidecar runs, and nothing answers
+        self.socket_gone = False
+        self.stray = False   # something answers on the port, not the service
+        self.modes = {}
+        self.engine_status, self.engine_skew, self.engine_raises = 200, 0.0, False
+        self.engine_gets = []
+        self.wall_now = 1_800_000_000.0
 
     # the commands --------------------------------------------------------
     def run(self, argv, env, timeout):
@@ -177,12 +193,33 @@ class _Gateway:
         raise AssertionError(f"unexpected command {argv}")
 
     def healthy(self, port):
-        return self.units[connect.SIDECAR_UNIT] == "active"
+        return ((self.units[connect.SIDECAR_UNIT] == "active" or self.stray)
+                and not self.silent)
 
     def reports(self, port):
         if self.units[connect.SIDECAR_UNIT] != "active":
             return None
         return dict(self.reported.pop(0) if len(self.reported) > 1 else self.reported[0])
+
+    def stat(self, path):
+        path, socket = Path(path), self.paths.socket
+        if path == socket:
+            if self.units[connect.SIDECAR_UNIT] != "active" or self.socket_gone:
+                raise FileNotFoundError(str(path))
+            return _stat(self.socket_kind | self.socket_mode, self.socket_uid)
+        if path == socket.parent:
+            return _stat(stat.S_IFDIR | self.socket_dir_mode, 1000)
+        real = os.stat(path)
+        return _stat(stat.S_IFMT(real.st_mode) | self.modes.get(path.name, 0o600), 1000)
+
+    def get_engine(self, url, *, proxy="", ca_bundle=""):
+        import email.utils
+
+        self.engine_gets.append({"url": url, "proxy": proxy, "ca_bundle": ca_bundle})
+        if self.engine_raises:
+            raise OSError("engine down")
+        return self.engine_status, {"Date": email.utils.formatdate(
+            self.wall_now + self.engine_skew, usegmt=True)}
 
     # the engine ----------------------------------------------------------
     def post_json(self, url, *, headers, body, proxy="", ca_bundle=""):
@@ -206,7 +243,8 @@ class _Gateway:
             environ={"HOME": str(self.home), "XDG_RUNTIME_DIR": "/run/user/1000",
                      "PATH": "/usr/bin"},
             root=str(self.root), runner=self.run, healthy=self.healthy,
-            reports=self.reports,
+            reports=self.reports, stat=self.stat, get_engine=self.get_engine,
+            wall=lambda: self.wall_now,
             post_json=self.post_json, which=lambda name: f"/usr/bin/{name}",
             sleep=lambda _s: None, clock=_Clock(), platform="linux",
             executable="/home/op/.local/share/uv/tools/artzain/bin/python", uid=1000)
@@ -1187,6 +1225,196 @@ def test_a_record_that_cannot_be_read_is_said(gateway):
 
 
 # ---------------------------------------------------------------------------
+# doctor
+# ---------------------------------------------------------------------------
+
+CHECKS = ["record", "gateway", "sidecar", "credential", "socket", "drop_in", "registration",
+          "versions", "cli", "engine", "clock", "reports"]
+
+
+def _results(said):
+    return {check["check"]: check["result"] for check in said["checks"]}
+
+
+@needs_tomllib
+def test_doctor_finds_nothing_wrong_with_a_gateway_up_bound(gateway):
+    _up(gateway)
+    said = connect.doctor(gateway.host())
+    assert [check["check"] for check in said["checks"]] == CHECKS
+    assert set(_results(said).values()) == {"ok"} and said["ok"] is True
+    assert gateway.engine_gets == [{"url": "https://engine.example/health", "proxy": "",
+                                    "ca_bundle": ""}]
+    assert CREDENTIAL not in json.dumps(said)
+
+
+@needs_tomllib
+def test_doctor_asks_the_engine_the_way_the_sidecar_does(gateway, tmp_path):
+    bundle = tmp_path / "ca.pem"
+    bundle.write_text("x")
+    _up(gateway, proxy="http://proxy.example:3128", ca_bundle=bundle.as_posix())
+    connect.doctor(gateway.host())
+    assert gateway.engine_gets == [{"url": "https://engine.example/health",
+                                    "proxy": "http://proxy.example:3128",
+                                    "ca_bundle": bundle.as_posix()}]
+
+
+@needs_tomllib
+def test_doctor_checks_the_registration_for_the_approved_timeout(gateway):
+    config = dict(CONFIG, interceptor_timeout_ms=900, decide_timeout_ms=600)
+    digest = connect.config_digest(config)
+    gateway.redeem = (200, {"gateway_id": GATEWAY, "agent_did": f"openshell:{GATEWAY}",
+                            "credential": CREDENTIAL, "key_prefix": CREDENTIAL[:12],
+                            "config_digest": digest, "config": config})
+    connect.up(gateway.host(), token=TOKEN, digest=digest, out=lambda _s: None)
+    assert '"900ms"' in gateway.toml.read_text(encoding="utf-8")
+    said = connect.doctor(gateway.host())
+    assert set(_results(said).values()) == {"ok"}, said
+
+
+def test_doctor_before_up_says_to_run_it(gateway):
+    said = connect.doctor(gateway.host())
+    assert said["ok"] is False
+    record = said["checks"][0]
+    assert record["check"] == "record" and record["result"] == "fail"
+    assert "artzain connect openshell up" in record["says"]
+
+
+def _edit(path, old, new):
+    """Replace *old* once, keeping the file's line ends (``write_text`` would
+    make them CRLF on Windows)."""
+    data = path.read_bytes()
+    assert old.encode() in data
+    path.write_bytes(data.replace(old.encode(), new.encode(), 1))
+
+
+def _move_digest(gateway):
+    env = gateway.paths.sidecar_env
+    digest = connect._saved(gateway.paths)["OPENSHELL_REGISTRATION_DIGEST"]
+    _edit(env, digest, "0" * 64)
+
+
+BREAKS = {
+    "socket-gone": (lambda g: setattr(g, "socket_gone", True), "socket", "fail", "is missing"),
+    "socket-mode": (lambda g: setattr(g, "socket_mode", 0o660), "socket", "fail", "0660"),
+    "socket-folder": (lambda g: setattr(g, "socket_dir_mode", 0o755), "socket", "fail", "0755"),
+    "socket-owner": (lambda g: setattr(g, "socket_uid", 0), "socket", "fail", "another user"),
+    "not-a-socket": (lambda g: setattr(g, "socket_kind", stat.S_IFREG), "socket", "fail",
+                     "not a socket"),
+    "credential-mode": (lambda g: g.modes.update({"sidecar.env": 0o644}), "credential", "fail",
+                        "0644"),
+    "credential-gone": (lambda g: g.paths.sidecar_env.unlink(), "credential", "fail",
+                        "holds no credential"),
+    "credential-group": (lambda g: g.modes.update({"sidecar.env": 0o640}), "credential", "fail",
+                         "0640"),
+    "reports-partial": (lambda g: setattr(g, "reported", [
+        dict(REPORTED, partial=True, listing_error="TimeoutExpired")]),
+        "reports", "warn", "TimeoutExpired"),
+    "sidecar-down": (lambda g: g.units.update({connect.SIDECAR_UNIT: "inactive"}), "sidecar",
+                     "fail", "inactive"),
+    "sidecar-silent": (lambda g: setattr(g, "silent", True), "sidecar", "fail",
+                       "nothing answers"),
+    "sidecar-not-the-service": (
+        lambda g: (g.units.update({connect.SIDECAR_UNIT: "failed"}), setattr(g, "stray", True)),
+        "sidecar", "fail", "is failed"),
+    "gateway-down": (lambda g: g.units.update({connect.GATEWAY_UNIT: "failed"}), "gateway",
+                     "fail", "failed"),
+    "drop-in-gone": (lambda g: g.paths.dropin.unlink(), "drop_in", "fail", "50-artzain.conf"),
+    "block-edited": (lambda g: _edit(g.toml, '"1500ms"', '"900ms"'), "registration", "fail",
+                     "gateway.toml"),
+    "digest-moved": (_move_digest, "registration", "fail", "sidecar"),
+    "upgraded": (lambda g: setattr(g, "version", "openshell-gateway 0.2.0"), "versions", "fail",
+                 "0.2.0"),
+    "cli-unregistered": (lambda g: setattr(g, "cli_reaches", False), "cli", "fail",
+                         "openshell gateway add"),
+    "engine-down": (lambda g: setattr(g, "engine_raises", True), "engine", "fail", "OSError"),
+    "engine-5xx": (lambda g: setattr(g, "engine_status", 503), "engine", "fail", "503"),
+    "clock-drift": (lambda g: setattr(g, "engine_skew", 120.0), "clock", "warn", "120"),
+    "clock-off": (lambda g: setattr(g, "engine_skew", -900.0), "clock", "fail", "900"),
+    "reports-pending": (lambda g: setattr(g, "reported", [
+        {"reporting": True, "heartbeat": "pending", "inventory": "pending"}]),
+        "reports", "warn", "not yet"),
+    "reports-failed": (lambda g: setattr(g, "reported", [
+        dict(REPORTED, heartbeat="failed", heartbeat_error="ConnectionError")]),
+        "reports", "fail", "ConnectionError"),
+    "not-reporting": (lambda g: setattr(g, "reported", [{"reporting": False}]), "reports",
+                      "fail", "no gateway credential"),
+}
+
+
+@needs_tomllib
+@pytest.mark.parametrize("name", sorted(BREAKS))
+def test_doctor_names_what_is_wrong(gateway, name):
+    breaks, check, result, says = BREAKS[name]
+    _up(gateway)
+    breaks(gateway)
+    said = connect.doctor(gateway.host())
+    found = next(item for item in said["checks"] if item["check"] == check)
+    assert found["result"] == result and says in found["says"], found
+    assert said["ok"] is (result != "fail")
+    if result == "warn":  # nothing else is wrong
+        assert [c for c in said["checks"] if c["result"] != "ok"] == [found]
+
+
+def test_the_engine_is_asked_for_its_health_and_its_time(monkeypatch):
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    asked = []
+
+    class Engine(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            return None
+
+        def do_GET(self):  # noqa: N802
+            asked.append(self.path)
+            raw = b'{"status": "healthy"}'
+            self.send_response(200)  # with a Date header
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+    for name in ("HTTP_PROXY", "http_proxy"):
+        monkeypatch.setenv(name, "http://127.0.0.1:9")  # not the sidecar's proxy setting
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Engine)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, headers = connect._get_engine(f"http://127.0.0.1:{server.server_address[1]}/health")
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+    assert status == 200 and asked == ["/health"]
+    assert connect._engine_time(headers["Date"]) is not None
+
+
+def test_a_proxy_password_is_never_said():
+    assert connect._through("http://user:s3cret@proxy.example:3128") == (
+        " through the proxy proxy.example:3128")
+    assert connect._through("env") == " through the environment's proxy"
+    assert connect._through("") == ""
+    assert connect._origin("https://user:pw@engine.example:8443/api/v1/decisions") == (
+        "https://engine.example:8443")
+
+
+@needs_tomllib
+def test_doctor_does_not_say_the_proxy_password(gateway):
+    _up(gateway, proxy="http://user:s3cret@proxy.example:3128")
+    gateway.engine_raises = True
+    said = connect.doctor(gateway.host())
+    assert "s3cret" not in json.dumps(said)
+    engine = next(c for c in said["checks"] if c["check"] == "engine")
+    assert "proxy.example:3128" in engine["says"]
+
+
+@needs_tomllib
+def test_doctor_compares_no_clock_when_the_engine_does_not_answer(gateway):
+    _up(gateway)
+    gateway.engine_raises = True
+    clock = next(c for c in connect.doctor(gateway.host())["checks"] if c["check"] == "clock")
+    assert clock["result"] == "warn" and "no time" in clock["says"]
+
+
+# ---------------------------------------------------------------------------
 # The command line
 # ---------------------------------------------------------------------------
 
@@ -1219,3 +1447,31 @@ def test_a_refusal_ends_the_command_with_its_reason(monkeypatch):
     with pytest.raises(SystemExit) as stopped:
         cli.main(["connect", "openshell", "up"])
     assert str(stopped.value) == "artzain connect openshell up: the enroll token expired"
+
+
+_DIAGNOSED = {"ok": False, "checks": [
+    {"check": "socket", "result": "fail", "says": "the socket is 0660: group can connect"},
+    {"check": "clock", "result": "warn", "says": "this host's clock is 120 s off"},
+    {"check": "engine", "result": "ok", "says": "https://engine.example answers"}]}
+
+
+def test_doctor_prints_each_check_and_fails_when_one_does(monkeypatch, capsys):
+    from artzain import cli
+
+    monkeypatch.setattr(connect, "doctor", lambda host: _DIAGNOSED)
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["connect", "openshell", "doctor"])
+    assert stopped.value.code == 1
+    assert capsys.readouterr().out.splitlines() == [
+        "FAIL  socket        the socket is 0660: group can connect",
+        "warn  clock         this host's clock is 120 s off",
+        "ok    engine        https://engine.example answers"]
+
+
+def test_doctor_with_only_warnings_succeeds_and_can_print_json(monkeypatch, capsys):
+    from artzain import cli
+
+    warned = {"ok": True, "checks": _DIAGNOSED["checks"][1:]}
+    monkeypatch.setattr(connect, "doctor", lambda host: warned)
+    cli.main(["connect", "openshell", "doctor", "--json"])
+    assert json.loads(capsys.readouterr().out) == warned

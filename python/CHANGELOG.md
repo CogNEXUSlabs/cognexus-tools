@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.37
+
+### Changed
+
+- **`artzain connect openshell doctor`.** Checks what binds the gateway on
+  this host and says what is wrong: both services, the credential file
+  (owner-only), the interceptor socket (a socket, owner-only, in an
+  owner-only folder), the drop-in, the registration in `gateway.toml`
+  against the one the sidecar was installed for, the OpenShell release
+  against the approved one, the CLI, the engine reached through the
+  sidecar's own proxy and CA bundle, this host's clock against the
+  engine's, and whether the engine took the sidecar's reports. Each check
+  is `ok`, `warn` or `FAIL`; `--json` prints them, and it exits 1 when one
+  fails. It changes nothing and prints no credential.
+
 ## 0.6.36
 
 ### Changed

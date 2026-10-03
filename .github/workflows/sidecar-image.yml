@@ -200,6 +200,9 @@ jobs:
 
       # What is signed below is what ran here: the pushed digest, pulled back
       # for each platform. An image that fails this stays unsigned.
+      # The runner's docker keeps one platform of an image pulled by digest,
+      # and refuses to pull that digest for another ("cannot overwrite
+      # digest"), so each platform's copy goes before the next is pulled.
       - name: Run what was published
         env:
           REF: ${{ steps.version.outputs.image }}@${{ steps.publish.outputs.digest }}
@@ -209,6 +212,7 @@ jobs:
           for platform in linux/amd64 linux/arm64; do
             docker pull --quiet --platform "$platform" "$REF"
             python3 images/openshell-sidecar/test_image.py "$REF" --version "$VERSION" --platform "$platform"
+            docker image rm "$REF" > /dev/null
           done
 
       - name: Sign the image with cosign
