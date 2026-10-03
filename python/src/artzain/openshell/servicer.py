@@ -13,8 +13,9 @@ default) or a loopback TCP port. It never listens on a routable address.
   ArtzAIn engine is unreachable. A gateway on another protocol major, or one
   without the contract capability, is refused and does not start.
 * ``Evaluate`` turns the protobuf call into the sidecar's request and the
-  answer back. A deny carries ``PERMISSION_DENIED``, or ``UNAVAILABLE`` when
-  the engine could not decide. Patches go back only from
+  answer back. A deny carries ``PERMISSION_DENIED``, ``UNAVAILABLE`` when
+  the engine could not decide, or ``RESOURCE_EXHAUSTED`` when its rate
+  limit refused the decision. Patches go back only from
   ``modify_operation``, and a ``post_commit`` answer is always an allow: the
   gateway cannot revoke a commit.
 * With ``OPENSHELL_JWT_PUBLIC_KEY`` set, every call must carry the gateway's
@@ -36,17 +37,15 @@ import logging
 import os
 import time
 from concurrent import futures
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple
 
 from artzain.openshell import _wire
-from artzain.openshell.interceptor import (
-    BOUND_MODIFY,
-    BOUND_POST,
-    BOUND_VALIDATE,
-    PHASE_MODIFY,
-    PHASE_POST,
-    PHASE_VALIDATE,
-)
+from artzain.openshell.interceptor import PHASE_MODIFY, PHASE_POST, PHASE_VALIDATE
+
+# The bindings come from the one list the gateway registration is written
+# from (:mod:`artzain.openshell.registration`), so Describe and the
+# registration cannot disagree.
+from artzain.openshell.registration import bindings
 
 logger = logging.getLogger("artzain.openshell.servicer")
 
@@ -76,25 +75,6 @@ _MAX_ANNOTATION_VALUE = 256
 HandleFn = Callable[[Dict[str, Any]], Dict[str, Any]]
 
 
-def bindings(only: Optional[Sequence[str]] = None) -> List[Tuple[str, List[str]]]:
-    """``(method, phases)`` for every method the sidecar decides, sorted.
-
-    With *only*, the phases are limited to those, and a method left with
-    none is left out.
-    """
-    methods = sorted(BOUND_VALIDATE | BOUND_MODIFY | BOUND_POST)
-    out = []
-    for method in methods:
-        phases = [phase for phase, bound in (
-            (PHASE_MODIFY, BOUND_MODIFY),
-            (PHASE_VALIDATE, BOUND_VALIDATE),
-            (PHASE_POST, BOUND_POST),
-        ) if method in bound and (only is None or phase in only)]
-        if phases:
-            out.append((method, phases))
-    return out
-
-
 def registration_phases(claims: Optional[Mapping[str, Any]]) -> Optional[Tuple[str, ...]]:
     """The phases the calling registration binds, when its token says which it is.
 
@@ -113,8 +93,11 @@ def registration_phases(claims: Optional[Mapping[str, Any]]) -> Optional[Tuple[s
 
 
 def status_name(status_code: int) -> str:
-    """The gRPC status name the gateway reports for a deny."""
-    return "UNAVAILABLE" if int(status_code) == 503 else "PERMISSION_DENIED"
+    """The gRPC status name the gateway reports for a deny: ``UNAVAILABLE``
+    when the engine could not be asked, ``RESOURCE_EXHAUSTED`` when its rate
+    limit refused the decision, ``PERMISSION_DENIED`` otherwise."""
+    return {503: "UNAVAILABLE", 429: "RESOURCE_EXHAUSTED"}.get(
+        int(status_code), "PERMISSION_DENIED")
 
 
 def _implementation_version() -> str:

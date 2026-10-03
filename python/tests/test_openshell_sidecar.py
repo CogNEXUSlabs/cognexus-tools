@@ -24,9 +24,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from artzain import cloud
 from artzain.openshell import interceptor as osi
-from artzain.openshell import sidecar
+from artzain.openshell import sidecar, transport
+from artzain.openshell.journal import Journal
 from artzain.openshell.state import GatewayLedger
 
 UPDATE = {
@@ -52,6 +52,8 @@ def _sidecar_env(monkeypatch):
     monkeypatch.delenv("ARTZAIN_DECISION_URL", raising=False)
     monkeypatch.setenv("COGNEXUS_API_KEY", "cnx_sidecar_test_key")
     monkeypatch.setattr(sidecar, "_LEDGER", GatewayLedger(gateway_id="gw-a"))
+    monkeypatch.setattr(sidecar, "_JOURNAL", Journal())
+    monkeypatch.setattr(sidecar, "_CLIENT", None)
 
 
 def _capture():
@@ -309,8 +311,9 @@ class _Engine:
     """A fake Decision API. ``script`` is a list of per-request behaviours:
     ``"allow"`` answers at once, ``("sleep", s)`` answers allow after *s*
     seconds, ``"error"`` answers HTTP 500, ``"redirect"`` answers 302 to
-    another path, and ``"drop"`` reads the request and closes the connection
-    without answering (the client sees a reset)."""
+    another path, ``"drop"`` reads the request and closes the connection
+    without answering (the client sees a reset), and ``("limited", headers,
+    raw)`` answers HTTP 429 with those headers and that body."""
 
     def __init__(self, script):
         self.script = list(script)
@@ -352,6 +355,15 @@ class _Engine:
                     self.send_header("Location", "/elsewhere")
                     self.send_header("Content-Length", "0")
                     self.end_headers()
+                    return
+                if isinstance(step, tuple) and step[0] == "limited":
+                    self.send_response(429)
+                    for name, value in step[1].items():
+                        self.send_header(name, value)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(step[2])))
+                    self.end_headers()
+                    self.wfile.write(step[2])
                     return
                 if isinstance(step, tuple) and step[0] == "sleep":
                     time.sleep(step[1])
@@ -418,16 +430,18 @@ def test_a_slow_engine_is_denied_before_the_gateway_timeout(engine, monkeypatch)
     assert len(eng.requests) == 1  # a timeout is not retried
 
 
-def test_the_deadline_covers_building_the_opener(engine, monkeypatch):
+def test_the_deadline_covers_building_the_client(engine, monkeypatch):
+    """Building the client loads the certificate store. A sidecar that was
+    not warmed pays for that inside the write's own deadline."""
     monkeypatch.setenv("OPENSHELL_SIDECAR_DECIDE_TIMEOUT_MS", "300")
     eng = engine(["allow"])
-    real = cloud._api_opener
+    real = sidecar._client
 
-    def slow_opener():
+    def slow_client():
         time.sleep(0.5)
         return real()
 
-    monkeypatch.setattr(cloud, "_api_opener", slow_opener)
+    monkeypatch.setattr(sidecar, "_client", slow_client)
     started = time.monotonic()
     result = sidecar.handle_evaluate(dict(UPDATE))
     elapsed = time.monotonic() - started
@@ -514,15 +528,163 @@ def test_a_reset_is_not_retried_without_a_request_id(engine):
     assert len(eng.requests) == 1
 
 
+# ---------------------------------------------------------------------------
+# The engine's rate limit
+# ---------------------------------------------------------------------------
+#
+# On the hosted engine a decision past the hourly rate is a 429. For the
+# gateway that is a refused write, and the operator at the CLI has to be told
+# why, and how long to wait: "decision unavailable" reads as an outage.
+
+
+def _limited_answer(limit=600, **detail):
+    return json.dumps({"detail": {"error": "throughput_exceeded",
+                                  "metric": "openshell_decisions",
+                                  "limit_per_hour": limit, "burst_capacity": 6000,
+                                  "retry_after": 41.3, "mode": "enforce",
+                                  **detail}}).encode()
+
+
+def test_a_rate_limited_decision_is_a_deny_that_says_so_and_how_long_to_wait(engine):
+    eng = engine([("limited", {"Retry-After": "42"}, _limited_answer()), "allow"])
+    result = sidecar.handle_evaluate(dict(UPDATE))
+    assert result["allowed"] is False
+    assert result["status_code"] == 429
+    assert result["reason"] == "decision rate limit reached (600 per hour); retry in 42 s"
+    assert result["log_annotations"] == {}
+    assert len(eng.requests) == 1  # the operator runs it again; the sidecar does not
+
+
+def test_a_rate_limited_decision_is_not_a_round_trip(engine, monkeypatch):
+    fresh = sidecar.LatencyWindow()
+    monkeypatch.setattr(sidecar, "_LATENCY", fresh)
+    engine([("limited", {"Retry-After": "42"}, _limited_answer())])
+    assert sidecar.http_decide({"request_id": "r1"}) == {
+        "outcome": "deny", "status_code": 429, "decision_id": "",
+        "retry_after": 42, "limit_per_hour": 600}
+    assert fresh.percentile(0.5) is None
+
+
+@pytest.mark.parametrize("header, seconds", [
+    ("42", 42), (" 7 ", 7), ("1", 1), ("0042", 42), ("10000", 10000), ("86399", 86399),
+    ("86400", 86400),
+    ("0", 1), ("000", 1),                       # never "come straight back"
+    ("86401", 86400), ("100000", 86400), ("9" * 40, 86400), ("0" * 30 + "9", 9),
+    ("", 1), ("soon", 1), ("-3", 1), ("1.5", 1), ("+5", 1), ("4 2", 1),
+    ("Wed, 21 Oct 2026 07:28:00 GMT", 1),
+    ("\u00b2", 1), ("\u0663", 1),             # digits to str.isdigit, not to int()
+])
+def test_the_wait_is_whole_seconds_between_one_and_a_day(header, seconds):
+    assert sidecar._retry_after_seconds(header) == seconds
+
+
+def test_a_429_with_no_retry_after_waits_a_second(engine):
+    engine([("limited", {}, _limited_answer())])
+    assert sidecar.http_decide({"request_id": "r1"})["retry_after"] == 1
+
+
+@pytest.mark.parametrize("raw", [
+    b"", b"not json", b"null", b"[]", b'"throughput_exceeded"',
+    b'{"detail": "throughput_exceeded"}', b'{"detail": {}}', b'{"limit_per_hour": 600}',
+    _limited_answer(True), _limited_answer(0), _limited_answer(-600),
+    _limited_answer(600.0), _limited_answer("600"), _limited_answer(None),
+    _limited_answer(10 ** 9),
+    _limited_answer(padding="x" * (sidecar._MAX_ANSWER_BYTES + 1)),
+], ids=lambda raw: f"{len(raw)} bytes")
+def test_a_429_that_names_no_usable_limit_still_refuses_with_the_wait(engine, raw):
+    engine([("limited", {"Retry-After": "30"}, raw)])
+    assert sidecar.http_decide({"request_id": "r1"}) == {
+        "outcome": "deny", "status_code": 429, "decision_id": "", "retry_after": 30}
+    engine([("limited", {"Retry-After": "30"}, raw)])
+    result = sidecar.handle_evaluate(dict(UPDATE))
+    assert (result["status_code"], result["reason"]) == (
+        429, "decision rate limit reached; retry in 30 s")
+
+
+def test_the_limit_is_read_inside_the_decision_deadline(monkeypatch):
+    """The 429's body is read under the deadline the decision had, so an
+    answer that trickles in cannot hold the gateway past it."""
+    import io
+
+    monkeypatch.setenv("ARTZAIN_DECISION_URL", "https://engine.example")
+    monkeypatch.setenv("OPENSHELL_SIDECAR_DECIDE_TIMEOUT_MS", "300")
+    seen = {}
+
+    def limited(*_a, **_k):
+        raise urllib.error.HTTPError("https://engine.example", 429, "Too Many Requests",
+                                     {"Retry-After": "5"}, io.BytesIO(_limited_answer()))
+
+    def read(resp, deadline):
+        seen["left"] = deadline - time.monotonic()
+        raise TimeoutError("sidecar engine deadline passed")
+
+    monkeypatch.setattr(sidecar, "_post_engine", limited)
+    monkeypatch.setattr(sidecar, "_read_answer", read)
+    assert sidecar.http_decide({"request_id": "r1"}) == {
+        "outcome": "deny", "status_code": 429, "decision_id": "", "retry_after": 5}
+    assert 0 < seen["left"] <= 0.3
+
+
+@pytest.mark.parametrize("phase, method, body", [
+    ("modify_operation", "UpdateConfig", {"sandbox": "sb-1"}),
+    ("validate", "UpdateConfig", {"sandbox": "sb-1"}),
+    ("validate", "DeleteSandbox", {"name": "s1"}),
+])
+def test_a_429_is_a_deny_in_every_phase_that_decides(phase, method, body):
+    ledger = GatewayLedger(gateway_id="gw-a")
+    out = osi.evaluate(
+        {"method": method, "phase": phase, "gateway_id": "gw-a", "body": body},
+        decide=lambda _p: {"outcome": "deny", "status_code": 429, "decision_id": "",
+                           "retry_after": 30, "limit_per_hour": 140},
+        ledger=ledger)
+    assert out["allowed"] is False and out["status_code"] == 429
+    assert out["reason"] == "decision rate limit reached (140 per hour); retry in 30 s"
+    assert out["log_annotations"] == {} and not out.get("patches")
+
+
+def test_a_429_is_a_deny_whatever_else_the_answer_says():
+    out = osi.evaluate(
+        {"method": "UpdateConfig", "phase": "validate", "body": {"sandbox": "sb"}},
+        decide=lambda _p: {"outcome": "allow", "status_code": 429,
+                           "decision_id": "01ABCDEFGHJKMNPQRSTVWXYZ00"})
+    assert out["allowed"] is False and out["status_code"] == 429
+    assert out["reason"] == "decision rate limit reached"
+    assert out["log_annotations"] == {}  # nothing was sealed: there is no decision to name
+
+
+@pytest.mark.parametrize("answer, reason", [
+    ({"retry_after": 30, "limit_per_hour": 600},
+     "decision rate limit reached (600 per hour); retry in 30 s"),
+    ({"retry_after": 30}, "decision rate limit reached; retry in 30 s"),
+    ({"limit_per_hour": 600}, "decision rate limit reached (600 per hour)"),
+    ({}, "decision rate limit reached"),
+    ({"retry_after": True, "limit_per_hour": True}, "decision rate limit reached"),
+    ({"retry_after": 0, "limit_per_hour": 0}, "decision rate limit reached"),
+    ({"retry_after": -5, "limit_per_hour": -5}, "decision rate limit reached"),
+    ({"retry_after": 2.5, "limit_per_hour": 600.0}, "decision rate limit reached"),
+    ({"retry_after": "30", "limit_per_hour": "600"}, "decision rate limit reached"),
+    ({"retry_after": 10 ** 9, "limit_per_hour": 10 ** 9}, "decision rate limit reached"),
+    ({"retry_after": 10 ** 9 - 1, "limit_per_hour": 1},
+     "decision rate limit reached (1 per hour); retry in 999999999 s"),
+    # What the operator reads is built from two whole numbers and nothing else.
+    ({"retry_after": "1 s\nrm -rf /", "limit_per_hour": "\u202e", "reason": "anything"},
+     "decision rate limit reached"),
+])
+def test_the_refusal_is_built_from_two_whole_numbers(answer, reason):
+    assert osi._rate_limit_reason(answer) == reason
+
+
 @pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://engine.example/",
                                  "engine.example", "https://"])
 def test_an_engine_url_that_is_not_http_is_a_deny(monkeypatch, url):
     opened = []
-    monkeypatch.setattr(cloud, "_api_opener", lambda: opened.append(url))
+    monkeypatch.setattr(transport.EngineClient, "_open",
+                        lambda self, timeout: opened.append(url))
     monkeypatch.setenv("ARTZAIN_DECISION_URL", url)
     decision = sidecar.http_decide({"request_id": "r1"})
     assert decision == {"outcome": "deny", "status_code": 503, "decision_id": ""}
-    assert opened == []  # refused before any request is attempted
+    assert opened == []  # refused before any connection is attempted
+    assert sidecar._client() is None
 
 
 @pytest.mark.parametrize("url, expected", [

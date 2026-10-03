@@ -25,6 +25,7 @@ import json
 import os
 import stat
 import sys
+import time
 import types
 
 import pytest
@@ -32,6 +33,7 @@ import pytest
 import artzain
 from artzain.openshell import interceptor as osi
 from artzain.openshell import sidecar
+from artzain.openshell.journal import Journal
 from artzain.openshell.state import GatewayLedger
 
 SANDBOX_ID = "1e04e83f-6de7-4f86-b466-2e945af3e724"
@@ -87,6 +89,8 @@ def _sidecar_env(monkeypatch):
     monkeypatch.setattr(sidecar, "_LEDGER", GatewayLedger(gateway_id="gw-a"))
     monkeypatch.setattr(sidecar, "_LATENCY", sidecar.LatencyWindow())
     monkeypatch.setattr(sidecar, "_UNDELIVERED", sidecar.Counter())
+    monkeypatch.setattr(sidecar, "_JOURNAL", Journal())
+    monkeypatch.setattr(sidecar, "_CLIENT", None)
 
 
 @pytest.fixture
@@ -733,29 +737,17 @@ def test_reports_are_sent_only_with_a_gateway_credential(monkeypatch):
 
 
 def test_the_engine_call_keeps_the_deadline_it_is_given(monkeypatch):
-    from artzain import cloud
-
     waits = []
 
-    class Answer:
-        def __init__(self):
-            self.chunks = [b"{}", b""]
+    class Client:
+        def request(self, method, target, *, headers, body=None, deadline,
+                    retry_on_reset=False):
+            waits.append(deadline - time.monotonic())
+            assert (method, body, headers["Content-Type"]) == (
+                "POST", b"{}", "application/json")
+            return 200, {}, b"{}"
 
-        def read(self, _size):
-            return self.chunks.pop(0)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_exc):
-            return False
-
-    class Opener:
-        def open(self, _request, timeout):
-            waits.append(timeout)
-            return Answer()
-
-    monkeypatch.setattr(cloud, "_api_opener", lambda: Opener())
+    monkeypatch.setattr(sidecar, "_client", lambda: Client())
     monkeypatch.setenv("OPENSHELL_SIDECAR_DECIDE_TIMEOUT_MS", "1200")
     sidecar._post_engine("https://engine.example/x", "k", {}, retry_on_reset=False)
     sidecar._post_engine("https://engine.example/x", "k", {}, retry_on_reset=False,

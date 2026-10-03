@@ -4,6 +4,99 @@ All notable changes to `@cognexuslabs/grokbot-artzain`. Headings are the
 bare version (`## 0.1.0`): the mirror's `publish-npm.yml` cuts the GitHub
 release notes for tag `grokbot-v<version>` from the matching section.
 
+## 0.1.7
+
+### Fixed
+
+- **"If the install fails" covers `command not found` after a global
+  install.** The README put that message down to a missing `-g` alone. It
+  also appears when `npm install -g` succeeded and the folder npm puts
+  global commands in is not on the shell's PATH, as seen on a Bot's own
+  computer (Linux, npm 9.2.0). A new row says how to find that folder
+  (`npm config get prefix`; the command is in its `bin/` on Linux and
+  macOS), how to confirm by running the command by its full path, and the
+  fix: put the folder on the PATH of the shell that runs the command, or
+  link the command into a folder already on it. `SKILL.md` points to the
+  row from its install step.
+- **"Add the skill to the Bot" is the route an ordinary Bot has.** The
+  README said to open the Bot, choose "Manage plugins and skills", then
+  "Add new skill". In Grok Bot desktop 0.66 that screen opens from Connect
+  apps, then "N installed" in the Marketplace dialog; it lists the Private
+  skills and, for an ordinary Bot, has no button that adds one. "Add new
+  skill" is in the Team Bot setup. The step now says to attach `SKILL.md`
+  to the chat and ask the Bot to save it as a skill, then to open the saved
+  skill and compare its instructions with the file. It also says what
+  follows if the saved skill is shared by every Bot on the team, as the Bot
+  says it is: each Bot's computer needs the command and the key.
+- **"Give it the key" no longer names a button that is not there.** The
+  README said "Add new secret". An ordinary Bot has no secrets screen:
+  asked for it in the chat, the Bot takes a secret in a card with a secure
+  input. The form that takes a secret's name and value is in a Team Bot's
+  plugins dialog. The README and `SKILL.md` give both routes. A Grok Bot
+  secret is an environment variable in the Bot's shell commands, so
+  `COGNEXUS_API_KEY` is still the name, and `grokbot-artzain enroll`, run
+  from the Bot, is still the check.
+- **The skill says it covers an action taken through a plugin or
+  connector.** `SKILL.md`'s description and its list of what needs a
+  decision named emails, messages, posting, payments and commands, and
+  never said that an action a plugin performs counts. Tested in Grok Bot
+  desktop 0.66 with the skill saved: a Bot with a Slack plugin, asked to
+  send a Slack message, sent it, and no decision was recorded. A Bot uses a
+  skill when it judges the skill relevant, and the plugin has a skill of
+  its own. The description now says the gate comes first whatever tool
+  performs the action, and names Slack, Teams and other chat messages. The
+  body says it near the top: ask first, then use the plugin. It also shows
+  the command for an action a plugin takes.
+- **The setup gives each Bot a standing rule.** Nothing in a Bot's own
+  instructions said to ask before every side effect, so whether it asked
+  depended on which skill it picked. A new step 5 in the README, and the
+  same step in `SKILL.md`, has a sentence to send to each Bot, to keep in
+  its instructions or its memory: before any action with a side effect,
+  plugins and connectors included, use the ArtzAIn Decision Gate first and
+  act only on allow. With that rule, and a Description naming Slack,
+  plugins and connectors, the Bot that had skipped the gate ran
+  `grokbot-artzain decide` before its next Slack message: one Bot, one
+  test. The rule raises the odds. It is not enforcement: Grok Bot has no
+  hook that runs before a tool, and the Agent Catalog flags a Bot that
+  sends no decisions. The rule covers the messages Bots send to each other
+  as well, one decision per message: the step says so, and gives a
+  sentence that leaves them out.
+
+- **The README says what the gate decides.** A new setup shows every call
+  allowed, and nothing said why: each call is judged by the team's policy
+  bundle, and a bundle with no rule about what a Bot sends or spends allows
+  an ordinary email or message and records it. A new section,
+  "What the gate decides", says so, points to the Grok Bot rule set and
+  where each rule is described, and says three things about it: a match is
+  a deny, the rules read every argument, and an email needs an approval
+  phrase in the call's first argument. `SKILL.md` tells the Bot how to pass one, and only
+  after a person has approved that exact action.
+
+### Changed
+
+- **Compare a skill you saved earlier with this version's `SKILL.md`.** A
+  saved skill keeps the text it was saved with, its Description included,
+  so a Bot follows the old text until you replace it (README, step 4).
+- "Try it" is step 6 and tests two actions in a new conversation: a test
+  email, and one that goes through a plugin or connector the Bot has, such
+  as a Slack message. Each should have its decision in the Audit log.
+- The README's "How these steps were checked" says what was seen on
+  2 October 2026 and what is still untried: whether the standing rule lasts
+  into a new conversation, and the sentence that leaves out messages
+  between Bots.
+- The README names the setting under which Grok Bot works on your own
+  computer: "Execution on this computer", under Settings → Computer.
+- `SKILL.md` tells the Bot to take the key only as a secret: not to ask
+  for it in a message, and not to print or repeat it.
+- The README says how its steps were checked. Walked through in Grok Bot
+  desktop 0.66 for Windows, with ordinary Bots: Settings; that an ordinary
+  Bot has no secrets screen; giving a Bot the key through the card in the
+  chat; having a Bot save `SKILL.md` as a skill; the skills screen. Read
+  from the app's text and not tried: the Team Bot's secrets form and its
+  "Add new skill".
+- The command and the library are as in 0.1.6. This release carries the
+  text above.
+
 ## 0.1.6
 
 ### Fixed

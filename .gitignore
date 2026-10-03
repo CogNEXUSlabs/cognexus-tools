@@ -7,6 +7,8 @@ __pycache__/
 htmlcov/
 dist/
 build/
+# A wheel built to rehearse an image (images/<name>/wheels/).
+images/*/wheels/*.whl
 .venv/
 venv/
 

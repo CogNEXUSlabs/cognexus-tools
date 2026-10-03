@@ -1779,6 +1779,29 @@ def cmd_gui(args: argparse.Namespace) -> None:
     launch_gui(base_url, api_key=api_key or "", port=port, no_browser=no_browser)
 
 
+def cmd_connect_openshell(args: argparse.Namespace) -> None:
+    """``artzain connect openshell up|remove|status``."""
+    import json as _json
+
+    from artzain.openshell import connect
+
+    host = connect.Host()
+    try:
+        if args.connect_command == "up":
+            # The token comes from the environment only: an argument would be
+            # on display in the process list.
+            connect.up(host, token=os.environ.get("ARTZAIN_ENROLL_TOKEN", "").strip(),
+                       digest=(args.config_digest or "").strip().lower(),
+                       engine=args.engine, proxy=args.proxy or "",
+                       ca_bundle=args.ca_bundle or "", port=args.port)
+        elif args.connect_command == "remove":
+            connect.remove(host, keep_credential=args.keep_credential)
+        else:
+            print(_json.dumps(connect.status(host), indent=2))
+    except connect.ConnectError as exc:
+        raise SystemExit(f"artzain connect openshell {args.connect_command}: {exc}") from None
+
+
 def cmd_openshell_sidecar(_args: argparse.Namespace) -> None:
     import logging
 
@@ -2213,6 +2236,53 @@ def main(argv: list[str] | None = None) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     os_sidecar.set_defaults(func=cmd_openshell_sidecar)
+
+    p_connect = sub.add_parser(
+        "connect",
+        help="Connect a runtime on this host to ArtzAIn.",
+    )
+    connect_sub = p_connect.add_subparsers(dest="connect_runtime", required=True)
+    c_openshell = connect_sub.add_parser(
+        "openshell",
+        help="Bind this host's OpenShell gateway (deb or rpm, systemd user service).",
+        description=(
+            "Binds the OpenShell gateway on this host to ArtzAIn, and undoes it.\n\n"
+            "  up      swap an enroll token for the gateway's credential, install the\n"
+            "          sidecar as a systemd user service, add the interceptor\n"
+            "          registration to gateway.toml, restart the gateway and check\n"
+            "          that a write ArtzAIn denies is refused. Run it again to\n"
+            "          finish a run that stopped.\n"
+            "  remove  put gateway.toml and gateway.env back as they were, remove\n"
+            "          the sidecar, restart the gateway unbound and revoke the\n"
+            "          credential.\n"
+            "  status  what is installed, and whether it is up (JSON).\n\n"
+            "The enroll token is read from ARTZAIN_ENROLL_TOKEN.\n"
+            "Operator steps: the ArtzAIn operator manual, chapter 17."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    c_os_sub = c_openshell.add_subparsers(dest="connect_command", required=True)
+    c_up = c_os_sub.add_parser("up", help="Bind the gateway (token in ARTZAIN_ENROLL_TOKEN).")
+    c_up.add_argument("--config-digest", default="",
+                      help="the SHA-256 of the configuration you approved, as the "
+                           "dashboard showed it")
+    c_up.add_argument("--engine", default="https://app.cognexuslabs.ai",
+                      help="the ArtzAIn engine to redeem the token at "
+                           "(default: %(default)s)")
+    c_up.add_argument("--proxy", default="",
+                      help="'env', or http://[user:password@]host[:port], for this "
+                           "run and for the sidecar")
+    c_up.add_argument("--ca-bundle", default="",
+                      help="a PEM file of the authorities to trust for the engine")
+    c_up.add_argument("--port", type=int, default=8088,
+                      help="the sidecar's loopback HTTP port (default: %(default)s)")
+    c_up.set_defaults(func=cmd_connect_openshell)
+    c_remove = c_os_sub.add_parser("remove", help="Undo up, and revoke the credential.")
+    c_remove.add_argument("--keep-credential", action="store_true",
+                          help="do not revoke the gateway's credential in the engine")
+    c_remove.set_defaults(func=cmd_connect_openshell)
+    c_status = c_os_sub.add_parser("status", help="What is installed, and whether it is up.")
+    c_status.set_defaults(func=cmd_connect_openshell)
 
     args = parser.parse_args(argv)
     args.func(args)
