@@ -10,6 +10,9 @@ through that descriptor, whatever its mode became.
 
 On Windows the modes do not apply: a file there takes its access list from
 its folder, and the SDK's default folders sit under the user's own profile.
+
+A file rewritten whole is written beside itself and moved over the old one
+(:func:`replace_file`), so a reader never sees half of it.
 """
 
 from __future__ import annotations
@@ -20,10 +23,20 @@ import os
 import stat
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 _FILE_MODE = stat.S_IRUSR | stat.S_IWUSR          # 0o600
 _DIR_MODE = stat.S_IRWXU                          # 0o700
+
+#: How long, and how often, a move of a new file over an old one is tried
+#: again. Windows refuses the move while another program has the old one
+#: open, as a virus scanner reading a file just written does, and as every
+#: reader does for a moment: tried often, so that the moment between two
+#: readers is not missed. Elsewhere a rename is never held up by a reader,
+#: and a refusal is not tried again.
+_REPLACE_RETRY_SECONDS = 5.0 if sys.platform == "win32" else 0.0
+_REPLACE_RETRY_INTERVAL = 0.002
 
 
 def _refuse_another_users(path: Path, info: os.stat_result) -> None:
@@ -109,4 +122,27 @@ def write_private(path: Path, data: bytes, *, exclusive: bool = False) -> None:
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(path)
+        raise
+
+
+def replace_file(new: str | os.PathLike[str], target: str | os.PathLike[str]) -> None:
+    """Move the file *new* over *target*, by a rename.
+
+    A move Windows refuses (``PermissionError``) is tried again every
+    :data:`_REPLACE_RETRY_INTERVAL` until :data:`_REPLACE_RETRY_SECONDS` have
+    gone. Whatever fails, *new* is removed and *target* is as it was.
+    """
+    try:
+        deadline = time.monotonic() + _REPLACE_RETRY_SECONDS
+        while True:
+            try:
+                os.replace(new, target)
+                return
+            except PermissionError:
+                if time.monotonic() >= deadline:
+                    raise
+            time.sleep(_REPLACE_RETRY_INTERVAL)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(new)
         raise

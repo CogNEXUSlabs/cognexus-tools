@@ -154,6 +154,86 @@ def test_an_exclusive_private_file_refuses_an_existing_one(tmp_path):
     assert target.read_bytes() == b"first"
 
 
+# A new file goes over the old one by a rename. Windows refuses the rename
+# while another program has the old one open, a virus scanner reading a file
+# just written, say, and lets it through once that program closes it.
+
+def _old_and_new(folder: Path) -> tuple:
+    target, new = folder / "state.json", folder / "state.json.new"
+    target.write_bytes(b"old")
+    new.write_bytes(b"new")
+    return target, new
+
+
+def test_a_replace_another_program_holds_up_waits_for_it(tmp_path, artzain_held_replace):
+    from artzain import _private_files as pf
+
+    target, new = _old_and_new(tmp_path)
+    refused = artzain_held_replace(3)
+    pf.replace_file(new, target)
+    assert target.read_bytes() == b"new" and len(refused) == 3
+    assert os.listdir(tmp_path) == ["state.json"]
+
+
+def test_only_windows_waits_for_a_file_to_be_let_go():
+    """Elsewhere a rename is never held up by a reader, so a refusal is real."""
+    from artzain import _private_files as pf
+
+    assert (pf._REPLACE_RETRY_SECONDS > 0) == (sys.platform == "win32")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows waits for the file")
+def test_off_windows_a_refused_replace_is_not_tried_again(tmp_path, monkeypatch):
+    from artzain import _private_files as pf
+
+    target, new = _old_and_new(tmp_path)
+    attempts = []
+
+    def refused(source, destination):
+        attempts.append(destination)
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(os, "replace", refused)
+    with pytest.raises(PermissionError):
+        pf.replace_file(new, target)
+    assert len(attempts) == 1 and target.read_bytes() == b"old"
+    assert os.listdir(tmp_path) == ["state.json"]
+
+
+@pytest.mark.parametrize("seconds", [0.0, 0.05])  # off Windows; a program that never lets go
+def test_a_replace_that_never_goes_through_leaves_the_file_as_it_was(
+        tmp_path, monkeypatch, artzain_held_replace, seconds):
+    from artzain import _private_files as pf
+
+    target, new = _old_and_new(tmp_path)
+    refused = artzain_held_replace(10 ** 6)
+    monkeypatch.setattr(pf, "_REPLACE_RETRY_SECONDS", seconds)
+    with pytest.raises(PermissionError):
+        pf.replace_file(new, target)
+    assert target.read_bytes() == b"old"
+    assert os.listdir(tmp_path) == ["state.json"]
+    assert (len(refused) == 1) == (seconds == 0.0)
+
+
+def test_only_a_refused_replace_is_tried_again(tmp_path, monkeypatch):
+    """Waiting mends a file another program holds, not a failing disk."""
+    from artzain import _private_files as pf
+
+    target, new = _old_and_new(tmp_path)
+    monkeypatch.setattr(pf, "_REPLACE_RETRY_SECONDS", 5.0)
+    attempts = []
+
+    def failing(source, destination):
+        attempts.append(destination)
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(os, "replace", failing)
+    with pytest.raises(OSError):
+        pf.replace_file(new, target)
+    assert len(attempts) == 1 and target.read_bytes() == b"old"
+    assert os.listdir(tmp_path) == ["state.json"]
+
+
 # ── artzain local ─────────────────────────────────────────────────────────────
 
 def _manifest() -> dict:
@@ -244,6 +324,18 @@ def test_a_database_dump_is_private(workspace, monkeypatch, loose_umask):
     assert _mode(local.backups_dir()) == 0o700
     with gzip.open(target, "rb") as fh:
         assert fh.read() == payload
+
+
+def test_a_stack_file_another_program_holds_up_is_still_written(workspace, artzain_held_replace):
+    """A program reading ``.env`` on Windows, a virus scanner say, made the
+    rename fail, and the command with it."""
+    workspace.mkdir()
+    env = workspace / ".env"
+    env.write_text("OLD=1\n", encoding="utf-8")
+    refused = artzain_held_replace(3)
+    local._write_atomic(env, "NEW=1\n", private=True)
+    assert env.read_text(encoding="utf-8") == "NEW=1\n" and len(refused) == 3
+    assert os.listdir(workspace) == [".env"]
 
 
 # ── artzain policy keygen ─────────────────────────────────────────────────────

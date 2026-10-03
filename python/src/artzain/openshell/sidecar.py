@@ -18,8 +18,9 @@ been told what the base policy is, such a create is refused.
 The gateway calls the gRPC ``GatewayInterceptor`` service
 (:mod:`artzain.openshell.servicer`), served on ``OPENSHELL_SIDECAR_GRPC``
 when that is set. The HTTP routes are for the ArtzAIn catalog and for tools:
-``GET /artzain/inventory``, ``POST /v1/evaluate``, ``POST /artzain/ocsf``, and
-an open ``GET /healthz``.
+``GET /artzain/inventory``, ``GET /artzain/reports`` (whether the engine took
+the last heartbeat and inventory), ``POST /v1/evaluate``, ``POST
+/artzain/ocsf``, and an open ``GET /healthz``.
 
 Settings (environment):
 
@@ -59,6 +60,11 @@ Settings (environment):
   operator's own CLI identity (``SandboxClient.from_active_cluster()``),
   so it is off unless this is set. Unset, the inventory is what the
   sidecar has seen commit.
+* ``OPENSHELL_SIDECAR_LIST_CLI``: an ``openshell`` CLI to list every
+  workspace's sandboxes with (``sandbox list --all-workspaces -o json``) for
+  each inventory, instead. ``artzain connect openshell`` sets it to the CLI
+  the operator registered with the gateway; it runs as the sidecar's user,
+  with that user's CLI identity, and is not given the credential.
 * ``OPENSHELL_REGISTRATION_DIGEST``: the SHA-256 of the gateway
   registration this sidecar was installed with, sent in the heartbeat.
 * ``OPENSHELL_SIDECAR_BASE_POLICY``: a file to keep the delivered base
@@ -94,6 +100,7 @@ import io
 import json
 import logging
 import os
+import subprocess
 import threading
 import time
 import urllib.error
@@ -154,6 +161,14 @@ INVENTORY_SECONDS = 300.0
 BASE_POLICY_SECONDS = 300.0
 #: How long a change waits before it is sent, so a burst is one snapshot.
 INVENTORY_CHANGE_DELAY_SECONDS = 5.0
+#: A CLI listing: sandboxes per page, the most pages read, and the deadline
+#: for all of them. More pages than this is more sandboxes than a snapshot
+#: carries.
+LIST_PAGE_SIZE = 100
+LIST_MAX_PAGES = 10
+LIST_TIMEOUT_SECONDS = 30.0
+#: What the CLI is not given: it needs neither to list sandboxes.
+_NOT_FOR_THE_CLI = ("COGNEXUS_API_KEY", "OPENSHELL_SIDECAR_TOKEN")
 _MIN_INTERVAL_SECONDS, _MAX_INTERVAL_SECONDS = 30.0, 3600.0
 
 
@@ -211,6 +226,57 @@ def sdk_list(workspaces: Sequence[str]) -> Dict[str, List[Dict[str, str]]]:
     return listed
 
 
+def list_cli() -> str:
+    """The CLI ``OPENSHELL_SIDECAR_LIST_CLI`` names, or empty."""
+    return (os.environ.get("OPENSHELL_SIDECAR_LIST_CLI") or "").strip()
+
+
+def _field(value: Any) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def cli_list(cli: str, *, run: Optional[Callable[..., Any]] = None,
+             timeout: float = LIST_TIMEOUT_SECONDS) -> List[Dict[str, str]]:
+    """Every sandbox on the gateway, in every workspace, as the ``openshell``
+    CLI lists them: ``sandbox list --all-workspaces -o json``, page by page.
+    Each entry is its workspace, id, name and phase. Raises when a page
+    cannot be had or read, when the pages do not end, or after *timeout*.
+
+    The CLI runs with the sidecar's environment, so it uses the gateway and
+    identity its user registered; it is not given the credential.
+    """
+    run = run or subprocess.run
+    env = {name: value for name, value in os.environ.items() if name not in _NOT_FOR_THE_CLI}
+    env["NO_COLOR"] = "1"
+    deadline = time.monotonic() + timeout
+    listed: List[Dict[str, str]] = []
+    token = ""
+    for _page in range(LIST_MAX_PAGES):
+        argv = [cli, "sandbox", "list", "--all-workspaces", "-o", "json",
+                "--page-size", str(LIST_PAGE_SIZE)]
+        if token:
+            argv += ["--page-token", token]
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("the sandbox listing took too long")
+        done = run(argv, env=env, stdin=subprocess.DEVNULL, capture_output=True,
+                   timeout=left, check=False)
+        if done.returncode != 0:
+            raise RuntimeError(f"openshell sandbox list exited {done.returncode}")
+        page = json.loads(done.stdout)
+        sandboxes = page.get("sandboxes") if isinstance(page, dict) else None
+        token = page.get("next_page_token") if isinstance(page, dict) else None
+        if not isinstance(sandboxes, list) or not isinstance(token, str):
+            raise ValueError("openshell sandbox list printed no page of sandboxes")
+        listed += [{"workspace": _field(item.get("workspace")) or DEFAULT_WORKSPACE,
+                    "id": _field(item.get("id")), "name": _field(item.get("name")),
+                    "phase": _field(item.get("phase"))}
+                   for item in sandboxes if isinstance(item, dict)]
+        if not token:
+            return listed
+    raise RuntimeError(f"openshell sandbox list has more than {LIST_MAX_PAGES} pages")
+
+
 def _entry(sandbox_id: str, name: str, phase: str, policy_hash: str) -> Dict[str, Any]:
     return {"id": sandbox_id, "name": name, "phase": phase, "command": "",
             "base_policy_hash": "", "effective_policy_hash": policy_hash,
@@ -219,12 +285,17 @@ def _entry(sandbox_id: str, name: str, phase: str, policy_hash: str) -> Dict[str
 
 def snapshot(ledger: Optional[GatewayLedger] = None, *,
              workspaces: Optional[Sequence[str]] = None,
-             lister: Optional[ListFn] = None) -> Dict[str, Any]:
+             lister: Optional[ListFn] = None,
+             cli: Optional[str] = None) -> Dict[str, Any]:
     """This gateway's sandboxes, as the engine's inventory route takes them.
 
     Never raises. ``partial`` says the list may not be every sandbox:
 
-    * With *workspaces* to list, each is listed whole, and what the listing
+    * With a *cli* to list through (``OPENSHELL_SIDECAR_LIST_CLI`` by
+      default), every workspace is listed, and the listing replaces what the
+      ledger held. ``partial`` is false. If the listing fails, the snapshot is
+      what the ledger holds, it is partial, and ``error`` names the failure.
+    * Otherwise, with *workspaces* to list, each is listed whole, and what the listing
       returns replaces what the ledger held for it. ``partial`` is false.
       If a listing fails, the snapshot is what the ledger holds, it is
       partial, and ``error`` names the failure.
@@ -237,11 +308,22 @@ def snapshot(ledger: Optional[GatewayLedger] = None, *,
     reported to this sidecar. One it has not seen is sent empty.
     """
     ledger = ledger if ledger is not None else _LEDGER
+    cli = list_cli() if cli is None else cli
     workspaces = list_workspaces() if workspaces is None else list(workspaces)
     error = ""
     phases: Dict[str, str] = {}
-    listed_whole = False
-    if workspaces:
+    listed_whole = every_workspace = False
+    if cli:
+        try:
+            everything = cli_list(cli)
+            ledger.replace_all([(entry["workspace"], entry["name"], entry["id"])
+                                for entry in everything])
+            phases.update({entry["id"]: entry["phase"] for entry in everything})
+            listed_whole = every_workspace = True
+        except Exception as exc:  # noqa: BLE001 - the snapshot is still sent, as partial
+            logger.warning("openshell listing failed: %s", type(exc).__name__)
+            error = type(exc).__name__
+    elif workspaces:
         try:
             listed = (lister or sdk_list)(workspaces)
             for workspace in workspaces:
@@ -258,7 +340,7 @@ def snapshot(ledger: Optional[GatewayLedger] = None, *,
             logger.warning("openshell listing failed: %s", type(exc).__name__)
             error = type(exc).__name__
     known = ledger.sandboxes()
-    if listed_whole:
+    if listed_whole and not every_workspace:
         # Only what was listed: a workspace that was not asked for is not in
         # a snapshot that says it is whole.
         known = [entry for entry in known if entry["workspace"] in workspaces]
@@ -742,8 +824,13 @@ def _authorized(header: str) -> bool:
 
 
 def make_handler(inventory_fn: InventoryFn, decide: DecideFn,
-                 base_policy: Optional[Dict[str, Any]] = None) -> type:
-    """HTTP handler. ``log_message`` is a no-op so tokens and bodies stay out of logs."""
+                 base_policy: Optional[Dict[str, Any]] = None,
+                 reports_fn: Optional[Callable[[], Dict[str, Any]]] = None) -> type:
+    """HTTP handler. ``log_message`` is a no-op so tokens and bodies stay out of logs.
+
+    *reports_fn* answers ``GET /artzain/reports`` (:meth:`Reporter.status`);
+    without one the sidecar reports nothing, and says so.
+    """
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A003 - stdlib hook
@@ -780,6 +867,9 @@ def make_handler(inventory_fn: InventoryFn, decide: DecideFn,
                 self._json(200, {"ok": True})
                 return
             if not self._gate():
+                return
+            if path == "/artzain/reports":
+                self._json(200, reports_fn() if reports_fn is not None else {"reporting": False})
                 return
             if path != "/artzain/inventory":
                 self._json(404, {"error": "not_found"})
@@ -919,6 +1009,26 @@ class Reporter:
         self._next_inventory = clock()
         self._sent_revision: Optional[int] = None
         self._changed_at: Optional[float] = None
+        self._status_lock = threading.Lock()
+        self._status: Dict[str, Any] = {"reporting": True, "heartbeat": "pending",
+                                        "inventory": "pending"}
+
+    def status(self) -> Dict[str, Any]:
+        """Whether the engine took the last heartbeat and the last inventory
+        (``pending`` before the first try, then ``ok`` or ``failed`` with the
+        failure's name), and what that inventory held: how many sandboxes,
+        whether it was partial, and why a listing failed."""
+        with self._status_lock:
+            return dict(self._status)
+
+    def _note(self, what: str, error: str = "", **taken: Any) -> None:
+        with self._status_lock:
+            self._status[what] = "failed" if error else "ok"
+            if error:
+                self._status[f"{what}_error"] = error
+            else:
+                self._status.pop(f"{what}_error", None)
+                self._status.update(taken)
 
     def heartbeat_body(self) -> Dict[str, Any]:
         from artzain import __version__
@@ -943,7 +1053,9 @@ class Reporter:
             answer = self._post("/api/v1/openshell/heartbeat", body)
         except Exception as exc:  # noqa: BLE001 - the loop goes on
             logger.warning("heartbeat failed: %s", type(exc).__name__)
+            self._note("heartbeat", type(exc).__name__)
             return False
+        self._note("heartbeat")
         # The engine has the count now; what failed meanwhile stays counted.
         self._undelivered.add(-int(body["undelivered_reports"]))
         self._heartbeat_every = _interval(answer, "next_heartbeat_seconds",
@@ -960,7 +1072,15 @@ class Reporter:
         except Exception as exc:  # noqa: BLE001 - the loop goes on
             logger.warning("inventory report failed: %s", type(exc).__name__)
             self._undelivered.add()
+            self._note("inventory", type(exc).__name__)
             return False
+        self._note("inventory", sandboxes=len(current["sandboxes"]),
+                   partial=bool(current["partial"]))
+        with self._status_lock:
+            if current["partial"] and current.get("error"):
+                self._status["listing_error"] = current["error"]
+            else:
+                self._status.pop("listing_error", None)
         # A listing changes the ledger too; what was sent is what it is now.
         self._sent_revision = max(revision, self._ledger.revision)
         self._changed_at = None
@@ -1135,13 +1255,14 @@ def main() -> None:
     # The gateway calls Describe when it starts, so the socket comes up first.
     grpc_endpoint = (os.environ.get("OPENSHELL_SIDECAR_GRPC") or "").strip()
     grpc_server = start_grpc(grpc_endpoint) if grpc_endpoint else None
-    handler = make_handler(inventory, http_decide)
+    reporter = reporter_for_environment(_LEDGER)
+    handler = make_handler(inventory, http_decide,
+                           reports_fn=reporter.status if reporter is not None else None)
     server = ThreadingHTTPServer((host, port), handler)
     restore = _stop_on_signal(server)
     stop_reports = threading.Event()
     threading.Thread(target=Housekeeper().run, args=(stop_reports,), daemon=True,
                      name="openshell-housekeeping").start()
-    reporter = reporter_for_environment(_LEDGER)
     if reporter is not None:
         threading.Thread(target=reporter.run, args=(stop_reports,), daemon=True,
                          name="openshell-reports").start()

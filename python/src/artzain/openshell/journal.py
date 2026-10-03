@@ -43,7 +43,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
-from artzain._private_files import private_dir, write_private
+from artzain._private_files import private_dir, replace_file, write_private
 
 logger = logging.getLogger("artzain.openshell.journal")
 
@@ -176,7 +176,7 @@ class Journal:
         try:
             private_dir(path.parent)
             write_private(temporary, json.dumps(self._document()).encode("utf-8"))
-            os.replace(temporary, path)
+            replace_file(temporary, path)
             self._save_failed = False
         except OSError as exc:
             if not self._save_failed:

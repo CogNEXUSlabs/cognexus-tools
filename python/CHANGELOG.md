@@ -13,9 +13,26 @@
     gateway's own preflight passed, restarts the gateway, and checks that
     a write ArtzAIn denies is refused. A run that stopped is finished by
     running it again, with no new token.
+  - A package install on its defaults has no `gateway.toml`: `up` writes
+    one, and `remove` deletes it. The sidecar checks the gateway's signed
+    calls with the key the gateway keeps beside its TLS files when
+    `gateway.toml` names none. `up` checks that the `openshell` CLI reaches
+    the gateway before it spends the token.
   - `remove` puts `gateway.toml` and `gateway.env` back byte for byte,
     removes the sidecar and revokes the credential.
+  - The sidecar it installs lists the gateway's sandboxes, every workspace,
+    through the operator's `openshell` CLI, so its inventory is whole and
+    holds the sandboxes made before the connect. `up` ends by saying whether
+    the engine took the first heartbeat and inventory; `status` shows it
+    too. The sidecar is asked on loopback without the environment's proxy,
+    which a host behind one would otherwise have been asked for 127.0.0.1.
   - It needs Python 3.11 or later. Nothing hands out an enroll token yet.
+- **OpenShell sidecar: a whole inventory through the `openshell` CLI.**
+  With `OPENSHELL_SIDECAR_LIST_CLI` set, each inventory lists every
+  workspace (`openshell sandbox list --all-workspaces -o json`, page by
+  page) and replaces what the sidecar held, so it is not partial. The CLI
+  is not given the credential. `GET /artzain/reports` says whether the
+  engine took the last heartbeat and the last inventory.
 - **OpenShell sidecar: `Describe` and the registration come from one list
   of bindings** (`artzain.openshell.registration`), so they cannot
   disagree.
@@ -171,6 +188,20 @@
     empty.
   - `GET /artzain/inventory` answers `degraded` whenever its list may not
     be every sandbox.
+- **A file the SDK rewrites whole is written on Windows while another
+  program has it open.** Each such file is written beside itself and
+  renamed over the old one, and Windows refuses that rename while another
+  program has the old file open, a virus scanner reading the file just
+  written, say.
+  - The OpenShell sidecar gave up the write at once, and carried on
+    without it: its state file (the sandboxes' names), its report journal
+    and its base-policy copy did not survive a restart.
+  - `artzain local` failed when it rewrote `.env`, `compose.yaml` or
+    `pins.json`.
+  - A refused rename is now tried again every 2 ms for up to 5 s, as
+    `artzain connect openshell` and the credentials profile already did,
+    and the new file is removed when it still fails. Elsewhere a rename is
+    never held up by a reader, and a refused one is not tried again.
 
 ## 0.6.35
 

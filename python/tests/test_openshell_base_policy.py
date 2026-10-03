@@ -267,6 +267,19 @@ def test_a_copy_that_cannot_be_written_costs_only_the_restart(tmp_path, caplog):
     assert len([r for r in caplog.records if "not written" in r.getMessage()]) == 1
 
 
+def test_a_copy_another_program_holds_up_is_not_lost(cache, artzain_held_replace, caplog):
+    """Windows refuses the rename while another program has the copy open.
+    It was given up at once, and a restart had the old answer."""
+    store = _store(cache)
+    store.accept(_answer(None))
+    refused = artzain_held_replace(3)
+    with caplog.at_level("WARNING", logger="artzain.openshell.base_policy"):
+        assert store.accept(_answer()) is True
+    assert _store(cache).current() == (bp.HAVE, POLICY)
+    assert len(refused) == 3 and "not written" not in caplog.text
+    assert os.listdir(os.path.dirname(cache)) == ["base-policy.json"]
+
+
 def test_the_same_answer_again_is_not_written_again(cache):
     store = _store(cache)
     store.accept(_answer())
