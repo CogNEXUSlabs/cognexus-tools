@@ -102,6 +102,12 @@ jobs:
           cache: npm
           cache-dependency-path: typescript/package-lock.json
 
+      # The npm and the step order of publish-npm.yml, which runs these
+      # only on a release tag: a lockfile only one npm accepts, or a test
+      # that changes once dist/ exists, would otherwise first fail there.
+      - name: Use the publish job's npm
+        run: npm install -g npm@12.1.0
+
       - name: Install
         run: npm ci
 
@@ -127,14 +133,17 @@ jobs:
           cache: npm
           cache-dependency-path: openclaw/package-lock.json
 
+      - name: Use the publish job's npm
+        run: npm install -g npm@12.1.0
+
       - name: Install
         run: npm ci
 
-      - name: Test
-        run: npm test
-
       - name: Build
         run: npm run build
+
+      - name: Test
+        run: npm test
 
   n8n:
     name: n8n nodes
@@ -152,14 +161,17 @@ jobs:
           cache: npm
           cache-dependency-path: n8n/package-lock.json
 
+      - name: Use the publish job's npm
+        run: npm install -g npm@12.1.0
+
       - name: Install
         run: npm ci
 
-      - name: Test
-        run: npm test
-
       - name: Build
         run: npm run build
+
+      - name: Test
+        run: npm test
 
   grokbot:
     name: Grok Bot skill
@@ -177,11 +189,14 @@ jobs:
           cache: npm
           cache-dependency-path: grokbot/package-lock.json
 
+      - name: Use the publish job's npm
+        run: npm install -g npm@12.1.0
+
       - name: Install
         run: npm ci
 
-      - name: Test
-        run: npm test
-
       - name: Build
         run: npm run build
+
+      - name: Test
+        run: npm test

@@ -14,7 +14,9 @@ for CI and guard-sync until those jobs move here.
 | **`@cognexuslabs/n8n-nodes-artzain`** | `npm i @cognexuslabs/n8n-nodes-artzain` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/n8n-nodes-artzain)](https://www.npmjs.com/package/@cognexuslabs/n8n-nodes-artzain) | n8n Decision + Envelope nodes (fail closed on HTTP 503; `review` does not Wait) |
 | **`@cognexuslabs/grokbot-artzain`** | `npm install -g @cognexuslabs/grokbot-artzain` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/grokbot-artzain)](https://www.npmjs.com/package/@cognexuslabs/grokbot-artzain) | Grok Bot cooperative Decision skill, opt-in announce, and pull enroll (no host intercept) |
 
-All five are Apache-2.0.
+All five are Apache-2.0. `artzain` also ships the OpenShell sidecar, as
+the `[openshell]` extra, as a signed image on GHCR, and with a one-command
+connect script on each release ([OpenShell](#openshell-artzainopenshell)).
 
 Each package is versioned and released on its own. Its release tag publishes
 it and creates a GitHub Release carrying that version's changelog section
@@ -34,6 +36,7 @@ typescript/   # npm package @cognexuslabs/artzain
 openclaw/     # npm package @cognexuslabs/openclaw-artzain
 n8n/          # npm package @cognexuslabs/n8n-nodes-artzain
 grokbot/      # npm package @cognexuslabs/grokbot-artzain
+images/       # the OpenShell sidecar image (ghcr.io/cognexuslabs/artzain-openshell-sidecar)
 ```
 
 Engine dual-home paths (private repo): `pypi-package/`, `sdk/typescript/`,
@@ -290,6 +293,39 @@ intercept, so the Bot itself runs `grokbot-artzain decide` before a
 side-effect. `deny`, `review`, and transport errors fail closed. The setup
 steps, the Windows notes, opt-in announce and default-on pull enroll are in
 [`grokbot/README.md`](grokbot/README.md).
+
+## OpenShell (`artzain[openshell]`)
+
+`artzain` carries a sidecar that binds an NVIDIA OpenShell gateway to
+ArtzAIn: the gateway calls it before each governed write, and it decides
+through the Decision API and fails closed. The `[openshell]` extra adds what
+the gateway's gRPC interceptor needs (`grpcio`, `protobuf`,
+`cryptography`).
+
+**Connect a gateway with one command.** From 0.6.37, each `python-v<version>`
+release here carries `connect-<version>.sh` and its `.sha256`. On the
+gateway's host, as the user the gateway runs as, with the enroll token and
+configuration digest ArtzAIn issues once the gateway's connect is approved:
+
+```bash
+curl -fsSLO https://github.com/CogNEXUSlabs/cognexus-tools/releases/download/python-v0.6.37/connect-0.6.37.sh
+echo '<the SHA-256 you were shown>  connect-0.6.37.sh' | sha256sum -c -
+export ARTZAIN_ENROLL_TOKEN='<the token you were given>'
+sh connect-0.6.37.sh --config-digest <the digest you were shown>
+```
+
+The script checks its own pinned uv by SHA-256, installs
+`artzain[openshell]==<version>` as a uv tool, and runs `artzain connect
+openshell up`, which installs the sidecar as a systemd user service beside
+the gateway that OpenShell's deb or rpm package runs. `artzain connect
+openshell status`, `doctor`, `rotate-key` and `remove` run from where the
+script says. Linux on x86_64 or aarch64 only, for now.
+
+**The sidecar as an image**, for a gateway that runs in containers:
+`ghcr.io/cognexuslabs/artzain-openshell-sidecar:<artzain version>`, built
+here from the published wheel for linux/amd64 and linux/arm64, signed and
+SBOM-attested keylessly by `sidecar-image.yml` at its `sidecar-v<version>`
+tag (see [Releases](#releases)). Run it by digest.
 
 ## Development
 
