@@ -16,6 +16,10 @@ them.
   `@cognexuslabs/artzain`, `@cognexuslabs/openclaw-artzain`,
   `@cognexuslabs/n8n-nodes-artzain` and `@cognexuslabs/grokbot-artzain` on
   npm;
+- what else its releases publish: the OpenShell sidecar image
+  `ghcr.io/cognexuslabs/artzain-openshell-sidecar`, and the
+  `connect-<version>.sh` script attached to each `python-v<version>`
+  release;
 - the hosted service at <https://app.cognexuslabs.ai>;
 - the decision engine behind it (Decision API, audit chain, policy bundles),
   which is a separate private codebase that carries this same policy.
