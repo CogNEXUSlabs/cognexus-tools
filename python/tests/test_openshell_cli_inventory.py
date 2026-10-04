@@ -398,6 +398,75 @@ def test_the_running_sidecar_serves_its_reporters_status(monkeypatch):
         thread.join(timeout=2)
 
 
+needs_unix_datagrams = pytest.mark.skipif(
+    not hasattr(__import__("socket"), "AF_UNIX") or __import__("sys").platform == "win32",
+    reason="POSIX datagram sockets")
+
+
+@needs_unix_datagrams
+def test_the_sidecar_tells_systemd_it_is_ready(monkeypatch, tmp_path):
+    """``Type=notify``: the gateway's unit, ordered after the sidecar's,
+    starts once the socket is there, not when the process is."""
+    import socket
+
+    path = str(tmp_path / "notify")
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    listener.bind(path)
+    listener.settimeout(5)
+    try:
+        monkeypatch.setenv("NOTIFY_SOCKET", path)
+        sidecar._notify_ready()
+        assert listener.recv(64) == b"READY=1"
+    finally:
+        listener.close()
+
+
+@pytest.mark.skipif(not __import__("sys").platform.startswith("linux"),
+                    reason="abstract sockets are Linux's")
+def test_an_abstract_notify_socket_is_told_too(monkeypatch):
+    import os
+    import socket
+
+    name = f"artzain-notify-test-{os.getpid()}"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    listener.bind("\0" + name)
+    listener.settimeout(5)
+    try:
+        monkeypatch.setenv("NOTIFY_SOCKET", "@" + name)
+        sidecar._notify_ready()
+        assert listener.recv(64) == b"READY=1"
+    finally:
+        listener.close()
+
+
+def test_without_systemd_nothing_is_told(monkeypatch):
+    monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
+    sidecar._notify_ready()  # no socket, no error
+
+
+def test_a_notify_socket_that_is_gone_does_not_stop_the_sidecar(monkeypatch, tmp_path):
+    monkeypatch.setenv("NOTIFY_SOCKET", str(tmp_path / "gone"))
+    sidecar._notify_ready()
+
+
+def test_the_sidecar_is_ready_once_it_listens_and_before_it_serves(monkeypatch):
+    order = []
+
+    class _Server:
+        def __init__(self, address, handler):
+            order.append("bind")
+
+        def serve_forever(self):
+            order.append("serve")
+
+    monkeypatch.delenv("OPENSHELL_SIDECAR_GRPC", raising=False)
+    monkeypatch.setattr(sidecar, "warm", lambda: None)
+    monkeypatch.setattr(sidecar, "ThreadingHTTPServer", _Server)
+    monkeypatch.setattr(sidecar, "_notify_ready", lambda: order.append("ready"))
+    sidecar.main()
+    assert order == ["bind", "ready", "serve"]
+
+
 def test_the_reports_route_needs_the_token_when_one_is_set(monkeypatch):
     monkeypatch.setenv("OPENSHELL_SIDECAR_TOKEN", "sidecar-secret")
     handler = sidecar.make_handler(lambda: {}, _never, reports_fn=lambda: {"reporting": True})

@@ -706,7 +706,10 @@ def sidecar_unit(host: Host, paths: Layout) -> str:
         f"Before={GATEWAY_UNIT}\n"
         "\n"
         "[Service]\n"
-        "Type=simple\n"
+        # Started once it serves (sd_notify READY=1): the gateway's unit is
+        # ordered after this one, and must not start before the socket is there.
+        "Type=notify\n"
+        "NotifyAccess=main\n"
         f"EnvironmentFile={paths.sidecar_env.as_posix()}\n"
         f'ExecStart="{python}" -m artzain.cli openshell sidecar\n'
         "Restart=on-failure\n"
@@ -1160,6 +1163,131 @@ def remove(host: Host, *, keep_credential: bool = False,
 
 
 # ---------------------------------------------------------------------------
+# rotate-key
+# ---------------------------------------------------------------------------
+
+#: How long ``rotate-key`` waits for the sidecar, restarted with the new
+#: credential, to have its heartbeat taken.
+ROTATE_WAIT_SECONDS = 45.0
+_ROTATE_REFUSALS = {
+    401: "the engine does not take this gateway's credential: the gateway was revoked; "
+         "connect it again with a new token",
+    403: "the engine refused the credential for this gateway",
+    409: "the gateway already holds two live keys: run `artzain connect openshell "
+         "rotate-key` again",
+    429: "too many key rotations in an hour: wait, then run it again",
+    503: "the engine could not write the keys: run it again",
+}
+
+
+def _with_key(text: str, credential: str) -> str:
+    """The sidecar's settings with *credential* in place of the one they hold.
+    Raises :class:`ConnectError` unless they hold exactly one."""
+    lines = text.splitlines(keepends=True)
+    found = [i for i, line in enumerate(lines) if line.startswith("COGNEXUS_API_KEY=")]
+    if len(found) != 1:
+        raise ConnectError("the sidecar's settings do not hold exactly one credential: run "
+                           "`artzain connect openshell remove`, then `up` with a new token")
+    lines[found[0]] = f'COGNEXUS_API_KEY="{credential}"\n'
+    return "".join(lines)
+
+
+def _sidecar_takes_the_key(host: Host, port: int) -> bool:
+    """Restart the sidecar (the gateway, which requires it, restarts with it)
+    and wait until it says whether the engine took its heartbeat. True when
+    it did."""
+    _check(_systemctl(host, "restart", SIDECAR_UNIT, timeout=120), f"restarting {SIDECAR_UNIT}")
+    seen: Dict[str, Any] = {}
+
+    def heard() -> bool:
+        seen["reports"] = reports = host.reports(port)
+        return isinstance(reports, dict) and reports.get("heartbeat") in ("ok", "failed")
+
+    _wait(host, ROTATE_WAIT_SECONDS, heard)
+    reports = seen.get("reports")
+    return isinstance(reports, dict) and reports.get("heartbeat") == "ok"
+
+
+def rotate_key(host: Host, *, out: Callable[[str], None] = print) -> Dict[str, Any]:
+    """Swap this gateway's credential for a new one.
+
+    The live credential first retires any other key (one an earlier run
+    minted and never put in use), then mints the next. The new one goes into
+    the sidecar's settings, and the sidecar restarts with it. Once the
+    engine has taken a heartbeat sent with it, the new credential retires
+    the old. If the engine does not take it, the settings go back to the old
+    credential, which then takes the new one back. Nothing here says a
+    credential.
+    """
+    paths = layout(host)
+    record = Record.load(paths.record)
+    data = record.data
+    if not data.get("connected") or not data.get("gateway_id"):
+        raise ConnectError("this host's gateway is not connected: run "
+                           "`artzain connect openshell up`")
+    saved = _saved(paths)
+    before = paths.sidecar_env.read_bytes()
+    _with_key(before.decode("utf-8"), CREDENTIAL_PREFIX + "0")  # one credential, or stop here
+    unit = sidecar_unit(host, paths)  # one systemd can run, or stop here
+    old = saved["COGNEXUS_API_KEY"]
+    gateway_id = str(data["gateway_id"])
+    route = (str(data.get("engine") or DEFAULT_ENGINE).rstrip("/")
+             + f"/api/v1/openshell/gateways/{gateway_id}/keys")
+    port = int(data.get("port") or DEFAULT_PORT)
+
+    def call(tail: str, credential: str) -> Tuple[int, Any]:
+        try:
+            return host.post_json(route + tail, headers={"X-Api-Key": credential}, body={},
+                                  proxy=saved.get("OPENSHELL_SIDECAR_PROXY", ""),
+                                  ca_bundle=saved.get("OPENSHELL_SIDECAR_CA_BUNDLE", ""))
+        except Exception as exc:  # noqa: BLE001 - said without the credential
+            raise ConnectError(f"the engine could not be reached ({type(exc).__name__})") from None
+
+    def refused(status: int) -> ConnectError:
+        return ConnectError(_ROTATE_REFUSALS.get(status, f"the engine refused (HTTP {status})"))
+
+    status, _answer = call("/retire-others", old)
+    if status != 200:
+        raise refused(status)
+    status, answer = call("", old)
+    if status != 200:
+        raise refused(status)
+    new = answer.get("credential") if isinstance(answer, dict) else None
+    if (not isinstance(new, str) or not new.startswith(CREDENTIAL_PREFIX) or _UNSAFE.search(new)
+            or len(new) > 256 or new == old):
+        # Whatever was minted is taken back by the key that is still in use.
+        call("/retire-others", old)
+        raise ConnectError("the engine's answer holds no gateway credential")
+
+    _replace(paths.sidecar_env, _with_key(before.decode("utf-8"), new).encode("utf-8"),
+             private=True)
+    # A sidecar connected before 0.6.37 runs as Type=simple, and the gateway
+    # that restarts with it races its socket: its unit is brought up to date.
+    if not paths.sidecar_unit.is_file() or paths.sidecar_unit.read_text(encoding="utf-8") != unit:
+        _replace(paths.sidecar_unit, unit.encode("utf-8"))
+        _check(_systemctl(host, "daemon-reload"), "systemctl --user daemon-reload")
+    if not _sidecar_takes_the_key(host, port):
+        _replace(paths.sidecar_env, before, private=True)
+        _sidecar_takes_the_key(host, port)
+        call("/retire-others", old)
+        raise ConnectError("the engine did not take the sidecar's heartbeat with the new "
+                           "credential: the sidecar is back on the old credential, and the new "
+                           "one is revoked. See `artzain connect openshell doctor`")
+    status, _answer = call("/retire-others", new)
+    retired = status == 200
+    record.mark("rotated", key_rotated_at=int(host.wall()))
+    # The gateway requires the sidecar, so it restarted with it.
+    if not _gateway_stays_up(host):
+        raise ConnectError(f"the credential is rotated, but {GATEWAY_UNIT} did not come back "
+                           f"up: see `journalctl --user -u {GATEWAY_UNIT}`")
+    _say(out, f"gateway {gateway_id}: the credential is rotated; the sidecar uses the new one"
+              + (", and the old one is revoked" if retired else
+                 f". The engine did not revoke the old one (HTTP {status}): run "
+                 "`artzain connect openshell rotate-key` again"))
+    return {"gateway_id": gateway_id, "rotated": True, "old_key_retired": retired}
+
+
+# ---------------------------------------------------------------------------
 # status
 # ---------------------------------------------------------------------------
 
@@ -1430,5 +1558,5 @@ def doctor(host: Host) -> Dict[str, Any]:
 
 __all__ = ["CONFIG_KIND", "CONFIG_VERSION", "ConnectConfig", "ConnectError", "Host", "Layout",
            "Record", "Redeemed", "Shape", "add_block", "config_digest", "detect", "layout",
-           "doctor", "parse_config", "redeem", "remove", "revoke", "self_test", "status",
-           "strip_block", "up"]
+           "doctor", "parse_config", "redeem", "remove", "revoke", "rotate_key", "self_test",
+           "status", "strip_block", "up"]

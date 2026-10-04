@@ -1796,6 +1796,8 @@ def cmd_connect_openshell(args: argparse.Namespace) -> None:
                        ca_bundle=args.ca_bundle or "", port=args.port)
         elif args.connect_command == "remove":
             connect.remove(host, keep_credential=args.keep_credential)
+        elif args.connect_command == "rotate-key":
+            connect.rotate_key(host)
         elif args.connect_command == "doctor":
             found = connect.doctor(host)
             if args.json:
@@ -2266,6 +2268,8 @@ def main(argv: list[str] | None = None) -> None:
             "          the sidecar, restart the gateway unbound and revoke the\n"
             "          credential.\n"
             "  status  what is installed, and whether it is up (JSON).\n"
+            "  rotate-key  swap the gateway's credential for a new one; the sidecar\n"
+            "          and the gateway restart, and the old credential is revoked.\n"
             "  doctor  check the services, the socket, the credential file, the\n"
             "          registration, the OpenShell release, the engine through the\n"
             "          proxy and the clock; exits 1 when a check fails.\n\n"
@@ -2296,6 +2300,8 @@ def main(argv: list[str] | None = None) -> None:
     c_remove.set_defaults(func=cmd_connect_openshell)
     c_status = c_os_sub.add_parser("status", help="What is installed, and whether it is up.")
     c_status.set_defaults(func=cmd_connect_openshell)
+    c_rotate = c_os_sub.add_parser("rotate-key", help="Swap the gateway's credential for a new one.")
+    c_rotate.set_defaults(func=cmd_connect_openshell)
     c_doctor = c_os_sub.add_parser("doctor", help="Check what binds the gateway; exit 1 on a failure.")
     c_doctor.add_argument("--json", action="store_true", help="print the checks as JSON")
     c_doctor.set_defaults(func=cmd_connect_openshell)

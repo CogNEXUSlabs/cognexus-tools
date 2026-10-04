@@ -14,6 +14,30 @@
   engine's, and whether the engine took the sidecar's reports. Each check
   is `ok`, `warn` or `FAIL`; `--json` prints them, and it exits 1 when one
   fails. It changes nothing and prints no credential.
+- **`artzain connect openshell rotate-key`.** Swaps the gateway's credential
+  for a new one: the live key retires any leftover key and mints the next,
+  the sidecar (and with it the gateway) restarts on the new one, and once
+  the engine has taken a heartbeat with it the old one is revoked. If the
+  engine does not take it, the sidecar goes back to the old credential and
+  the new one is revoked. Needs an engine with the key-rotation routes.
+- **The OpenShell connect script.** Each release on GitHub now carries
+  `connect-<version>.sh` and its SHA-256: one command, run as the
+  gateway's user, that downloads uv 0.8.15 (run only if its SHA-256 is the
+  one written into the script), installs `artzain[openshell]==<version>`
+  as a uv tool on a Python uv manages, and runs `artzain connect openshell
+  up` with its own arguments. `python -m artzain.openshell.bootstrap
+  <version>` prints it.
+
+### Fixed
+
+- **A sidecar restart no longer races the OpenShell gateway.** The
+  sidecar unit `artzain connect openshell up` writes was `Type=simple`, so
+  systemd counted the sidecar started before its socket was bound, and a
+  gateway ordered after it (at boot, after a sidecar crash, or restarted
+  with it because it requires it) could start, find no interceptor, and
+  exit. The unit is now `Type=notify`: the sidecar sends `READY=1` once
+  its socket and port are bound. `rotate-key` brings a unit written by
+  0.6.36 up to date, and waits for the gateway to be up again.
 
 ## 0.6.36
 
