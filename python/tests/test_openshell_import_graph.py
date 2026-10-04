@@ -54,7 +54,7 @@ def _modules():
 
 def test_the_package_has_the_modules_this_test_knows():
     assert {path.name for path in _modules()} == {
-        "__init__.py", "_wire.py", "base_policy.py", "connect.py", "interceptor.py",
+        "__init__.py", "_wire.py", "base_policy.py", "bootstrap.py", "connect.py", "interceptor.py",
         "journal.py", "registration.py", "servicer.py", "sidecar.py", "state.py",
         "transport.py"}
 

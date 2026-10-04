@@ -184,3 +184,21 @@ jobs:
             --title "artzain ${VERSION}" \
             --notes-file /tmp/notes.md \
             --verify-tag --latest
+
+      # The OpenShell connect script for this version, and its SHA-256: the
+      # one command an operator runs (`sh connect-<version>.sh`), which the
+      # dashboard shows with the SHA-256 to check it against. The renderer
+      # is a standard-library file of this tag's tree, run by its path; the
+      # same version always renders the same bytes, so a re-run uploads the
+      # same file (--clobber only makes the re-run succeed).
+      - name: Attach the OpenShell connect script
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#python-v}"
+          SCRIPT="connect-${VERSION}.sh"
+          python3 -I python/src/artzain/openshell/bootstrap.py "$VERSION" > "$SCRIPT"
+          sha256sum "$SCRIPT" > "$SCRIPT.sha256"
+          cat "$SCRIPT.sha256"
+          gh release upload "$GITHUB_REF_NAME" "$SCRIPT" "$SCRIPT.sha256" --clobber

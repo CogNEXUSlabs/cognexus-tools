@@ -1270,6 +1270,9 @@ def main() -> None:
         logger.info("heartbeat and inventory are not sent: they need a gateway "
                     "credential and ARTZAIN_DECISION_URL")
     logger.info("openshell sidecar listening on %s:%s", host, port)
+    # The socket and the port are bound: whatever waits for the sidecar may
+    # start now.
+    _notify_ready()
     try:
         server.serve_forever()
     finally:
@@ -1277,6 +1280,26 @@ def main() -> None:
         restore()
         if grpc_server is not None:
             grpc_server.stop(5)
+
+
+def _notify_ready() -> None:
+    """Tell systemd the sidecar serves, when it runs as a ``Type=notify``
+    unit (``NOTIFY_SOCKET`` set). The gateway's unit is ordered after the
+    sidecar's, so it starts once the socket is there instead of racing it.
+    A notification that cannot be sent is logged, and the sidecar serves on."""
+    address = os.environ.get("NOTIFY_SOCKET") or ""
+    if not address:
+        return
+    import socket
+
+    if address.startswith("@"):  # an abstract socket
+        address = "\0" + address[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.connect(address)
+            sock.sendall(b"READY=1")
+    except (OSError, AttributeError) as exc:  # AttributeError: no AF_UNIX here
+        logger.warning("could not tell systemd the sidecar is ready: %s", type(exc).__name__)
 
 
 def _stop_on_signal(server: Any) -> Callable[[], None]:

@@ -39,6 +39,7 @@ needs_tomllib = pytest.mark.skipif(sys.version_info < (3, 11), reason="connect r
 
 GATEWAY = "gw_01ABCDEFGHJKMNPQRSTVWXYZ00"
 CREDENTIAL = "cnxg_" + "k" * 43
+NEW_CREDENTIAL = "cnxg_" + "n" * 43
 TOKEN = "cnxt_" + "t" * 43
 DECISION = "01JBCDEFGHJKMNPQRSTVWXYZ00"
 CONFIG = {"kind": "artzain.openshell.connect", "version": 1,
@@ -80,6 +81,16 @@ def _done(code=0, out="", err=""):
     return subprocess.CompletedProcess([], code, out, err)
 
 
+def _settings_key(path):
+    """The credential in the sidecar's settings file, or empty."""
+    if not path.exists():
+        return ""
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("COGNEXUS_API_KEY="):
+            return line.split("=", 1)[1].strip('"')
+    return ""
+
+
 def _stat(mode, uid):
     return os.stat_result((mode, 0, 0, 1, uid, 1000, 0, 0, 0, 0))
 
@@ -119,6 +130,13 @@ class _Gateway:
         self.redeem = (200, None)
         self.revoke_status = 200
         self.revoke_raises = False
+        # The gateway's live keys, as the engine holds them, and how the key
+        # routes answer (None: as the engine would).
+        self.live_keys = [CREDENTIAL]
+        self.minted = 0
+        self.mint_answer = None
+        self.retire_status = None
+        self.key_raises = False
         self.cli_reaches = True     # the CLI is registered with the gateway
         self.revision = 3
         #: What the sidecar's /artzain/reports says, one answer per read (the
@@ -129,6 +147,9 @@ class _Gateway:
         # and the clock.
         self.socket_kind, self.socket_mode, self.socket_uid = stat.S_IFSOCK, 0o600, 1000
         self.socket_dir_mode = 0o700
+        self.sidecar_restarts = 0
+        self.gateway_after_sidecar_restart = ["active"]
+        self.gateway_states = []
         self.silent = False  # the sidecar runs, and nothing answers
         self.socket_gone = False
         self.stray = False   # something answers on the port, not the service
@@ -155,6 +176,10 @@ class _Gateway:
             verb = args[1:]
             if verb == ["daemon-reload"]:
                 return _done()
+            if verb[0] == "is-active" and verb[1] == connect.GATEWAY_UNIT and self.gateway_states:
+                state = (self.gateway_states.pop(0) if len(self.gateway_states) > 1
+                         else self.gateway_states[0])
+                self.units[connect.GATEWAY_UNIT] = state
             if verb[0] == "is-active":
                 return _done(0 if self.units.get(verb[1]) == "active" else 3,
                              self.units.get(verb[1], "inactive") + "\n")
@@ -164,6 +189,13 @@ class _Gateway:
             if verb[:2] == ["disable", "--now"]:
                 self.units[verb[2]] = "inactive"
                 return _done()
+            if verb[0] == "restart" and verb[1] == connect.SIDECAR_UNIT:
+                self.units[connect.SIDECAR_UNIT] = "active"
+                self.sidecar_restarts += 1
+                # The gateway requires the sidecar, so it restarts too: these
+                # are its states on the next looks.
+                self.gateway_states = list(self.gateway_after_sidecar_restart)
+                return _done(0)
             if verb[0] == "restart" and verb[1] == connect.GATEWAY_UNIT:
                 registered = self.toml.exists() and connect.BLOCK_BEGIN in self.toml.read_text(
                     encoding="utf-8")
@@ -199,6 +231,9 @@ class _Gateway:
     def reports(self, port):
         if self.units[connect.SIDECAR_UNIT] != "active":
             return None
+        key = _settings_key(self.paths.sidecar_env)
+        if key and key not in self.live_keys:  # the engine refuses its heartbeat
+            return dict(REPORTED, heartbeat="failed", heartbeat_error="HTTPError")
         return dict(self.reported.pop(0) if len(self.reported) > 1 else self.reported[0])
 
     def stat(self, path):
@@ -232,11 +267,36 @@ class _Gateway:
                           "credential": CREDENTIAL, "key_prefix": CREDENTIAL[:12],
                           "config_digest": DIGEST, "config": CONFIG}
             return status, answer
+        if "/keys" in url:
+            return self._keys(url, headers["X-Api-Key"])
         if url.endswith("/revoke"):
             if self.revoke_raises:
                 raise OSError("engine down")
             return self.revoke_status, {"revoked": True}
         raise AssertionError(url)
+
+    def _keys(self, url, key):
+        if self.key_raises:
+            raise OSError("engine down")
+        assert url.startswith(f"https://engine.example/api/v1/openshell/gateways/{GATEWAY}/keys")
+        if key not in self.live_keys:
+            return 401, {"detail": "Invalid API key"}
+        if url.endswith("/keys/retire-others"):
+            if self.retire_status is not None:
+                return self.retire_status, {}
+            retired = len(self.live_keys) - 1
+            self.live_keys = [key]
+            return 200, {"gateway_id": GATEWAY, "retired": retired}
+        if self.mint_answer is not None:
+            return self.mint_answer
+        if len(self.live_keys) >= 2:
+            return 409, {"detail": "the gateway already holds 2 live keys"}
+        # A new key each time: NEW_CREDENTIAL first.
+        self.minted += 1
+        new = NEW_CREDENTIAL if self.minted == 1 else "cnxg_" + str(self.minted) * 43
+        self.live_keys.append(new)
+        return 200, {"gateway_id": GATEWAY, "credential": new, "key_prefix": new[:14],
+                     "live_keys": len(self.live_keys)}
 
     def host(self, **overrides) -> connect.Host:
         settings = dict(
@@ -603,6 +663,8 @@ def test_up_binds_the_gateway_and_checks_it_is_governed(gateway):
     assert f"EnvironmentFile={paths.sidecar_env.as_posix()}\n" in unit
     assert ('ExecStart="/home/op/.local/share/uv/tools/artzain/bin/python" '
             "-m artzain.cli openshell sidecar\n") in unit
+    # Started is when the socket is there: the gateway's unit waits for it.
+    assert "Type=notify\nNotifyAccess=main\n" in unit and "Type=simple" not in unit
     assert paths.dropin.read_text(encoding="utf-8").endswith(
         f"[Unit]\nRequires={connect.SIDECAR_UNIT}\nAfter={connect.SIDECAR_UNIT}\n")
     gateway_env = paths.gateway_env.read_text(encoding="utf-8")
@@ -1225,6 +1287,226 @@ def test_a_record_that_cannot_be_read_is_said(gateway):
 
 
 # ---------------------------------------------------------------------------
+# rotate-key
+# ---------------------------------------------------------------------------
+
+KEYS = f"https://engine.example/api/v1/openshell/gateways/{GATEWAY}/keys"
+
+
+def _key_calls(gateway):
+    """``(route, the key it was sent with)`` for each call to the key routes."""
+    names = {CREDENTIAL: "old", NEW_CREDENTIAL: "new"}
+    return [(post["url"][len(KEYS):] or "/keys", names.get(post["headers"]["X-Api-Key"], "?"))
+            for post in gateway.posts if post["url"].startswith(KEYS)]
+
+
+@needs_tomllib
+def test_rotate_key_swaps_the_credential_and_retires_the_old_one(gateway):
+    _up(gateway)
+    before = gateway.paths.sidecar_env.read_text(encoding="utf-8")
+    said = []
+    result = connect.rotate_key(gateway.host(), out=said.append)
+    after = gateway.paths.sidecar_env.read_text(encoding="utf-8")
+    assert _settings_key(gateway.paths.sidecar_env) == NEW_CREDENTIAL
+    # Only the credential line changed.
+    assert after.replace(NEW_CREDENTIAL, CREDENTIAL) == before
+    assert gateway.live_keys == [NEW_CREDENTIAL]
+    assert _key_calls(gateway) == [("/retire-others", "old"), ("/keys", "old"),
+                                   ("/retire-others", "new")]
+    assert gateway.sidecar_restarts == 1
+    assert result == {"gateway_id": GATEWAY, "rotated": True, "old_key_retired": True}
+    record = json.loads(gateway.paths.record.read_text(encoding="utf-8"))
+    assert record["key_rotated_at"] == int(gateway.wall_now)
+    assert not any(CREDENTIAL in line or NEW_CREDENTIAL in line for line in said)
+    assert "rotated" in said[-1]
+    if sys.platform != "win32":
+        assert stat.S_IMODE(os.stat(gateway.paths.sidecar_env).st_mode) == 0o600
+
+
+@needs_tomllib
+def test_a_second_key_left_by_an_earlier_rotation_is_retired_first(gateway):
+    _up(gateway)
+    gateway.live_keys.append("cnxg_" + "s" * 43)  # minted, never put in use
+    connect.rotate_key(gateway.host(), out=lambda _s: None)
+    assert gateway.live_keys == [NEW_CREDENTIAL]
+    assert _key_calls(gateway)[0] == ("/retire-others", "old")
+
+
+@needs_tomllib
+def test_a_new_key_the_engine_does_not_take_is_undone(gateway, monkeypatch):
+    _up(gateway)
+    before = gateway.paths.sidecar_env.read_bytes()
+    real = gateway._keys
+
+    def minted_but_dead(url, key):
+        status, answer = real(url, key)
+        if url.endswith("/keys"):
+            gateway.live_keys.remove(NEW_CREDENTIAL)  # the engine will not take it
+        return status, answer
+
+    monkeypatch.setattr(gateway, "_keys", minted_but_dead)
+    with pytest.raises(connect.ConnectError, match="back on the old credential"):
+        connect.rotate_key(gateway.host(), out=lambda _s: None)
+    assert gateway.paths.sidecar_env.read_bytes() == before
+    assert gateway.sidecar_restarts == 2
+    assert _key_calls(gateway)[-1] == ("/retire-others", "old")
+    assert gateway.live_keys == [CREDENTIAL]
+
+
+@needs_tomllib
+@pytest.mark.parametrize("status, says", [
+    (401, "revoked"), (409, "two live keys"), (429, "wait"), (503, "run it again")])
+def test_a_mint_the_engine_refuses_changes_nothing(gateway, status, says):
+    _up(gateway)
+    before = gateway.paths.sidecar_env.read_bytes()
+    gateway.mint_answer = (status, {"detail": "no"})
+    with pytest.raises(connect.ConnectError, match=says):
+        connect.rotate_key(gateway.host(), out=lambda _s: None)
+    assert gateway.paths.sidecar_env.read_bytes() == before
+    assert gateway.sidecar_restarts == 0
+
+
+@needs_tomllib
+@pytest.mark.parametrize("answer", [
+    {"gateway_id": GATEWAY}, {"gateway_id": GATEWAY, "credential": "cnx_account_key_00000000"},
+    {"gateway_id": GATEWAY, "credential": 'cnxg_"quoted"'}, ["not", "an", "object"],
+    {"gateway_id": GATEWAY, "credential": CREDENTIAL}],
+    ids=["none", "not-a-gateway-key", "unsafe", "not-an-object", "the-old-one"])
+def test_an_answer_with_no_usable_credential_changes_nothing(gateway, answer):
+    _up(gateway)
+    before = gateway.paths.sidecar_env.read_bytes()
+    gateway.mint_answer = (200, answer)
+    with pytest.raises(connect.ConnectError, match="no gateway credential"):
+        connect.rotate_key(gateway.host(), out=lambda _s: None)
+    assert gateway.paths.sidecar_env.read_bytes() == before
+    assert gateway.sidecar_restarts == 0
+    # Whatever the engine minted, the key still in use takes it back.
+    assert _key_calls(gateway)[-1] == ("/retire-others", "old")
+
+
+@needs_tomllib
+def test_a_heartbeat_that_is_never_taken_is_not_taken_as_working(gateway, monkeypatch):
+    _up(gateway)
+    before = gateway.paths.sidecar_env.read_bytes()
+    real = gateway.reports
+
+    def pending_with_the_new_key(port):
+        if _settings_key(gateway.paths.sidecar_env) == NEW_CREDENTIAL:
+            return {"reporting": True, "heartbeat": "pending", "inventory": "pending"}
+        return real(port)
+
+    monkeypatch.setattr(gateway, "reports", pending_with_the_new_key)
+    with pytest.raises(connect.ConnectError, match="back on the old credential"):
+        connect.rotate_key(gateway.host(reports=pending_with_the_new_key), out=lambda _s: None)
+    assert gateway.paths.sidecar_env.read_bytes() == before
+    assert gateway.live_keys == [CREDENTIAL]
+
+
+@needs_tomllib
+def test_an_engine_that_cannot_be_reached_changes_nothing(gateway):
+    _up(gateway)
+    before = gateway.paths.sidecar_env.read_bytes()
+    gateway.key_raises = True
+    with pytest.raises(connect.ConnectError, match="could not be reached"):
+        connect.rotate_key(gateway.host(), out=lambda _s: None)
+    assert gateway.paths.sidecar_env.read_bytes() == before
+
+
+@needs_tomllib
+def test_an_old_key_that_could_not_be_retired_is_said_and_left_for_the_next_run(gateway):
+    _up(gateway)
+    real = gateway._keys
+    calls = {"retire": 0}
+
+    def last_retire_fails(url, key):
+        if url.endswith("/retire-others"):
+            calls["retire"] += 1
+            if calls["retire"] == 2:
+                return 503, {"detail": "down"}
+        return real(url, key)
+
+    gateway._keys = last_retire_fails
+    said = []
+    result = connect.rotate_key(gateway.host(), out=said.append)
+    assert result["rotated"] is True and result["old_key_retired"] is False
+    assert _settings_key(gateway.paths.sidecar_env) == NEW_CREDENTIAL
+    assert "run `artzain connect openshell rotate-key` again" in said[-1]
+    # The next run retires the old key with the new one first.
+    gateway._keys = real
+    connect.rotate_key(gateway.host(), out=lambda _s: None)
+    assert len(gateway.live_keys) == 1
+
+
+@needs_tomllib
+def test_rotate_key_waits_for_the_gateway_to_come_back(gateway):
+    """The gateway requires the sidecar, so it restarts with it, and is
+    `activating` for a while: the rotation ends once it is up again."""
+    _up(gateway)
+    gateway.gateway_after_sidecar_restart = ["activating", "activating", "active"]
+    connect.rotate_key(gateway.host(), out=lambda _s: None)
+    assert gateway.units[connect.GATEWAY_UNIT] == "active"
+    assert gateway.gateway_states == ["active"]  # every state was looked at
+
+
+@needs_tomllib
+def test_a_gateway_that_does_not_come_back_is_said(gateway):
+    _up(gateway)
+    gateway.gateway_after_sidecar_restart = ["failed"]
+    with pytest.raises(connect.ConnectError, match="did not come back up") as stopped:
+        connect.rotate_key(gateway.host(), out=lambda _s: None)
+    assert "the credential is rotated" in str(stopped.value)
+    assert "journalctl --user -u openshell-gateway.service" in str(stopped.value)
+    # The rotation itself was done: the new key is in use, the old one gone.
+    assert _settings_key(gateway.paths.sidecar_env) == NEW_CREDENTIAL
+    assert gateway.live_keys == [NEW_CREDENTIAL]
+
+
+@needs_tomllib
+def test_rotate_key_brings_an_older_sidecar_unit_up_to_date(gateway):
+    """A sidecar connected by 0.6.36 runs as Type=simple, and its gateway
+    raced its socket at every restart."""
+    _up(gateway)
+    unit = gateway.paths.sidecar_unit
+    unit.write_text(unit.read_text(encoding="utf-8").replace(
+        "Type=notify\nNotifyAccess=main\n", "Type=simple\n"), encoding="utf-8")
+    calls = len(gateway.calls)
+    connect.rotate_key(gateway.host(), out=lambda _s: None)
+    assert unit.read_text(encoding="utf-8") == connect.sidecar_unit(gateway.host(), gateway.paths)
+    after = [" ".join(call[1:4]) for call in gateway.calls[calls:] if call[0] == "systemctl"]
+    assert after.index("--user daemon-reload") < after.index(f"--user restart {connect.SIDECAR_UNIT}")
+
+
+def test_rotate_key_needs_a_connected_gateway(gateway):
+    with pytest.raises(connect.ConnectError, match="not connected"):
+        connect.rotate_key(gateway.host(), out=lambda _s: None)
+    assert gateway.posts == []
+
+
+@needs_tomllib
+def test_rotate_key_waits_for_an_up_that_stopped_part_way(gateway):
+    """A record that names its gateway but never passed the self-test: `up`
+    is to be finished first."""
+    _up(gateway)
+    record = json.loads(gateway.paths.record.read_text(encoding="utf-8"))
+    record["connected"] = False
+    gateway.paths.record.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(connect.ConnectError, match="not connected"):
+        connect.rotate_key(gateway.host(), out=lambda _s: None)
+    assert _key_calls(gateway) == []
+
+
+@needs_tomllib
+def test_settings_that_do_not_hold_one_credential_are_refused_before_the_engine_is_asked(gateway):
+    _up(gateway)
+    env = gateway.paths.sidecar_env
+    env.write_bytes(env.read_bytes() + f'COGNEXUS_API_KEY="{CREDENTIAL}"\n'.encode())
+    posts = len(gateway.posts)
+    with pytest.raises(connect.ConnectError, match="one credential"):
+        connect.rotate_key(gateway.host(), out=lambda _s: None)
+    assert len(gateway.posts) == posts
+
+
+# ---------------------------------------------------------------------------
 # doctor
 # ---------------------------------------------------------------------------
 
@@ -1466,6 +1748,23 @@ def test_doctor_prints_each_check_and_fails_when_one_does(monkeypatch, capsys):
         "FAIL  socket        the socket is 0660: group can connect",
         "warn  clock         this host's clock is 120 s off",
         "ok    engine        https://engine.example answers"]
+
+
+def test_rotate_key_runs_from_the_command_line(monkeypatch):
+    from artzain import cli
+
+    seen = []
+    monkeypatch.setattr(connect, "rotate_key", lambda host, **kw: seen.append(host) or {})
+    cli.main(["connect", "openshell", "rotate-key"])
+    assert len(seen) == 1
+
+    def refused(host, **kw):
+        raise connect.ConnectError("too many rotations in an hour")
+
+    monkeypatch.setattr(connect, "rotate_key", refused)
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["connect", "openshell", "rotate-key"])
+    assert str(stopped.value) == "artzain connect openshell rotate-key: too many rotations in an hour"
 
 
 def test_doctor_with_only_warnings_succeeds_and_can_print_json(monkeypatch, capsys):
