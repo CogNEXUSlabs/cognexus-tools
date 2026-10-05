@@ -1,0 +1,194 @@
+==> .config/openshell/gateway.toml <==
+[openshell]
+version = 2
+
+[openshell.gateway]
+bind_address = "127.0.0.1:17670"
+log_level = "info"
+
+[openshell.gateway.gateway_jwt]
+signing_key_path = "/home/operator/.config/openshell/jwt/signing.pem"
+public_key_path = "/home/operator/.config/openshell/jwt/public.pem"
+kid_path = "/home/operator/.config/openshell/jwt/kid"
+gateway_id = "laptop"
+
+[[openshell.gateway.interceptors]]
+name = "audit"
+grpc_endpoint = "unix:///run/user/1000/audit.sock"
+order = 5
+binding_policy = "allowlist"
+failure_policy = "fail_open"
+timeout = "500ms"
+
+[[openshell.gateway.interceptors.bindings]]
+rpc = "openshell.v1.OpenShell/CreateSandbox"
+phases = ["post_commit"]
+
+# >>> artzain connect openshell: added by `artzain connect openshell up`; `artzain connect openshell remove` takes it out. Do not edit.
+[[openshell.gateway.interceptors]]
+name           = "artzain"
+grpc_endpoint  = "unix:///run/user/1000/artzain/openshell.sock"
+order          = 10
+binding_policy = "allowlist"
+failure_policy = "fail_closed"
+timeout        = "60000ms"
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/CreateSandbox"
+phases = ["modify_operation", "validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/UpdateConfig"
+phases = ["modify_operation", "validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/ApproveAllDraftChunks"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/ApproveDraftChunk"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/AttachSandboxProvider"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/ClearDraftChunks"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/ConfigureProviderRefresh"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/CreateProvider"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/CreateSshSession"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/DeleteProvider"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/DeleteProviderProfile"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/DeleteProviderRefresh"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/DeleteSandbox"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/DeleteService"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/DetachSandboxProvider"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/EditDraftChunk"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/ExposeService"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/ImportProviderProfiles"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/RejectDraftChunk"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/RevokeSshSession"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/RotateProviderCredential"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/UndoDraftChunk"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/UpdateProvider"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/UpdateProviderProfiles"
+phases = ["validate"]
+
+[[openshell.gateway.interceptors]]
+name           = "artzain-observe"
+grpc_endpoint  = "unix:///run/user/1000/artzain/openshell.sock"
+order          = 20
+binding_policy = "allowlist"
+failure_policy = "fail_open"
+timeout        = "60000ms"
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/CreateSandbox"
+phases = ["post_commit"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/UpdateConfig"
+phases = ["post_commit"]
+# <<< artzain connect openshell
+==> .config/openshell/gateway.env <==
+# >>> artzain connect openshell: added by `artzain connect openshell up`; `artzain connect openshell remove` takes it out. Do not edit.
+OPENSHELL_TELEMETRY_ENABLED=false
+# <<< artzain connect openshell
+==> .config/artzain/openshell/sidecar.env <==
+# Written by `artzain connect openshell up`. It holds this gateway's
+# credential: keep it the owner's alone (0600).
+COGNEXUS_API_KEY="cnxg_stand-in-credential-not-a-real-key"
+ARTZAIN_DECISION_URL="https://engine.example"
+OPENSHELL_GATEWAY_ID="gw_00000000000000000000000000"
+OPENSHELL_SIDECAR_GRPC="unix:///run/user/1000/artzain/openshell.sock"
+OPENSHELL_SIDECAR_HOST="127.0.0.1"
+OPENSHELL_SIDECAR_PORT="8088"
+OPENSHELL_SIDECAR_DECIDE_TIMEOUT_MS="30000"
+OPENSHELL_SIDECAR_STATE="/home/operator/.local/state/artzain/openshell/state.json"
+OPENSHELL_SIDECAR_JOURNAL="/home/operator/.local/state/artzain/openshell/journal.json"
+OPENSHELL_SIDECAR_BASE_POLICY="/home/operator/.local/state/artzain/openshell/base-policy.json"
+OPENSHELL_REGISTRATION_DIGEST="c30aabd05122d45ffd1d669992ef5e5b0081c47d074e36795f427169b6b5e0d1"
+OPENSHELL_SIDECAR_LIST_CLI="/usr/bin/openshell"
+OPENSHELL_JWT_PUBLIC_KEY="/home/operator/.config/openshell/jwt/public.pem"
+OPENSHELL_JWT_GATEWAY_ID="laptop"
+==> .config/systemd/user/artzain-openshell-sidecar.service <==
+# Written by `artzain connect openshell up`; `artzain connect openshell remove`
+# deletes it.
+[Unit]
+Description=ArtzAIn sidecar for the OpenShell gateway
+Before=openshell-gateway.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+EnvironmentFile=/home/operator/.config/artzain/openshell/sidecar.env
+ExecStart="/home/operator/.local/share/uv/tools/artzain/bin/python" -m artzain.cli openshell sidecar
+Restart=on-failure
+RestartSec=2s
+UMask=0077
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
+==> .config/systemd/user/openshell-gateway.service.d/50-artzain.conf <==
+# Written by `artzain connect openshell up`; `artzain connect openshell remove`
+# deletes it. The gateway refuses to start while its interceptor does not
+# answer, so it starts after the sidecar, and stops with it.
+[Unit]
+Requires=artzain-openshell-sidecar.service
+After=artzain-openshell-sidecar.service

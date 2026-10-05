@@ -44,6 +44,15 @@
 
 ### Changed
 
+- **What `artzain connect openshell up` writes is checked for every option.**
+  `artzain.openshell.templates` renders the gateway's files for each
+  timeout a configuration can carry, each telemetry choice and each
+  `gateway.toml` an operator may start from. It checks the deployment
+  invariants on each: the sidecar on a Unix socket and HTTP on loopback, the
+  deciding registration failing closed, the credential only in the sidecar's
+  private settings, and the block taken out byte for byte. The tests hold
+  each rendering to a golden file, and the conformance run puts each
+  `gateway.toml` through OpenShell's own `config preflight`.
 - **The sidecar's heartbeat reports the gateway's own OpenShell version.**
   It asks `openshell-gateway --version` when the gateway's binary is on the
   sidecar's host (the deb or rpm gateway `artzain connect openshell` binds),

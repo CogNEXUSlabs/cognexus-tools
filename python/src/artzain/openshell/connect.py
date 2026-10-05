@@ -762,6 +762,19 @@ def check_gateway_toml(paths: Layout, toml_text: str) -> Dict[str, Any]:
     return current
 
 
+def sidecar_registration(paths: Layout, config: ConnectConfig) -> str:
+    """The registrations the sidecar is installed for, without the
+    ``[openshell]`` table a file may already have: its SHA-256 is
+    ``OPENSHELL_REGISTRATION_DIGEST``."""
+    return registration.render(f"unix://{paths.socket.as_posix()}",
+                               timeout_ms=config.interceptor_timeout_ms)
+
+
+def telemetry_line(config: ConnectConfig) -> str:
+    """The gateway's telemetry choice, as ``gateway.env`` carries it."""
+    return f"OPENSHELL_TELEMETRY_ENABLED={'true' if config.telemetry else 'false'}"
+
+
 def registration_text(paths: Layout, config: ConnectConfig, toml_text: str) -> str:
     """The registrations for this file: with ``[openshell] version = 2``
     when the file has no ``[openshell]`` table. Raises :class:`ConnectError`
@@ -925,11 +938,10 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
                      ca_bundle=ca_bundle)
         config, gateway_id = got.config, got.gateway_id
         jwt = _jwt_settings(toml_text, host)
-        text = registration.render(f"unix://{paths.socket.as_posix()}",
-                                   timeout_ms=config.interceptor_timeout_ms)
         _replace(paths.sidecar_env, sidecar_environment(
             host, paths, gateway_id, got.credential, config,
-            registration_digest=registration.digest(text), port=port, proxy=proxy,
+            registration_digest=registration.digest(sidecar_registration(paths, config)),
+            port=port, proxy=proxy,
             ca_bundle=ca_bundle, jwt=jwt).encode("utf-8"), private=True)
         record.mark("redeemed", gateway_id=gateway_id, config=got.raw_config,
                     engine=engine.rstrip("/"), port=int(port))
@@ -954,8 +966,8 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
         created = not paths.gateway_env.exists()
         if strip_block(before) is None:
             _replace(paths.env_backup, before, private=True)
-            line = f"OPENSHELL_TELEMETRY_ENABLED={'true' if config.telemetry else 'false'}"
-            _replace(paths.gateway_env, add_block(before, line), private=created)
+            _replace(paths.gateway_env, add_block(before, telemetry_line(config)),
+                     private=created)
         record.mark("gateway-env", env_sha256=_sha(before), env_created=created)
 
     # 4. The sidecar, as a service, up and answering.
@@ -1463,8 +1475,7 @@ def doctor(host: Host) -> Dict[str, Any]:
     elif body is None:
         found("registration", "fail", f"{paths.gateway_toml} holds no ArtzAIn registration")
     else:
-        expected = registration.render(f"unix://{paths.socket.as_posix()}",
-                                       timeout_ms=config.interceptor_timeout_ms)
+        expected = sidecar_registration(paths, config)
         if expected.strip() not in body:
             found("registration", "fail", f"the registration in {paths.gateway_toml} is not "
                                           "the one `up` wrote: run `artzain connect openshell "
