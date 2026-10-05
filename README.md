@@ -308,10 +308,10 @@ gateway's host, as the user the gateway runs as, with the enroll token and
 configuration digest ArtzAIn issues once the gateway's connect is approved:
 
 ```bash
-curl -fsSLO https://github.com/CogNEXUSlabs/cognexus-tools/releases/download/python-v0.6.37/connect-0.6.37.sh
-echo '<the SHA-256 you were shown>  connect-0.6.37.sh' | sha256sum -c -
+curl -fsSLO https://github.com/CogNEXUSlabs/cognexus-tools/releases/download/python-v0.6.38/connect-0.6.38.sh
+echo '<the SHA-256 you were shown>  connect-0.6.38.sh' | sha256sum -c -
 export ARTZAIN_ENROLL_TOKEN='<the token you were given>'
-sh connect-0.6.37.sh --config-digest <the digest you were shown>
+sh connect-0.6.38.sh --config-digest <the digest you were shown>
 ```
 
 The script checks its own pinned uv by SHA-256, installs
