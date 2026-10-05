@@ -56,7 +56,7 @@ def test_the_package_has_the_modules_this_test_knows():
     assert {path.name for path in _modules()} == {
         "__init__.py", "_wire.py", "base_policy.py", "bootstrap.py", "connect.py", "interceptor.py",
         "journal.py", "registration.py", "servicer.py", "sidecar.py", "state.py",
-        "transport.py"}
+        "templates.py", "transport.py"}
 
 
 @pytest.mark.parametrize("path", _modules(), ids=lambda path: path.name)
@@ -74,7 +74,7 @@ def test_every_import_is_the_standard_library_the_sdk_or_the_extra(path):
 
 @pytest.mark.parametrize("name", ["sidecar.py", "transport.py", "journal.py", "state.py",
                                   "interceptor.py", "base_policy.py", "__init__.py",
-                                  "registration.py", "connect.py"])
+                                  "registration.py", "connect.py", "templates.py"])
 def test_importing_the_sidecar_needs_nothing_but_the_standard_library(name):
     at_module_level = {module for module, top in _imports(PACKAGE / name) if top}
     assert at_module_level - set(sys.stdlib_module_names) - {"artzain", "__future__"} == set()
