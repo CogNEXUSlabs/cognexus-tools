@@ -217,21 +217,56 @@ class OperationLedger:
     * A sandbox's uuid is remembered by workspace and name, from the create
       that returned it.
 
-    Both maps are bounded: the oldest entry goes first. A restart empties
-    them, which costs a second decision in ``validate`` and an unresolved
-    name, never an allow.
+    * A write ArtzAIn sent to review is remembered by what the engine checks
+      (agent, action, target and payload) for *review_ttl_seconds*, with the
+      review's decision id, so the same write run again cites it
+      (``context.cites_review``) and an approved review releases it.
+
+    The maps are bounded: the oldest entry goes first. A restart empties
+    them, which costs a second decision in ``validate``, an unresolved name
+    or a second review, never an allow.
     """
 
     def __init__(self, *, ttl_seconds: float = 300.0, max_decisions: int = 4096,
-                 max_sandboxes: int = 20000,
+                 max_sandboxes: int = 20000, review_ttl_seconds: float = 86400.0,
+                 max_reviews: int = 1024,
                  now: Callable[[], float] = time.monotonic) -> None:
         self._ttl = ttl_seconds
         self._max_decisions = max_decisions
         self._max_sandboxes = max_sandboxes
+        self._review_ttl = review_ttl_seconds
+        self._max_reviews = max_reviews
         self._now = now
         self._lock = threading.Lock()
         self._decisions: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self._sandboxes: "OrderedDict[Tuple[str, str], str]" = OrderedDict()
+        self._reviews: "OrderedDict[str, Tuple[str, float]]" = OrderedDict()
+
+    def remember_review(self, key: str, decision_id: str) -> None:
+        """The review ArtzAIn opened for the write *key* names."""
+        if not key or not decision_id:
+            return
+        with self._lock:
+            self._reviews[key] = (decision_id, self._now() + self._review_ttl)
+            self._reviews.move_to_end(key)
+            while len(self._reviews) > self._max_reviews:
+                self._reviews.popitem(last=False)
+
+    def cited_review(self, key: str) -> str:
+        """The review to cite for the write *key* names, unless it has expired."""
+        with self._lock:
+            entry = self._reviews.get(key)
+            if entry is None:
+                return ""
+            if entry[1] < self._now():
+                del self._reviews[key]
+                return ""
+            return entry[0]
+
+    def forget_review(self, key: str) -> None:
+        """Drop a review once it released its write: one approval, one retry."""
+        with self._lock:
+            self._reviews.pop(key, None)
 
     def remember(self, decision_id: str, *, method: str, digest: str,
                  sandbox_id: str = "", base_applied: bool = False) -> None:
@@ -671,8 +706,15 @@ def _decide(request: Mapping[str, Any], method: str, body: Mapping[str, Any], *,
         if not isinstance(fetched, dict):
             return _deny("effective policy fetch failed", status_code=503), ""
 
+    asked = _decision_request(request, method, body, ledger)
+    # A write ArtzAIn sent to review cites that review when it runs again: an
+    # approved review releases it, a pending or denied one refuses it.
+    review_key = _review_key(asked) if ledger is not None else ""
+    cited = ledger.cited_review(review_key) if ledger is not None else ""
+    if cited:
+        asked["context"] = {"cites_review": cited}
     try:
-        decision = dict(decide(_decision_request(request, method, body, ledger)))
+        decision = dict(decide(asked))
     except Exception as exc:  # noqa: BLE001 - the gateway must not commit on a transport failure
         logger.warning("openshell decision call failed: %s", type(exc).__name__)
         return _deny("decision unavailable", status_code=503), ""
@@ -686,11 +728,25 @@ def _decide(request: Mapping[str, Any], method: str, body: Mapping[str, Any], *,
         return _deny("decision unavailable", status_code=503 if status == 503 else 403), ""
     if outcome != "allow":
         reason = "decision review" if outcome == "review" else "decision deny"
+        if outcome == "review" and decision_id and ledger is not None:
+            ledger.remember_review(review_key, decision_id)
         if not decision_id:
             return _deny(reason), ""
-        return _deny(f"{reason} ({decision_id})",
-                     annotations={"decision_id": decision_id}), ""
+        said = f"{reason} ({decision_id})"
+        if cited and outcome != "review":
+            said += f"; review {cited} has not released this write"
+        return _deny(said, annotations={"decision_id": decision_id}), ""
+    if cited:
+        ledger.forget_review(review_key)
     return None, decision_id
+
+
+def _review_key(asked: Mapping[str, Any]) -> str:
+    """What a review is bound to, as the engine checks a citation: the agent,
+    the action, the target and the payload (not the request id)."""
+    bound = [asked.get("agent_did"), asked.get("action"), asked.get("target"),
+             asked.get("payload")]
+    return hashlib.sha256(json.dumps(bound, sort_keys=True).encode("utf-8")).hexdigest()
 
 
 def _rate_limit_reason(decision: Mapping[str, Any]) -> str:

@@ -14,6 +14,7 @@ be dropped from the config again without a test going red.
 
 from __future__ import annotations
 
+import importlib.util
 import shutil
 import subprocess
 import sys
@@ -25,15 +26,18 @@ _PKG_DIR = Path(__file__).resolve().parents[1]
 _SRC_DIR = _PKG_DIR / "src"
 
 
-def _ruff_executable() -> str | None:
+def _ruff_executable() -> list[str] | None:
     found = shutil.which("ruff")
     if found:
-        return found
+        return [found]
     # `pip install --user ruff` puts the console script here when ~/.local/bin
     # is not on PATH (the case on a bare CI runner or a fresh dev box).
     candidate = Path.home() / ".local" / "bin" / "ruff"
     if candidate.is_file():
-        return str(candidate)
+        return [str(candidate)]
+    # A pip-installed ruff without its script on PATH (survey row 48).
+    if importlib.util.find_spec("ruff") is not None:
+        return [sys.executable, "-m", "ruff"]
     return None
 
 
@@ -43,7 +47,7 @@ def test_sdk_sources_have_no_b904_or_s110_findings() -> None:
     assert ruff is not None
     proc = subprocess.run(
         [
-            ruff,
+            *ruff,
             "check",
             str(_SRC_DIR),
             "--select",

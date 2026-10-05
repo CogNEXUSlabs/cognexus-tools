@@ -57,6 +57,9 @@ Two env vars tune the auto-panic detector:
     the process-wide panic flag automatically.
 ``COGNEXUS_KILL_SWITCH_PANIC_WINDOW_SECONDS`` (default ``60``)
     Length of the rolling window in seconds.
+
+An empty value, or one that is not a whole number (logged), is the default;
+a value below 1 counts as 1.
 """
 
 from __future__ import annotations
@@ -161,12 +164,29 @@ _global_panic: Optional[KillRecord] = None
 _default_on_kill_lock = threading.Lock()
 _default_on_kill: Optional[OnKillCallback] = None
 
+def _env_int(name: str, default: int) -> int:
+    """The whole number *name* holds, at least 1; *default* when it is unset
+    or empty, and when it is not a whole number (logged).
+
+    Read at import: a bare ``int()`` raised on an empty value (compose and
+    Kubernetes pass an unset variable through as one) or a typo, and took the
+    process down with it (survey row 61).
+    """
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return max(1, default)
+    try:
+        value = int(raw, 10)
+    except ValueError:
+        logger.warning("%s=%r is not a whole number; using %d", name, raw[:40], default)
+        return max(1, default)
+    return max(1, value)
+
+
 # Auto-panic detector — if more than _PANIC_THRESHOLD critical trips happen
 # in a rolling _PANIC_WINDOW_SECONDS, flip the global panic flag.
-_PANIC_THRESHOLD = int(os.environ.get("COGNEXUS_KILL_SWITCH_PANIC_THRESHOLD", "5"))
-_PANIC_WINDOW_SECONDS = int(
-    os.environ.get("COGNEXUS_KILL_SWITCH_PANIC_WINDOW_SECONDS", "60")
-)
+_PANIC_THRESHOLD = _env_int("COGNEXUS_KILL_SWITCH_PANIC_THRESHOLD", 5)
+_PANIC_WINDOW_SECONDS = _env_int("COGNEXUS_KILL_SWITCH_PANIC_WINDOW_SECONDS", 60)
 _panic_window: deque[float] = deque(maxlen=max(1, _PANIC_THRESHOLD * 4))
 
 

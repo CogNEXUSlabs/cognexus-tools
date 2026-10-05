@@ -52,6 +52,10 @@ services:
       # First-run bootstrap (manual §8.1): /welcome?token=<this> creates the
       # first verified platform admin — no email infrastructure needed.
       - COGNEXUS_BOOTSTRAP_TOKEN=${COGNEXUS_BOOTSTRAP_TOKEN}
+      # The dashboard's nginx is the only way in (no port is published for
+      # this service), so per-IP limits key on the address nginx saw. A
+      # proxy you put in front of the dashboard adds one, set in the .env.
+      - COGNEXUS_TRUSTED_PROXY_HOPS=${COGNEXUS_TRUSTED_PROXY_HOPS:-1}
       # Advisory enforcement posture: the engine's code defaults (manual
       # §3.3a), written out so the running posture is readable here. The first
       # decision allows and seals without registering agents; the enforcers
@@ -90,8 +94,11 @@ services:
   frontend:
     image: __FRONTEND_IMAGE__
     container_name: cognexus-local-frontend
+    # Loopback by default: its nginx proxies /api/ to the engine, so a port
+    # on every interface put the engine, login and /welcome on the LAN.
+    # COGNEXUS_UI_BIND=0.0.0.0 in .env opts in.
     ports:
-      - "${COGNEXUS_UI_PORT}:80"
+      - "${COGNEXUS_UI_BIND:-127.0.0.1}:${COGNEXUS_UI_PORT}:80"
     depends_on:
       analyzer:
         condition: service_healthy

@@ -360,8 +360,9 @@ def scan_text(text: str) -> Dict[str, int]:
 
         if contains_likely_secrets(text):
             counts["secrets"] = 1
-    except Exception:  # noqa: BLE001 - secrets check is best-effort
-        logger.debug("secrets check skipped", exc_info=True)
+    except Exception:  # noqa: BLE001 - the scan still answers, without the secrets count
+        # Secrets went uncounted, which changes the answer: not a DEBUG line.
+        logger.warning("secrets check skipped", exc_info=True)
 
     return counts
 

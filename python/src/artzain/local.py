@@ -305,7 +305,15 @@ def ui_port() -> int:
 
 
 def base_url() -> str:
+    """The dashboard's address, for links printed to the user."""
     return f"http://localhost:{ui_port()}"
+
+
+def request_base_url() -> str:
+    """The address this CLI's own requests use. The dashboard is published
+    on 127.0.0.1 only, and ``localhost`` can resolve to ``::1`` first, where
+    each connection would be refused (Windows took 2 s to try) before IPv4."""
+    return f"http://127.0.0.1:{ui_port()}"
 
 
 def ensure_workspace(manifest: dict[str, Any],
@@ -510,7 +518,7 @@ def _get_json(path: str, timeout: float = 5.0) -> dict[str, Any] | None:
     """GET a local engine endpoint; ``None`` means unreachable/not JSON —
     an answer, not an error, on a stack that may simply not be up yet."""
     try:
-        with urllib.request.urlopen(f"{base_url()}{path}",
+        with urllib.request.urlopen(f"{request_base_url()}{path}",
                                     timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except Exception:  # noqa: BLE001
@@ -547,7 +555,7 @@ def _api_post(path: str, body: dict[str, Any],
               timeout: float = 30.0) -> tuple[int, dict[str, Any]]:
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
-        f"{base_url()}{path}", data=data,
+        f"{request_base_url()}{path}", data=data,
         headers={"Content-Type": "application/json"}, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -561,7 +569,7 @@ def _api_post(path: str, body: dict[str, Any],
             # caller has — keep it, don't flatten it to {}.
             return exc.code, {"detail": raw[:300]}
     except (urllib.error.URLError, OSError) as exc:
-        raise LocalError(f"Could not reach the engine at {base_url()}: "
+        raise LocalError(f"Could not reach the engine at {request_base_url()}: "
                          f"{exc}") from exc
 
 
