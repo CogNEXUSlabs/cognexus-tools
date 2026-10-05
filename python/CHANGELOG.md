@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.6.38
+
+### Fixed
+
+- **`artzain local` limits each browser by its own address.** The engine's
+  per-address limits (sign-in, sign-up, the enquiry form and the others)
+  now read `X-Forwarded-For` only as far as the operator says proxies wrote
+  it (`COGNEXUS_TRUSTED_PROXY_HOPS`), and ignore it by default. The local
+  stack's compose file sets it to `1`, since the dashboard's nginx is the
+  only way in to the engine; a proxy you put in front of the dashboard is
+  one more, set in the workspace `.env`.
+- **A reviewed OpenShell write goes through once it is approved.** When
+  ArtzAIn answered `review` for a gateway write, the write was refused, and
+  running it again after the review was approved opened another review. The
+  sidecar now remembers the review for that exact write (action, target and
+  payload) for a day, and cites it (`context.cites_review`) when the same
+  write runs again: an approved review releases it once, a pending or denied
+  one refuses it with a reason that names the review. A restart forgets the
+  reviews.
+- **An empty or malformed kill-switch setting no longer breaks `import
+  artzain`.** `COGNEXUS_KILL_SWITCH_PANIC_THRESHOLD` and
+  `COGNEXUS_KILL_SWITCH_PANIC_WINDOW_SECONDS` set to an empty value (as
+  compose and Kubernetes pass an unset variable) or to something that is not
+  a whole number raised at import. They now fall back to their defaults (5
+  and 60), with a warning when the value is not a number, and a value below 1
+  counts as 1.
+
+- **`artzain login` keeps polling through a network error.** A poll that timed
+  out or lost its connection (the server may still be setting up the account)
+  ended the login with a traceback; it is now tried again, and a key the server
+  issued while the answer was lost is replaced by a new one on the next poll. A
+  certificate that does not verify ends the login at once, naming the error's
+  type, rather than after ten minutes. A login that fails says why when the
+  server gave a reason, and to run `artzain login` again.
+
+- **`artzain local up` publishes the dashboard on this machine only.** Its
+  port was bound on every interface, and the dashboard's nginx proxies the
+  engine's API, so the engine, sign-in and `/welcome` were reachable from the
+  local network. It now binds to `127.0.0.1`; set `COGNEXUS_UI_BIND=0.0.0.0`
+  in the workspace's `.env` to publish it. The CLI's own requests to the
+  engine name `127.0.0.1` too.
+
+### Changed
+
+- **The sidecar's heartbeat reports the gateway's own OpenShell version.**
+  It asks `openshell-gateway --version` when the gateway's binary is on the
+  sidecar's host (the deb or rpm gateway `artzain connect openshell` binds),
+  at most every ten minutes, and falls back to the installed OpenShell SDK's
+  version. It reported only the SDK's before, which the `[openshell]` extra
+  does not install, so a connected gateway reported none. ArtzAIn tells a
+  gateway's owner about OpenShell's security advisories by this version.
+
+- **A PII scan whose secrets check fails says so at WARNING.** The scan
+  still answers without the secrets count, and that line was at DEBUG,
+  invisible at the default log level.
+
+- **The PyPI page describes the OpenShell sidecar.** A new *OpenShell* section: the `[openshell]` extra, the one-command connect script each release carries, `artzain connect openshell` and the signed sidecar image.
+
 ## 0.6.37
 
 ### Changed

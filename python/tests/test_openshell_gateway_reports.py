@@ -688,6 +688,94 @@ def test_a_heartbeat_leaves_out_what_it_does_not_know(wire, monkeypatch):
                                             "undelivered_reports": 0}
 
 
+@pytest.fixture
+def gateway_binary(monkeypatch):
+    """``openshell-gateway`` on this host's PATH, answering as the test says.
+
+    The installed OpenShell SDK says 0.1.2; the ``[openshell]`` extra does not
+    install it, so on a connected gateway it is usually not there at all."""
+    said = {"path": "/usr/bin/openshell-gateway", "stdout": "openshell-gateway 0.1.3\n",
+            "stderr": "", "code": 0, "raises": None, "runs": []}
+
+    def which(name):
+        return said["path"] if name == "openshell-gateway" else None
+
+    def run(argv, **kwargs):
+        said["runs"].append((argv, kwargs))
+        if said["raises"] is not None:
+            raise said["raises"]
+        return sidecar.subprocess.CompletedProcess(argv, said["code"], stdout=said["stdout"],
+                                                   stderr=said["stderr"])
+
+    monkeypatch.setattr(sidecar.shutil, "which", which)
+    monkeypatch.setattr(sidecar.subprocess, "run", run)
+    monkeypatch.setattr(sidecar, "_sdk_openshell_version", lambda: "0.1.2")
+    monkeypatch.setitem(sidecar._gateway_version, "at", None)
+    monkeypatch.setitem(sidecar._gateway_version, "value", "")
+    return said
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_the_heartbeat_reports_the_gateways_own_version(gateway_binary, stream):
+    """The engine tells a gateway's owner about OpenShell advisories by the
+    version the heartbeat reports, so it is the gateway's, not the SDK's."""
+    gateway_binary["stdout"] = ""
+    gateway_binary[stream] = "openshell-gateway 0.1.3 (abc1234)\n"
+    assert sidecar._openshell_version() == "0.1.3"
+    [(argv, kwargs)] = gateway_binary["runs"]
+    assert argv == ["/usr/bin/openshell-gateway", "--version"]
+    assert kwargs.get("timeout") and not kwargs.get("shell")
+
+
+def test_without_the_gateways_binary_the_sdk_version_is_reported(gateway_binary, monkeypatch):
+    gateway_binary["path"] = None
+    assert sidecar._openshell_version() == "0.1.2"
+    assert gateway_binary["runs"] == []
+    monkeypatch.setitem(sidecar._gateway_version, "at", None)
+    monkeypatch.setattr(sidecar, "_sdk_openshell_version", lambda: "")
+    assert sidecar._openshell_version() == ""
+
+
+@pytest.mark.parametrize("how", ["exit 1", "no version", "timeout", "cannot run"])
+def test_a_gateway_that_does_not_say_falls_back_to_the_sdk(gateway_binary, how):
+    if how == "exit 1":
+        gateway_binary["code"] = 1
+    elif how == "no version":
+        gateway_binary["stdout"] = "openshell-gateway (development build)\n"
+    elif how == "timeout":
+        gateway_binary["raises"] = sidecar.subprocess.TimeoutExpired("openshell-gateway", 10)
+    else:
+        gateway_binary["raises"] = PermissionError("not executable")
+    assert sidecar._openshell_version() == "0.1.2"
+
+
+def test_the_gateways_version_is_asked_again_after_ten_minutes(gateway_binary, monkeypatch):
+    """The package can be upgraded under a running sidecar: the heartbeat
+    catches up within ten minutes, without a command a minute."""
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(sidecar.time, "monotonic", lambda: clock["now"])
+    assert sidecar._openshell_version() == "0.1.3"
+    gateway_binary["stdout"] = "openshell-gateway 0.1.4\n"
+    clock["now"] += sidecar.GATEWAY_VERSION_SECONDS - 1
+    assert sidecar._openshell_version() == "0.1.3"
+    assert len(gateway_binary["runs"]) == 1
+    clock["now"] += 1
+    assert sidecar._openshell_version() == "0.1.4"
+    assert len(gateway_binary["runs"]) == 2
+    assert sidecar.GATEWAY_VERSION_SECONDS == 600
+
+
+def test_a_failed_ask_is_kept_as_long_as_an_answer(gateway_binary, monkeypatch):
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(sidecar.time, "monotonic", lambda: clock["now"])
+    gateway_binary["code"] = 1
+    assert sidecar._openshell_version() == "0.1.2"
+    gateway_binary["code"] = 0
+    clock["now"] += 60
+    assert sidecar._openshell_version() == "0.1.2"
+    assert len(gateway_binary["runs"]) == 1
+
+
 def test_failed_reports_are_counted_until_a_heartbeat_gets_through(wire):
     reporter = _reporter(wire)
     wire.fail = {"heartbeat", "inventory"}

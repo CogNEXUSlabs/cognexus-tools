@@ -321,6 +321,15 @@ the gateway that OpenShell's deb or rpm package runs. `artzain connect
 openshell status`, `doctor`, `rotate-key` and `remove` run from where the
 script says. Linux on x86_64 or aarch64 only, for now.
 
+**Works with NVIDIA OpenShell**, release by release: each row is an `artzain`
+release whose sidecar passed conformance against that OpenShell release.
+
+<!-- openshell-compat:begin -->
+| artzain | OpenShell | Verified |
+|---|---|---|
+| 0.6.37 | 0.1.2 | 2026-10-04 |
+<!-- openshell-compat:end -->
+
 **The sidecar as an image**, for a gateway that runs in containers:
 `ghcr.io/cognexuslabs/artzain-openshell-sidecar:<artzain version>`, built
 here from the published wheel for linux/amd64 and linux/arm64, signed and

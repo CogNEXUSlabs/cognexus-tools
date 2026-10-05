@@ -100,6 +100,8 @@ import io
 import json
 import logging
 import os
+import re
+import shutil
 import subprocess
 import threading
 import time
@@ -950,7 +952,40 @@ def refresh_base_policy(store: base_policies.BasePolicyStore,
     return answer if store.accept(answer) else None
 
 
-def _openshell_version() -> str:
+#: How long the gateway's own version is kept before it is asked again: its
+#: package can be upgraded under a running sidecar.
+GATEWAY_VERSION_SECONDS = 600
+_VERSION_IN = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+_gateway_version: Dict[str, Any] = {"at": None, "value": ""}
+_gateway_version_lock = threading.Lock()
+
+
+def _gateway_openshell_version() -> str:
+    """What ``openshell-gateway --version`` says, when the gateway's binary is
+    on this host's PATH (the deb or rpm gateway that ``artzain connect
+    openshell`` binds), or empty. An answer, or the lack of one, is kept for
+    :data:`GATEWAY_VERSION_SECONDS`."""
+    now = time.monotonic()
+    with _gateway_version_lock:
+        at = _gateway_version["at"]
+        if at is not None and now - at < GATEWAY_VERSION_SECONDS:
+            return _gateway_version["value"]
+        value = ""
+        binary = shutil.which("openshell-gateway")
+        if binary:
+            try:
+                done = subprocess.run([binary, "--version"], capture_output=True, text=True,
+                                      timeout=10, check=False)
+                found = _VERSION_IN.search(f"{done.stdout or ''} {done.stderr or ''}")
+                if done.returncode == 0 and found:
+                    value = found.group(0)
+            except (OSError, subprocess.SubprocessError):
+                pass
+        _gateway_version.update(at=now, value=value)
+        return value
+
+
+def _sdk_openshell_version() -> str:
     """The installed OpenShell SDK's version, or empty."""
     try:
         from importlib import metadata
@@ -958,6 +993,14 @@ def _openshell_version() -> str:
         return str(metadata.version("openshell"))[:40]
     except Exception:  # noqa: BLE001 - not installed, or no metadata
         return ""
+
+
+def _openshell_version() -> str:
+    """The OpenShell version the heartbeat reports: the gateway's own when its
+    binary is on this host, else the installed OpenShell SDK's, else empty.
+    The engine tells the gateway's owner about OpenShell's security advisories
+    by it."""
+    return _gateway_openshell_version() or _sdk_openshell_version()
 
 
 def _interval(answer: Any, name: str, default: float) -> float:

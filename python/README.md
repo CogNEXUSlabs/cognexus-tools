@@ -627,6 +627,49 @@ otherwise, or with nothing fetched yet, the built-in conduct rules alone.
 
 ---
 
+## OpenShell
+
+`artzain` carries the sidecar that binds an NVIDIA OpenShell gateway to
+ArtzAIn. The gateway calls it before each governed write; it decides
+through the Decision API and fails closed. The `[openshell]` extra adds
+what the gateway's gRPC interceptor needs:
+
+```bash
+pip install 'artzain[openshell]'
+```
+
+**Connect a gateway with one command.** Each release on the
+[cognexus-tools releases page](https://github.com/CogNEXUSlabs/cognexus-tools/releases)
+(tag `python-v<version>`) carries `connect-<version>.sh` and its `.sha256`.
+ArtzAIn's dashboard shows the command, with the token and digest it issues
+once a connect is approved. On the gateway's host, as the user the gateway
+runs as:
+
+```bash
+curl -fsSLO https://github.com/CogNEXUSlabs/cognexus-tools/releases/download/python-v<version>/connect-<version>.sh
+echo '<the SHA-256 you were shown>  connect-<version>.sh' | sha256sum -c -
+export ARTZAIN_ENROLL_TOKEN='<the token you were given>'
+sh connect-<version>.sh --config-digest <the digest you were shown>
+```
+
+The script installs `artzain[openshell]` as a uv tool and runs `artzain
+connect openshell up`, which installs the sidecar as a systemd user service
+beside the gateway OpenShell's deb or rpm package runs, and ends with a
+self-test ArtzAIn must refuse. Then:
+
+```bash
+artzain connect openshell status        # what is installed, and what the engine took
+artzain connect openshell doctor        # ok / warn / FAIL per check; exit 1 on a FAIL
+artzain connect openshell rotate-key    # swap the gateway's credential
+artzain connect openshell remove        # put the gateway's files back, revoke the credential
+```
+
+**The sidecar as an image**, for a gateway that runs in containers:
+`ghcr.io/cognexuslabs/artzain-openshell-sidecar:<version>`, for linux/amd64
+and linux/arm64, signed and SBOM-attested keylessly. Run it by digest.
+
+---
+
 ## Environment variables
 
 | Variable | Default | Purpose |

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import http.client
 import json
 import logging
 import os
 import re
+import ssl
 import sys
 import urllib.error
 import urllib.parse
@@ -311,14 +313,31 @@ def cmd_login(_args: argparse.Namespace) -> None:
     slow_extra = 0
     while time.monotonic() < deadline:
         time.sleep(interval + slow_extra)
-        st, body = _http_json(
-            "POST",
-            f"{base}/api/auth/device/token",
-            body={
-                "device_code": device_code,
-                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-            },
-        )
+        try:
+            st, body = _http_json(
+                "POST",
+                f"{base}/api/auth/device/token",
+                body={
+                    "device_code": device_code,
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                },
+            )
+        except (OSError, http.client.HTTPException) as exc:
+            # A poll that timed out or lost its connection (the server may be
+            # provisioning): poll again rather than end with a traceback. A
+            # certificate that does not verify will not on the next poll.
+            _log.debug("device poll not answered: %s", exc)
+            cause = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+            if not isinstance(cause, ssl.SSLCertVerificationError):
+                continue
+            failed = _failure_kind(exc)
+        else:
+            failed = None
+        if failed is not None:
+            # Raised out here, not in the handler: the error's text can quote
+            # the certificate's names, so the message gives its type.
+            raise SystemExit(f"Could not reach {base}: {failed}. "
+                             "Run `artzain login` again once it is fixed.")
         if not isinstance(body, dict):
             continue
         err = body.get("error")
@@ -361,7 +380,10 @@ def cmd_login(_args: argparse.Namespace) -> None:
             slow_extra = int(body.get("interval") or 5)
             continue
         if err in ("expired_token", "access_denied", "invalid_grant"):
-            raise SystemExit(f"Login failed: {err}")
+            detail = body.get("error_description")
+            raise SystemExit(f"Login failed: {err}"
+                             + (f" ({detail})" if isinstance(detail, str) and detail else "")
+                             + ". Run `artzain login` again.")
         if st >= 500:
             continue
     raise SystemExit("Login timed out — run `artzain login` again.")
@@ -1753,7 +1775,7 @@ def cmd_local_activate(args: argparse.Namespace) -> None:
         root_key=args.root_key, issuing=args.issuing,
         root_fingerprint=args.root_fingerprint,
         # The workspace knows which port the stack listens on.
-        base_url=local.base_url(), allow_remote=False,
+        base_url=local.request_base_url(), allow_remote=False,
         session_token=session_token,
     )
     cmd_licence_install(ns)
