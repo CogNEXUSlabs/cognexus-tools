@@ -33,7 +33,8 @@ from pathlib import Path
 import pytest
 
 from artzain import _private_files
-from artzain.openshell import connect, registration
+from artzain.openshell import connect, registration, sidecar
+from artzain.openshell.state import GatewayLedger
 
 needs_tomllib = pytest.mark.skipif(sys.version_info < (3, 11), reason="connect reads TOML")
 
@@ -1211,6 +1212,54 @@ def test_a_partial_inventory_is_said_with_its_reason(gateway):
     _record, said = _up(gateway)
     assert said[-1] == ("the engine has this gateway's heartbeat, and its inventory: "
                         "2 sandboxes, not every one (the listing failed: TimeoutExpired)")
+
+
+@needs_tomllib
+def test_a_listing_lost_while_the_gateway_restarts_is_not_what_up_reports(gateway, monkeypatch):
+    """``up`` starts the sidecar, then restarts the gateway so it picks up the
+    interceptor. The sidecar's first listing can land in that restart and
+    fail once. It is tried again at once, and ``up`` says the whole inventory
+    the engine took after the gateway was back."""
+    sandbox = "1e04e83f-6de7-4f86-b466-2e945af3e724"
+    calls = {"n": 0}
+
+    def cli_list(_cli):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("gateway restarting")
+        return [{"workspace": "default", "id": sandbox, "name": "box", "phase": "Ready"}]
+
+    monkeypatch.setenv("OPENSHELL_SIDECAR_LIST_CLI", "/usr/bin/openshell")
+    monkeypatch.setattr(sidecar, "cli_list", cli_list)
+    clock = {"now": 0.0}
+    posted = []
+
+    def post(path, payload):
+        posted.append((path.rsplit("/", 1)[-1], payload))
+        return {}
+
+    reporter = sidecar.Reporter(
+        GatewayLedger(gateway_id=GATEWAY), post=post, clock=lambda: clock["now"],
+        latency=sidecar.LatencyWindow(), undelivered=sidecar.Counter())
+
+    def sleep(seconds):
+        clock["now"] += seconds
+
+    def reports(_port):
+        # The sidecar's loop has been running since the service started.
+        reporter.step()
+        return reporter.status()
+
+    said = []
+    record = connect.up(gateway.host(reports=reports, sleep=sleep), token=TOKEN,
+                        digest=DIGEST, engine="https://engine.example/", out=said.append)
+    inventories = [payload for name, payload in posted if name == "inventory"]
+    assert calls["n"] >= 2 and inventories[0]["partial"] is True
+    assert inventories[-1]["partial"] is False
+    assert len(inventories[-1]["sandboxes"]) == 1
+    assert said[-1] == ("the engine has this gateway's heartbeat, and its inventory: "
+                        "1 sandbox")
+    assert record["reports"]["partial"] is False and record["reports"]["sandboxes"] == 1
 
 
 def test_the_sidecar_is_asked_on_loopback_and_never_through_a_proxy(monkeypatch):

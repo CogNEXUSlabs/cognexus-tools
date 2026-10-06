@@ -333,6 +333,69 @@ def test_a_partial_inventory_names_why(monkeypatch):
     assert reporter.status()["listing_error"] == "RuntimeError"
 
 
+def test_a_failed_listing_is_tried_again_shortly(monkeypatch):
+    """The next ordinary inventory is five minutes away. A listing that failed
+    once — the gateway restarting under ``up`` — is tried again at once."""
+    monkeypatch.setenv("OPENSHELL_SIDECAR_LIST_CLI", CLI)
+    calls = {"n": 0}
+
+    def cli_list(_cli):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("down")
+        return [{"workspace": "default", "id": S1, "name": "s1", "phase": "Ready"}]
+
+    monkeypatch.setattr(sidecar, "cli_list", cli_list)
+    wire = _Wire()
+    reporter = _reporter(wire, _ledger())
+
+    def inventories():
+        return [payload for name, payload in wire.posts if name == "inventory"]
+
+    assert reporter.step() == sidecar.LISTING_RETRY_SECONDS
+    assert inventories()[0]["partial"] is True
+    wire.now += sidecar.LISTING_RETRY_SECONDS - 0.1
+    reporter.step()
+    assert len(inventories()) == 1
+    wire.now += 0.1
+    reporter.step()
+    assert len(inventories()) == 2
+    assert inventories()[-1]["partial"] is False
+    assert reporter.status()["partial"] is False
+    assert "listing_error" not in reporter.status()
+
+
+def test_a_listing_that_keeps_failing_returns_to_the_ordinary_interval(monkeypatch):
+    """Prompt tries cover a restart. A gateway that stays unlistable is not
+    listed every two seconds after that, and the inventory stays partial."""
+    monkeypatch.setenv("OPENSHELL_SIDECAR_LIST_CLI", CLI)
+
+    def down(_cli):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(sidecar, "cli_list", down)
+    wire = _Wire()
+    reporter = _reporter(wire, _ledger())
+
+    def sent():
+        return sum(name == "inventory" for name, _payload in wire.posts)
+
+    reporter.step()
+    for _ in range(sidecar.LISTING_RETRY_LIMIT):
+        wire.now += sidecar.LISTING_RETRY_SECONDS
+        reporter.step()
+    posted = sent()
+    assert posted > 1
+    assert reporter.status()["partial"] is True
+    assert reporter.status()["listing_error"] == "RuntimeError"
+    wire.now += sidecar.LISTING_RETRY_SECONDS
+    reporter.step()
+    assert sent() == posted
+    wire.now += sidecar.INVENTORY_SECONDS - sidecar.LISTING_RETRY_SECONDS
+    reporter.step()
+    assert sent() == posted + 1
+
+
 def _serve(handler):
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)

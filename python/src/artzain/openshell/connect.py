@@ -1019,9 +1019,11 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
     _say(out, f"gateway {gateway_id} is governed: the self-test write was refused by "
               f"ArtzAIn decision {decision}.")
 
-    # 8. The first heartbeat and inventory: the sidecar sent them when it
-    # started. Say whether the engine took them; reporting is not governance,
-    # so one it has not taken yet is a note.
+    # 8. The first heartbeat and inventory. The sidecar sends them as it
+    # starts, which can be while this restarts the gateway, so a listing
+    # that failed is tried again before this is said. Say whether the engine
+    # took them; reporting is not governance, so one it has not taken yet is
+    # a note.
     reports = _first_reports(host, int(record.data.get("port", port)))
     record.mark("reported", reports=reports)
     _say(out, _reports_said(reports))
@@ -1035,13 +1037,26 @@ REPORTS_WAIT_SECONDS = 30.0
 def _first_reports(host: Host, port: int) -> Optional[Dict[str, Any]]:
     """What the sidecar says the engine took, once it has tried both the
     heartbeat and the inventory, or what it last said after
-    :data:`REPORTS_WAIT_SECONDS`."""
+    :data:`REPORTS_WAIT_SECONDS`.
+
+    A listing that failed is tried again shortly (the gateway may have been
+    restarting). This waits for a whole inventory, and keeps the last
+    partial one when the wait ends with the listing still failing.
+    """
     seen: Dict[str, Any] = {}
 
     def tried() -> bool:
         seen["reports"] = answer = host.reports(port)
-        return isinstance(answer, dict) and (answer.get("reporting") is False or all(
-            answer.get(what) in ("ok", "failed") for what in ("heartbeat", "inventory")))
+        if not isinstance(answer, dict):
+            return False
+        if answer.get("reporting") is False:
+            return True
+        if not all(answer.get(what) in ("ok", "failed") for what in ("heartbeat", "inventory")):
+            return False
+        # The sidecar tries a failed listing again shortly. Wait for the
+        # whole inventory; the wait's end still reports this partial one.
+        return not (answer.get("inventory") == "ok" and answer.get("partial")
+                    and answer.get("listing_error"))
 
     _wait(host, REPORTS_WAIT_SECONDS, tried)
     return seen.get("reports")
