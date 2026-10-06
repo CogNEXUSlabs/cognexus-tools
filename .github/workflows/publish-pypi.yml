@@ -188,9 +188,15 @@ jobs:
       # The OpenShell connect script for this version, and its SHA-256: the
       # one command an operator runs (`sh connect-<version>.sh`), which the
       # dashboard shows with the SHA-256 to check it against. The renderer
-      # is a standard-library file of this tag's tree, run by its path; the
-      # same version always renders the same bytes, so a re-run uploads the
-      # same file (--clobber only makes the re-run succeed).
+      # is a standard-library file of this tag's tree, run by its path.
+      #
+      # The script names every wheel it installs by its SHA-256: the
+      # dependencies from the tag's tree, and artzain's own wheel as PyPI
+      # serves it, read back from PyPI's JSON API (a new release can take a
+      # few minutes to show there). Not the wheel this run built: a re-run
+      # builds again, and PyPI keeps the first upload. The same version and
+      # wheel always render the same bytes, so a re-run uploads the same
+      # file (--clobber only makes the re-run succeed).
       - name: Attach the OpenShell connect script
         env:
           GH_TOKEN: ${{ github.token }}
@@ -198,7 +204,26 @@ jobs:
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#python-v}"
           SCRIPT="connect-${VERSION}.sh"
-          python3 -I python/src/artzain/openshell/bootstrap.py "$VERSION" > "$SCRIPT"
+          WHEEL_SHA256="$(python3 -I -c '
+          import json, sys, time, urllib.request
+          version = sys.argv[1]
+          name = f"artzain-{version}-py3-none-any.whl"
+          for _ in range(40):
+              try:
+                  url = f"https://pypi.org/pypi/artzain/{version}/json"
+                  with urllib.request.urlopen(url, timeout=30) as resp:
+                      found = [f["digests"]["sha256"] for f in json.load(resp)["urls"]
+                               if f["filename"] == name]
+                  if found:
+                      print(found[0])
+                      sys.exit(0)
+              except Exception as exc:
+                  print(f"PyPI does not show {name} yet ({type(exc).__name__})", file=sys.stderr)
+              time.sleep(15)
+          sys.exit(f"PyPI never showed {name}")
+          ' "$VERSION")"
+          echo "artzain-${VERSION}-py3-none-any.whl on PyPI: sha256:${WHEEL_SHA256}"
+          python3 -I python/src/artzain/openshell/bootstrap.py "$VERSION" "$WHEEL_SHA256" > "$SCRIPT"
           sha256sum "$SCRIPT" > "$SCRIPT.sha256"
           cat "$SCRIPT.sha256"
           gh release upload "$GITHUB_REF_NAME" "$SCRIPT" "$SCRIPT.sha256" --clobber

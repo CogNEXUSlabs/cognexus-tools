@@ -196,6 +196,14 @@ def _swap_last(name, old, new):
            'COGNEXUS_API_KEY="cnxg_another"'), "do not hold the gateway's credential"),
     (_swap(SIDECAR_ENV, 'OPENSHELL_SIDECAR_HOST="127.0.0.1"', 'OPENSHELL_SIDECAR_HOST="0.0.0.0"'),
      "loopback"),
+    (_swap(SIDECAR_ENV, f'OPENSHELL_SIDECAR_TOKEN="{templates.SIDECAR_TOKEN}"\n', ""),
+     "a token of its own"),
+    (_swap(SIDECAR_ENV, 'OPENSHELL_GATEWAY_TOML="/home/operator/.config/openshell/gateway.toml"',
+           'OPENSHELL_GATEWAY_TOML="/etc/elsewhere.toml"'), "watch the gateway.toml"),
+    (_swap(SIDECAR_ENV, 'OPENSHELL_REGISTRATION_DIGEST="', 'OPENSHELL_REGISTRATION_DIGEST="0'),
+     "the registration it watches"),
+    (_swap(SIDECAR_ENV, f'OPENSHELL_SIDECAR_TOKEN="{templates.SIDECAR_TOKEN}"',
+           'OPENSHELL_SIDECAR_TOKEN="short"'), "a token of its own"),
     (_swap(SIDECAR_ENV, 'OPENSHELL_GATEWAY_ID=', 'ARTZAIN_AGENT_DID="did:x"\nOPENSHELL_GATEWAY_ID='),
      "decides as"),
     (_swap(TOML, "[openshell]\nversion = 2", "[openshell\nversion = 2"), "is not TOML"),
@@ -261,10 +269,13 @@ def test_the_renderings_are_what_up_writes(tmp_path, base, telemetry):
     connect.up(gateway.host(), token=harness.TOKEN, digest=connect.config_digest(config),
                engine="https://engine.example/", out=lambda _line: None,
                proxy="http://proxy.example:3128" if telemetry else "")
+    # `up` writes a random token for the sidecar's routes; the rest is fixed.
+    token = harness._settings_value(gateway.paths.sidecar_env, "OPENSHELL_SIDECAR_TOKEN")
     files = templates.render_for(
         gateway.host(), connect.parse_config(config), toml_text=templates.BASES[base] or "",
         gateway_id=harness.GATEWAY, credential=harness.CREDENTIAL, port=connect.DEFAULT_PORT,
-        proxy="http://proxy.example:3128" if telemetry else "", ca_bundle="")
+        proxy="http://proxy.example:3128" if telemetry else "", ca_bundle="",
+        sidecar_token=token)
     for name, text in files.items():
         written = (gateway.home / name).read_bytes().decode("utf-8")
         assert written == text, name

@@ -39,6 +39,8 @@ PYTHON = f"{HOME}/.local/share/uv/tools/artzain/bin/python"
 DECISION_URL = "https://engine.example"
 GATEWAY_ID = "gw_" + "0" * 26
 CREDENTIAL = connect.CREDENTIAL_PREFIX + "stand-in-credential-not-a-real-key"
+#: What the renderings carry where `up` writes a random token.
+SIDECAR_TOKEN = "stand-in-sidecar-token-not-a-real-one"
 PROXY = "http://proxy.example:3128"
 CA_BUNDLE = "/etc/ssl/certs/corporate-ca.pem"
 ALLOWED_NVIDIA = "Works with NVIDIA OpenShell"
@@ -136,7 +138,7 @@ def stand_in_host() -> connect.Host:
 
 def render_for(host: connect.Host, config: connect.ConnectConfig, *, toml_text: str,
                gateway_id: str, credential: str, port: int, proxy: str,
-               ca_bundle: str) -> Dict[str, str]:
+               ca_bundle: str, sidecar_token: str = SIDECAR_TOKEN) -> Dict[str, str]:
     """What ``up`` writes on *host*, by path under the home folder, in the
     order it writes them. Raises :class:`connect.ConnectError` where ``up``
     would."""
@@ -155,7 +157,7 @@ def render_for(host: connect.Host, config: connect.ConnectConfig, *, toml_text: 
             host, paths, gateway_id, credential, config,
             registration_digest=registration.digest(connect.sidecar_registration(paths, config)),
             port=port, proxy=proxy, ca_bundle=ca_bundle,
-            jwt=connect._jwt_settings(toml_text, host)),
+            jwt=connect._jwt_settings(toml_text, host), token=sidecar_token),
         under_home(paths.sidecar_unit): connect.sidecar_unit(host, paths),
         under_home(paths.dropin): connect.gateway_dropin(),
     }
@@ -272,6 +274,19 @@ def invariants(files: Mapping[str, str], base_text: Optional[str], *,
         found.append("the sidecar's HTTP port must be on loopback (127.0.0.1)")
     if sidecar.get("COGNEXUS_API_KEY") != credential:
         found.append("the sidecar's settings do not hold the gateway's credential")
+    if len(sidecar.get("OPENSHELL_SIDECAR_TOKEN") or "") < 32:
+        found.append("the sidecar speaks for the gateway: its loopback routes must take a "
+                     "token of its own (OPENSHELL_SIDECAR_TOKEN)")
+    # Its heartbeat says whether the registration is still in gateway.toml.
+    toml_name = next((n for n in files if n.endswith("openshell/gateway.toml")), "")
+    if not toml_name or not (sidecar.get("OPENSHELL_GATEWAY_TOML") or "").endswith(
+            "/" + toml_name):
+        found.append("the sidecar must watch the gateway.toml its registration is in "
+                     "(OPENSHELL_GATEWAY_TOML)")
+    held = registration.found(toml_text)
+    if held is None or registration.digest(held) != sidecar.get("OPENSHELL_REGISTRATION_DIGEST"):
+        found.append("the sidecar's OPENSHELL_REGISTRATION_DIGEST is not the digest of the "
+                     "registration it watches in gateway.toml")
     if any("AGENT_DID" in name or "AGENT_ID" in name for name in sidecar):
         found.append("the sidecar decides as its credential's gateway: nothing may set who "
                      "it decides as")

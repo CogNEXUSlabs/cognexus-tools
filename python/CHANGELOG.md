@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.6.41
+
+### Fixed
+
+- **A sidecar that holds a gateway credential answers its loopback routes
+  only to a caller with its token.** The sidecar `artzain connect openshell
+  up` installs listens on 127.0.0.1 beside its Unix socket, and wrote no
+  `OPENSHELL_SIDECAR_TOKEN`, so its routes answered any local caller, as
+  the gateway. Now a sidecar with a gateway credential (`cnxg_...`)
+  answers nothing but `/healthz` until `OPENSHELL_SIDECAR_TOKEN` is set;
+  `up` writes a random one beside the credential (`0600`), and `status`,
+  `doctor` and `up` present it. A gateway connected by 0.6.40 or earlier
+  gets one by running `artzain connect openshell up` again (no new enroll
+  token), which restarts the sidecar; until then `doctor` says so. A
+  sidecar with an account key keeps its routes as they were.
+- **The sidecar's heartbeat says whether `gateway.toml` still registers
+  it.** The registration digest it sent was the one `up` wrote into its
+  settings, so a gateway whose registration was taken out or changed still
+  looked bound. A sidecar `up` installs now knows where `gateway.toml` is
+  (`OPENSHELL_GATEWAY_TOML`), and each heartbeat sends `registration_found`:
+  the digest of the registration in the block `up` added, `missing` or
+  `unreadable`. The engine opens an `openshell_registration_changed`
+  finding when it is not the installed one. Running `up` again on a gateway
+  connected by 0.6.40 or earlier adds the setting.
+- **`openshell-gateway --version` runs without the gateway's credential in
+  its environment.** The sidecar asks it for the heartbeat; it needs
+  neither the credential nor the token.
+- **`artzain connect openshell up` refuses a plain `http://` engine on
+  another host.** The enroll token goes to `--engine`, and the sidecar sends
+  the gateway's credential to the configuration's `decision_url`: both
+  must be `https://`, or `http://` to this host (`localhost` or a loopback
+  address).
+
+- **The connect script installs from hash-locked wheels.** It installed
+  `artzain[openshell]` as a uv tool, which checks no hash, so every
+  dependency resolved to its newest release at install time. It now makes
+  an environment of its own (`~/.local/share/artzain/openshell/venv-<version>`,
+  Python 3.12 as uv manages it) and installs into it only the wheels it
+  names by SHA-256: the dependencies the sidecar image is built from (the
+  SDK carries that lock as `artzain/openshell/sidecar-requirements.lock`),
+  then the artzain wheel as PyPI serves it. `python bootstrap.py` now takes
+  that wheel's SHA-256 beside the version, and renders 0.6.41 or later.
+
+### Changed
+
+- The README's connect command chains its lines with `&&`, as the
+  dashboard's does, so a failed download or SHA-256 check stops it.
+- **`artzain connect openshell up` moves a running sidecar to the
+  environment it runs from.** When its unit names another Python (the uv
+  tool an earlier script installed), the unit is rewritten and the sidecar
+  restarts once, together with any settings `up` added. After a good `up`
+  the connect script points `~/.local/bin/artzain` at its environment and
+  removes the earlier uv tool and environments.
+
 ## 0.6.40
 
 ### Fixed

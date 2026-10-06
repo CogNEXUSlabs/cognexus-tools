@@ -759,6 +759,90 @@ def test_the_routes_need_the_token_when_one_is_set(monkeypatch):
         thread.join(timeout=2)
 
 
+GATEWAY_KEY = "cnxg_" + "k" * 43
+
+
+def _serving(handler):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread, f"http://127.0.0.1:{server.server_address[1]}"
+
+
+def _post(url, body, token=""):
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers,
+                                  method="POST")
+
+
+def test_a_sidecar_that_holds_a_gateway_credential_answers_no_route_without_a_token(
+        monkeypatch):
+    """It speaks for its gateway. Open, its loopback port would let any
+    process on the host have decisions and OCSF activity sealed as the
+    gateway, and read its inventory."""
+    monkeypatch.setenv("COGNEXUS_API_KEY", GATEWAY_KEY)
+    handler = sidecar.make_handler(lambda: {"gateway_id": "gw", "sandboxes": []}, _never,
+                                   reports_fn=lambda: {"reporting": True})
+    server, thread, base = _serving(handler)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        for path, body in (("/v1/evaluate", UPDATE), ("/artzain/ocsf", FINDING)):
+            with pytest.raises(urllib.error.HTTPError) as refused:
+                opener.open(_post(base + path, body))
+            assert refused.value.code == 401, path
+            assert "OPENSHELL_SIDECAR_TOKEN" in json.load(refused.value)["reason"]
+        for path in ("/artzain/inventory", "/artzain/reports"):
+            with pytest.raises(urllib.error.HTTPError) as refused:
+                opener.open(base + path)
+            assert refused.value.code == 401, path
+        with opener.open(base + "/healthz") as resp:
+            assert json.load(resp) == {"ok": True}
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+def test_with_its_token_the_gateways_sidecar_answers(monkeypatch):
+    monkeypatch.setenv("COGNEXUS_API_KEY", GATEWAY_KEY)
+    monkeypatch.setenv("OPENSHELL_SIDECAR_TOKEN", "sidecar-secret")
+    seen, decide = _capture()
+    handler = sidecar.make_handler(lambda: {"gateway_id": "gw", "sandboxes": []}, decide,
+                                   reports_fn=lambda: {"reporting": True})
+    server, thread, base = _serving(handler)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(_post(base + "/v1/evaluate", UPDATE, token="sidecar-secret")) as resp:
+            assert json.load(resp)["allowed"] is True
+        assert len(seen) == 1
+        with pytest.raises(urllib.error.HTTPError) as refused:
+            opener.open(_post(base + "/v1/evaluate", UPDATE, token="another"))
+        assert refused.value.code == 401 and len(seen) == 1
+        reports = urllib.request.Request(base + "/artzain/reports",
+                                         headers={"Authorization": "Bearer sidecar-secret"})
+        with opener.open(reports) as resp:
+            assert json.load(resp) == {"reporting": True}
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+def test_a_sidecar_with_an_account_key_keeps_its_routes_open_without_a_token(monkeypatch):
+    """A self-hosted engine with an account key reads the inventory from the
+    sidecar; with no token set, that stays as it was (manual chapter 17)."""
+    monkeypatch.setenv("COGNEXUS_API_KEY", "cnx_sidecar_test_key")
+    handler = sidecar.make_handler(lambda: {"gateway_id": "gw", "sandboxes": []}, _never)
+    server, thread, base = _serving(handler)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(base + "/artzain/inventory") as resp:
+            assert resp.status == 200
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
 def test_the_cli_names_the_sidecar():
     out = subprocess.run([sys.executable, "-m", "artzain.cli", "openshell", "sidecar", "--help"],
                          capture_output=True, text=True, timeout=60)

@@ -646,14 +646,18 @@ once a connect is approved. On the gateway's host, as the user the gateway
 runs as:
 
 ```bash
-curl -fsSLO https://github.com/CogNEXUSlabs/cognexus-tools/releases/download/python-v<version>/connect-<version>.sh
-echo '<the SHA-256 you were shown>  connect-<version>.sh' | sha256sum -c -
-export ARTZAIN_ENROLL_TOKEN='<the token you were given>'
+curl -fsSLO https://github.com/CogNEXUSlabs/cognexus-tools/releases/download/python-v<version>/connect-<version>.sh &&
+echo '<the SHA-256 you were shown>  connect-<version>.sh' | sha256sum -c - &&
+export ARTZAIN_ENROLL_TOKEN='<the token you were given>' &&
 sh connect-<version>.sh --config-digest <the digest you were shown>
 ```
 
-The script installs `artzain[openshell]` as a uv tool and runs `artzain
-connect openshell up`, which installs the sidecar as a systemd user service
+Keep the `&&`: a failed download or check then stops the run before the
+token is exported or anything runs.
+
+The script installs artzain and what it needs into an environment of its
+own, every wheel checked against the SHA-256 the script carries, and runs
+`artzain connect openshell up`, which installs the sidecar as a systemd user service
 beside the gateway OpenShell's deb or rpm package runs, and ends with a
 self-test ArtzAIn must refuse. Then:
 

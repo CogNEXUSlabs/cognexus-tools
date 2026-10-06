@@ -308,15 +308,18 @@ gateway's host, as the user the gateway runs as, with the enroll token and
 configuration digest ArtzAIn issues once the gateway's connect is approved:
 
 ```bash
-curl -fsSLO https://github.com/CogNEXUSlabs/cognexus-tools/releases/download/python-v0.6.40/connect-0.6.40.sh
-echo '<the SHA-256 you were shown>  connect-0.6.40.sh' | sha256sum -c -
-export ARTZAIN_ENROLL_TOKEN='<the token you were given>'
+curl -fsSLO https://github.com/CogNEXUSlabs/cognexus-tools/releases/download/python-v0.6.40/connect-0.6.40.sh &&
+echo '<the SHA-256 you were shown>  connect-0.6.40.sh' | sha256sum -c - &&
+export ARTZAIN_ENROLL_TOKEN='<the token you were given>' &&
 sh connect-0.6.40.sh --config-digest <the digest you were shown>
 ```
 
-The script checks its own pinned uv by SHA-256, installs
-`artzain[openshell]==<version>` as a uv tool, and runs `artzain connect
-openshell up`, which installs the sidecar as a systemd user service beside
+Keep the `&&`: a failed download or check then stops the run before the
+token is exported or anything runs.
+
+The script checks its own pinned uv by SHA-256, installs artzain and what
+it needs into an environment of its own, every wheel checked against the
+SHA-256 the script carries, and runs `artzain connect openshell up`, which installs the sidecar as a systemd user service beside
 the gateway that OpenShell's deb or rpm package runs. `artzain connect
 openshell status`, `doctor`, `rotate-key` and `remove` run from where the
 script says. Linux on x86_64 or aarch64 only, for now.
