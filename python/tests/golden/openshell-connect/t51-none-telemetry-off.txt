@@ -136,11 +136,13 @@ OPENSHELL_GATEWAY_ID="gw_00000000000000000000000000"
 OPENSHELL_SIDECAR_GRPC="unix:///run/user/1000/artzain/openshell.sock"
 OPENSHELL_SIDECAR_HOST="127.0.0.1"
 OPENSHELL_SIDECAR_PORT="8088"
+OPENSHELL_SIDECAR_TOKEN="stand-in-sidecar-token-not-a-real-one"
 OPENSHELL_SIDECAR_DECIDE_TIMEOUT_MS="50"
 OPENSHELL_SIDECAR_STATE="/home/operator/.local/state/artzain/openshell/state.json"
 OPENSHELL_SIDECAR_JOURNAL="/home/operator/.local/state/artzain/openshell/journal.json"
 OPENSHELL_SIDECAR_BASE_POLICY="/home/operator/.local/state/artzain/openshell/base-policy.json"
 OPENSHELL_REGISTRATION_DIGEST="65819d0b7f9b086182bc36cb904e5d0c36e254ecf6064abfdaed0454fb568ca8"
+OPENSHELL_GATEWAY_TOML="/home/operator/.config/openshell/gateway.toml"
 OPENSHELL_SIDECAR_LIST_CLI="/usr/bin/openshell"
 ==> .config/systemd/user/artzain-openshell-sidecar.service <==
 # Written by `artzain connect openshell up`; `artzain connect openshell remove`

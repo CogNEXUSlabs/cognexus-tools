@@ -42,6 +42,14 @@ SERVICE = "openshell.v1.OpenShell"
 TIMEOUT_MS_DEFAULT = 1500
 TIMEOUT_MS_MIN, TIMEOUT_MS_MAX = 5, 60_000
 
+#: The lines the block `artzain connect openshell up` adds to gateway.toml
+#: starts and ends with. A file holds one.
+BLOCK_BEGIN = ("# >>> artzain connect openshell: added by `artzain connect openshell up`; "
+               "`artzain connect openshell remove` takes it out. Do not edit.")
+BLOCK_END = "# <<< artzain connect openshell"
+#: What :func:`render` opens with for a file that has no ``[openshell]`` table.
+_VERSION_TABLE = "[openshell]\nversion = 2\n\n"
+
 
 def bindings(only: Optional[Sequence[str]] = None) -> List[Tuple[str, List[str]]]:
     """``(method, phases)`` for every method the sidecar decides, sorted.
@@ -113,6 +121,29 @@ def render(endpoint: str, *, timeout_ms: int = TIMEOUT_MS_DEFAULT,
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
+def block_body(text: str) -> Optional[str]:
+    """What is between the managed block's marker lines in *text*, or None
+    when it does not hold exactly one whole block."""
+    if text.count(BLOCK_BEGIN) != 1 or text.count(BLOCK_END) != 1:
+        return None
+    start, end = text.find(BLOCK_BEGIN + "\n"), text.find(BLOCK_END + "\n")
+    if start < 0 or end < start or (start and text[start - 1] != "\n"):
+        return None
+    start += len(BLOCK_BEGIN) + 1
+    return text[start:end] if end >= start else None
+
+
+def found(text: str) -> Optional[str]:
+    """The registration the managed block in gateway.toml *text* holds, as
+    :func:`render` writes it without the ``[openshell]`` table the block may
+    open with, or None when the file holds no whole block. Its
+    :func:`digest` is the installed one while nobody has changed it."""
+    body = block_body(text)
+    if body is None:
+        return None
+    return body[len(_VERSION_TABLE):] if body.startswith(_VERSION_TABLE) else body
+
+
 def digest(text: str) -> str:
     """The SHA-256 the sidecar reports in its heartbeat
     (``OPENSHELL_REGISTRATION_DIGEST``): of the registration text as
@@ -120,5 +151,5 @@ def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-__all__ = ["DECIDING", "NAMES", "OBSERVING", "TIMEOUT_MS_DEFAULT", "bindings", "digest",
-           "render"]
+__all__ = ["BLOCK_BEGIN", "BLOCK_END", "DECIDING", "NAMES", "OBSERVING", "TIMEOUT_MS_DEFAULT",
+           "bindings", "block_body", "digest", "found", "render"]

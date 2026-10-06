@@ -413,22 +413,30 @@ def _never(_payload):
     raise AssertionError("no decision expected")
 
 
-def test_the_reports_route_answers_the_reporters_status():
+#: This module's sidecar holds a gateway credential, so its routes answer a
+#: caller with its token (0.6.41).
+SIDECAR_TOKEN = "sidecar-secret"
+WITH_TOKEN = {"Authorization": f"Bearer {SIDECAR_TOKEN}"}
+
+
+def test_the_reports_route_answers_the_reporters_status(monkeypatch):
+    monkeypatch.setenv("OPENSHELL_SIDECAR_TOKEN", SIDECAR_TOKEN)
     status = {"reporting": True, "heartbeat": "ok", "inventory": "ok", "sandboxes": 0,
               "partial": False}
     handler = sidecar.make_handler(lambda: {}, _never, reports_fn=lambda: dict(status))
     server, thread, base = _serve(handler)
     try:
-        assert _get(base + "/artzain/reports") == status
+        assert _get(base + "/artzain/reports", WITH_TOKEN) == status
     finally:
         server.shutdown()
         thread.join(timeout=2)
 
 
-def test_without_a_reporter_the_route_says_nothing_is_reported():
+def test_without_a_reporter_the_route_says_nothing_is_reported(monkeypatch):
+    monkeypatch.setenv("OPENSHELL_SIDECAR_TOKEN", SIDECAR_TOKEN)
     server, thread, base = _serve(sidecar.make_handler(lambda: {}, _never))
     try:
-        assert _get(base + "/artzain/reports") == {"reporting": False}
+        assert _get(base + "/artzain/reports", WITH_TOKEN) == {"reporting": False}
     finally:
         server.shutdown()
         thread.join(timeout=2)
@@ -436,6 +444,7 @@ def test_without_a_reporter_the_route_says_nothing_is_reported():
 
 def test_the_running_sidecar_serves_its_reporters_status(monkeypatch):
     monkeypatch.setenv("ARTZAIN_DECISION_URL", "https://engine.example")
+    monkeypatch.setenv("OPENSHELL_SIDECAR_TOKEN", SIDECAR_TOKEN)
     monkeypatch.delenv("OPENSHELL_SIDECAR_GRPC", raising=False)
     monkeypatch.setattr(sidecar, "_BASE", None)  # main() sets it
     captured = {}
@@ -454,8 +463,8 @@ def test_the_running_sidecar_serves_its_reporters_status(monkeypatch):
     sidecar.main()
     server, thread, base = _serve(captured["handler"])
     try:
-        assert _get(base + "/artzain/reports") == {"reporting": True, "heartbeat": "pending",
-                                                   "inventory": "pending"}
+        assert _get(base + "/artzain/reports", WITH_TOKEN) == {
+            "reporting": True, "heartbeat": "pending", "inventory": "pending"}
     finally:
         server.shutdown()
         thread.join(timeout=2)

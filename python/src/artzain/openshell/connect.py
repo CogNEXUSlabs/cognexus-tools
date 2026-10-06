@@ -47,9 +47,11 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import ipaddress
 import json
 import os
 import re
+import secrets
 import shutil
 import stat
 import subprocess
@@ -84,10 +86,10 @@ DEFAULT_ENGINE = "https://app.cognexuslabs.ai"
 DEFAULT_PORT = 8088
 RECORD_VERSION = 1
 
-#: The lines a managed block starts and ends with. A file holds one block.
-BLOCK_BEGIN = ("# >>> artzain connect openshell: added by `artzain connect openshell up`; "
-               "`artzain connect openshell remove` takes it out. Do not edit.")
-BLOCK_END = "# <<< artzain connect openshell"
+#: The lines a managed block starts and ends with. A file holds one. The
+#: sidecar finds the registration between them (``registration.found``).
+BLOCK_BEGIN = registration.BLOCK_BEGIN
+BLOCK_END = registration.BLOCK_END
 
 _GATEWAY_ID = re.compile(r"^gw_[0-9A-HJKMNP-TV-Z]{26}$")
 _DECISION_ID = re.compile(r"decision (?:deny|review) \(([0-9A-HJKMNP-TV-Z]{26})\)")
@@ -117,7 +119,7 @@ class Host:
                  root: str = "/",
                  runner: Optional[Callable[..., subprocess.CompletedProcess]] = None,
                  healthy: Optional[Callable[[int], bool]] = None,
-                 reports: Optional[Callable[[int], Optional[Dict[str, Any]]]] = None,
+                 reports: Optional[Callable[[int, str], Optional[Dict[str, Any]]]] = None,
                  post_json: Optional[Callable[..., Tuple[int, Any]]] = None,
                  get_engine: Optional[Callable[..., Tuple[int, Mapping[str, str]]]] = None,
                  which: Optional[Callable[[str], Optional[str]]] = None,
@@ -183,10 +185,10 @@ class Host:
     def healthy(self, port: int) -> bool:
         return self._healthy(port)
 
-    def reports(self, port: int) -> Optional[Dict[str, Any]]:
-        """What the sidecar says the engine took (``GET /artzain/reports``),
-        or None when it does not say."""
-        return self._reports(port)
+    def reports(self, port: int, token: str = "") -> Optional[Dict[str, Any]]:
+        """What the sidecar says the engine took (``GET /artzain/reports``,
+        with the sidecar's *token*), or None when it does not say."""
+        return self._reports(port, token)
 
     def post_json(self, url: str, *, headers: Mapping[str, str], body: Mapping[str, Any],
                   proxy: str = "", ca_bundle: str = "") -> Tuple[int, Any]:
@@ -212,12 +214,14 @@ def _run(argv: List[str], *, env: Mapping[str, str], timeout: float) -> subproce
         return subprocess.CompletedProcess(argv, 124, "", f"{argv[0]}: timed out")
 
 
-def _sidecar_get(port: int, path: str) -> Any:
-    """``GET`` a route of the sidecar on loopback. Never through a proxy: a
-    host behind one sets ``HTTP_PROXY``, which would be asked for 127.0.0.1.
-    Raises."""
+def _sidecar_get(port: int, path: str, token: str = "") -> Any:
+    """``GET`` a route of the sidecar on loopback, with its *token* when one
+    is given. Never through a proxy: a host behind one sets ``HTTP_PROXY``,
+    which would be asked for 127.0.0.1. Raises."""
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with opener.open(f"http://127.0.0.1:{int(port)}{path}", timeout=2) as resp:
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    request = urllib.request.Request(f"http://127.0.0.1:{int(port)}{path}", headers=headers)
+    with opener.open(request, timeout=2) as resp:
         return json.loads(resp.read(65536) or b"null")
 
 
@@ -229,9 +233,9 @@ def _healthy(port: int) -> bool:
     return isinstance(answer, dict) and answer.get("ok") is True
 
 
-def _reports(port: int) -> Optional[Dict[str, Any]]:
+def _reports(port: int, token: str = "") -> Optional[Dict[str, Any]]:
     try:
-        answer = _sidecar_get(port, "/artzain/reports")
+        answer = _sidecar_get(port, "/artzain/reports", token)
     except Exception:  # noqa: BLE001 - it does not say
         return None
     return answer if isinstance(answer, dict) else None
@@ -324,6 +328,10 @@ def parse_config(config: Any) -> ConnectConfig:
     if not isinstance(url, str) or transport.settings_from_environment(
             {"ARTZAIN_DECISION_URL": url}) is None or _UNSAFE.search(url) or " " in url:
         raise ConnectError("the configuration's decision_url is not an http(s) URL")
+    if _plain_http_elsewhere(url):
+        raise ConnectError("the configuration's decision_url is plain http: the sidecar sends "
+                           "the gateway's credential there, so it must be https (or an engine "
+                           "on this host)")
     version = config.get("openshell_version")
     if not isinstance(version, str) or not _VERSION.fullmatch(version):
         raise ConnectError("the configuration's openshell_version is not a version")
@@ -366,6 +374,9 @@ def redeem(host: Host, *, engine: str, token: str, digest: str, proxy: str = "",
         raise ConnectError("ARTZAIN_ENROLL_TOKEN is not an enroll token (cnxt_...)")
     if not _DIGEST.fullmatch(digest or ""):
         raise ConnectError("--config-digest must be the 64 lowercase hex characters you were shown")
+    if _plain_http_elsewhere(engine):
+        raise ConnectError("--engine is plain http: the enroll token would cross the network "
+                           "unencrypted, so it must be https (or an engine on this host)")
     url = engine.rstrip("/") + REDEEM_PATH
     try:
         status, answer = host.post_json(url, headers={"Authorization": f"Bearer {token}"},
@@ -654,8 +665,9 @@ def _jwt_settings(toml_text: str, host: Optional[Host] = None) -> Dict[str, str]
 
 def sidecar_environment(host: Host, paths: Layout, redeemed_gateway: str, credential: str,
                         config: ConnectConfig, *, registration_digest: str, port: int,
-                        proxy: str, ca_bundle: str, jwt: Mapping[str, str]) -> str:
-    """The sidecar service's ``EnvironmentFile``. It holds the credential."""
+                        proxy: str, ca_bundle: str, jwt: Mapping[str, str], token: str) -> str:
+    """The sidecar service's ``EnvironmentFile``. It holds the credential, and
+    *token*, which a caller of the sidecar's loopback routes must present."""
     values = {
         "COGNEXUS_API_KEY": credential,
         "ARTZAIN_DECISION_URL": config.decision_url,
@@ -663,11 +675,16 @@ def sidecar_environment(host: Host, paths: Layout, redeemed_gateway: str, creden
         "OPENSHELL_SIDECAR_GRPC": f"unix://{paths.socket.as_posix()}",
         "OPENSHELL_SIDECAR_HOST": "127.0.0.1",
         "OPENSHELL_SIDECAR_PORT": str(port),
+        # What a caller of its loopback routes must present (only the
+        # health probe is open): `status`, `doctor` and `up` read it here.
+        "OPENSHELL_SIDECAR_TOKEN": token,
         "OPENSHELL_SIDECAR_DECIDE_TIMEOUT_MS": str(config.decide_timeout_ms),
         "OPENSHELL_SIDECAR_STATE": (paths.state_dir / "state.json").as_posix(),
         "OPENSHELL_SIDECAR_JOURNAL": (paths.state_dir / "journal.json").as_posix(),
         "OPENSHELL_SIDECAR_BASE_POLICY": (paths.state_dir / "base-policy.json").as_posix(),
         "OPENSHELL_REGISTRATION_DIGEST": registration_digest,
+        # Where the registration is: each heartbeat says whether it still is.
+        "OPENSHELL_GATEWAY_TOML": paths.gateway_toml.as_posix(),
         # Each inventory lists every workspace through the CLI the operator
         # registered with the gateway, so it is never partial.
         "OPENSHELL_SIDECAR_LIST_CLI": host.which("openshell") or "",
@@ -918,9 +935,10 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
         _cli_reaches_the_gateway(host)
 
     # 1. The credential, once. It is saved before anything else can fail.
+    settings_changed = False
     if record.done("redeemed"):
         _say(out, f"gateway {record.data['gateway_id']}: already redeemed; using the saved credential")
-        _saved(paths)
+        settings_changed = _bring_the_settings_up_to_date(paths, out)
         config = parse_config(record.data.get("config"))
         gateway_id = record.data["gateway_id"]
     else:
@@ -933,7 +951,8 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
         sidecar_environment(host, paths, "gw_" + "0" * 26, CREDENTIAL_PREFIX + "0",
                             ConnectConfig("https://engine.invalid", "0.0.0"),
                             registration_digest="0" * 64, port=port, proxy=proxy,
-                            ca_bundle=ca_bundle, jwt=_jwt_settings(toml_text, host))
+                            ca_bundle=ca_bundle, jwt=_jwt_settings(toml_text, host),
+                            token="0" * 43)
         got = redeem(host, engine=engine, token=token, digest=digest, proxy=proxy,
                      ca_bundle=ca_bundle)
         config, gateway_id = got.config, got.gateway_id
@@ -941,8 +960,8 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
         _replace(paths.sidecar_env, sidecar_environment(
             host, paths, gateway_id, got.credential, config,
             registration_digest=registration.digest(sidecar_registration(paths, config)),
-            port=port, proxy=proxy,
-            ca_bundle=ca_bundle, jwt=jwt).encode("utf-8"), private=True)
+            port=port, proxy=proxy, ca_bundle=ca_bundle, jwt=jwt,
+            token=secrets.token_urlsafe(32)).encode("utf-8"), private=True)
         record.mark("redeemed", gateway_id=gateway_id, config=got.raw_config,
                     engine=engine.rstrip("/"), port=int(port))
         _say(out, f"gateway {gateway_id}: credential saved to {paths.sidecar_env}")
@@ -970,13 +989,34 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
                      private=created)
         record.mark("gateway-env", env_sha256=_sha(before), env_created=created)
 
-    # 4. The sidecar, as a service, up and answering.
+    # 4. The sidecar, as a service, up and answering. A sidecar already
+    # running is brought up to date: its unit, when this artzain runs from
+    # another environment (the 0.6.41 connect script installs into one of
+    # its own), and the settings step 1 added. One restart for both; the
+    # gateway, which requires it, restarts with it.
+    unit = sidecar_unit(host, paths)
     if not record.done("sidecar"):
-        _replace(paths.sidecar_unit, sidecar_unit(host, paths).encode("utf-8"))
+        _replace(paths.sidecar_unit, unit.encode("utf-8"))
         private_dir(paths.state_dir)
         _check(_systemctl(host, "daemon-reload"), "systemctl --user daemon-reload")
         _check(_systemctl(host, "enable", "--now", SIDECAR_UNIT), f"starting {SIDECAR_UNIT}")
         record.mark("sidecar")
+    else:
+        stale = (not paths.sidecar_unit.is_file()
+                 or paths.sidecar_unit.read_text(encoding="utf-8") != unit)
+        if stale:
+            _replace(paths.sidecar_unit, unit.encode("utf-8"))
+            _check(_systemctl(host, "daemon-reload"), "systemctl --user daemon-reload")
+        if stale or settings_changed:
+            _say(out, f"restarting {SIDECAR_UNIT} to take "
+                      + " and ".join(what for what, now in (("its new unit", stale),
+                                                            ("its new settings", settings_changed))
+                                     if now))
+            _check(_systemctl(host, "restart", SIDECAR_UNIT, timeout=120),
+                   f"restarting {SIDECAR_UNIT}")
+            if not _gateway_stays_up(host):
+                raise ConnectError(f"{GATEWAY_UNIT} did not stay up: see "
+                                   f"`journalctl --user -u {GATEWAY_UNIT}`")
     if not _wait(host, 30, lambda: host.healthy(int(record.data.get("port", port)))):
         raise ConnectError(f"the sidecar did not answer within 30 s: see "
                            f"`journalctl --user -u {SIDECAR_UNIT}`")
@@ -1024,7 +1064,7 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
     # that failed is tried again before this is said. Say whether the engine
     # took them; reporting is not governance, so one it has not taken yet is
     # a note.
-    reports = _first_reports(host, int(record.data.get("port", port)))
+    reports = _first_reports(host, int(record.data.get("port", port)), _sidecar_token(paths))
     record.mark("reported", reports=reports)
     _say(out, _reports_said(reports))
     return dict(record.data)
@@ -1034,7 +1074,7 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
 REPORTS_WAIT_SECONDS = 30.0
 
 
-def _first_reports(host: Host, port: int) -> Optional[Dict[str, Any]]:
+def _first_reports(host: Host, port: int, token: str) -> Optional[Dict[str, Any]]:
     """What the sidecar says the engine took, once it has tried both the
     heartbeat and the inventory, or what it last said after
     :data:`REPORTS_WAIT_SECONDS`.
@@ -1046,7 +1086,7 @@ def _first_reports(host: Host, port: int) -> Optional[Dict[str, Any]]:
     seen: Dict[str, Any] = {}
 
     def tried() -> bool:
-        seen["reports"] = answer = host.reports(port)
+        seen["reports"] = answer = host.reports(port, token)
         if not isinstance(answer, dict):
             return False
         if answer.get("reporting") is False:
@@ -1090,9 +1130,8 @@ def _reports_said(reports: Optional[Dict[str, Any]]) -> str:
     return said
 
 
-def _saved(paths: Layout) -> Dict[str, str]:
-    """The sidecar's settings as ``up`` wrote them. Raises
-    :class:`ConnectError` when there is no credential in them."""
+def _settings(paths: Layout) -> Dict[str, str]:
+    """The sidecar's settings as ``up`` wrote them; empty when there are none."""
     values: Dict[str, str] = {}
     try:
         text = paths.sidecar_env.read_text(encoding="utf-8")
@@ -1104,6 +1143,18 @@ def _saved(paths: Layout) -> Dict[str, str]:
             if len(value) >= 2 and value[0] == value[-1] == '"':
                 value = value[1:-1]
             values[name] = value
+    return values
+
+
+def _sidecar_token(paths: Layout) -> str:
+    """What the sidecar's loopback routes take, or empty."""
+    return _settings(paths).get("OPENSHELL_SIDECAR_TOKEN", "")
+
+
+def _saved(paths: Layout) -> Dict[str, str]:
+    """The sidecar's settings as ``up`` wrote them. Raises
+    :class:`ConnectError` when there is no credential in them."""
+    values = _settings(paths)
     if not values.get("COGNEXUS_API_KEY", "").startswith(CREDENTIAL_PREFIX):
         raise ConnectError(f"{paths.sidecar_env} holds no credential: run "
                            "`artzain connect openshell remove`, then `up` with a new token")
@@ -1219,7 +1270,40 @@ def _with_key(text: str, credential: str) -> str:
     return "".join(lines)
 
 
-def _sidecar_takes_the_key(host: Host, port: int) -> bool:
+def _with_settings(text: str, values: Mapping[str, str]) -> str:
+    """The sidecar's settings with *values* added at their end."""
+    if text and not text.endswith("\n"):
+        text += "\n"
+    return text + "".join(f'{name}="{value}"\n' for name, value in values.items())
+
+
+def _bring_the_settings_up_to_date(paths: Layout, out: Callable[[str], None]) -> bool:
+    """A gateway connected by artzain 0.6.40 or earlier: its sidecar has no
+    token, so this one answers none of its routes but ``/healthz``, and does
+    not know where gateway.toml is, so its heartbeat cannot say whether the
+    registration is still there. Add what is missing. True when something
+    was, and the sidecar must restart to take it (``up``'s step 4 does)."""
+    saved = _saved(paths)
+    missing: Dict[str, str] = {}
+    if not saved.get("OPENSHELL_SIDECAR_TOKEN"):
+        missing["OPENSHELL_SIDECAR_TOKEN"] = secrets.token_urlsafe(32)
+    if not saved.get("OPENSHELL_GATEWAY_TOML"):
+        missing["OPENSHELL_GATEWAY_TOML"] = paths.gateway_toml.as_posix()
+    if not missing:
+        return False
+    for name, value in missing.items():
+        if _UNSAFE.search(value):
+            raise ConnectError(f"{name} holds a character a systemd environment file cannot "
+                               "carry here")
+    text = paths.sidecar_env.read_text(encoding="utf-8")
+    _replace(paths.sidecar_env, _with_settings(text, missing).encode("utf-8"), private=True)
+    said = {"OPENSHELL_SIDECAR_TOKEN": "a token for its loopback routes",
+            "OPENSHELL_GATEWAY_TOML": "where gateway.toml is, for its heartbeat"}
+    _say(out, "the sidecar's settings now hold " + " and ".join(said[name] for name in missing))
+    return True
+
+
+def _sidecar_takes_the_key(host: Host, port: int, token: str) -> bool:
     """Restart the sidecar (the gateway, which requires it, restarts with it)
     and wait until it says whether the engine took its heartbeat. True when
     it did."""
@@ -1227,7 +1311,7 @@ def _sidecar_takes_the_key(host: Host, port: int) -> bool:
     seen: Dict[str, Any] = {}
 
     def heard() -> bool:
-        seen["reports"] = reports = host.reports(port)
+        seen["reports"] = reports = host.reports(port, token)
         return isinstance(reports, dict) and reports.get("heartbeat") in ("ok", "failed")
 
     _wait(host, ROTATE_WAIT_SECONDS, heard)
@@ -1293,9 +1377,10 @@ def rotate_key(host: Host, *, out: Callable[[str], None] = print) -> Dict[str, A
     if not paths.sidecar_unit.is_file() or paths.sidecar_unit.read_text(encoding="utf-8") != unit:
         _replace(paths.sidecar_unit, unit.encode("utf-8"))
         _check(_systemctl(host, "daemon-reload"), "systemctl --user daemon-reload")
-    if not _sidecar_takes_the_key(host, port):
+    token = saved.get("OPENSHELL_SIDECAR_TOKEN", "")
+    if not _sidecar_takes_the_key(host, port, token):
         _replace(paths.sidecar_env, before, private=True)
-        _sidecar_takes_the_key(host, port)
+        _sidecar_takes_the_key(host, port, token)
         call("/retire-others", old)
         raise ConnectError("the engine did not take the sidecar's heartbeat with the new "
                            "credential: the sidecar is back on the old credential, and the new "
@@ -1342,7 +1427,7 @@ def status(host: Host) -> Dict[str, Any]:
         "gateway": _systemctl(host, "is-active", GATEWAY_UNIT, timeout=10).stdout.strip() or "unknown",
         "record_error": record.get("error"),
         # What the sidecar says the engine took: its last heartbeat and inventory.
-        "reports": host.reports(port),
+        "reports": host.reports(port, _sidecar_token(paths)),
     }
 
 
@@ -1364,6 +1449,23 @@ def _block_body(current: bytes) -> Optional[str]:
     text = current.decode("utf-8")
     start = text.index(BLOCK_BEGIN + "\n") + len(BLOCK_BEGIN) + 1
     return text[start:text.index(BLOCK_END + "\n", start)]
+
+
+def _plain_http_elsewhere(url: str) -> bool:
+    """True for a plain ``http`` URL whose host is not this machine (a
+    loopback address or ``localhost``). What goes there carries an enroll
+    token or the gateway's credential. Other schemes are the transport's to
+    refuse."""
+    parts = urllib.parse.urlsplit(url.strip())
+    if parts.scheme.lower() != "http":
+        return False
+    host = (parts.hostname or "").lower()
+    if host == "localhost":
+        return False
+    try:
+        return not ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return True
 
 
 def _origin(url: str) -> str:
@@ -1445,6 +1547,10 @@ def doctor(host: Host) -> Dict[str, Any]:
         if mode & 0o077:
             found("credential", "fail", f"{paths.sidecar_env} is {mode:04o}: other users can "
                                         "read the gateway's credential (chmod 600 it)")
+        elif not saved.get("OPENSHELL_SIDECAR_TOKEN"):
+            found("credential", "fail", f"{paths.sidecar_env} holds no OPENSHELL_SIDECAR_TOKEN, "
+                                        "so the sidecar answers no local caller: run "
+                                        "`artzain connect openshell up` again")
         else:
             found("credential", "ok", f"{paths.sidecar_env} holds a credential and is the "
                                       "owner's alone")
@@ -1552,7 +1658,7 @@ def doctor(host: Host) -> Dict[str, Any]:
         found("clock", result, f"this host's clock is {int(skew)} s off the engine's")
 
     # What the sidecar reported.
-    reports = host.reports(port)
+    reports = host.reports(port, saved.get("OPENSHELL_SIDECAR_TOKEN", ""))
     if not isinstance(reports, dict):
         found("reports", "fail", "the sidecar did not say what it reported")
     elif reports.get("reporting") is False:
