@@ -1225,6 +1225,84 @@ def _screen_message(content: str) -> dict[str, Any]:
         return {"is_injection": False, "should_block": False, "threat_level": "none", "explanation": "", "injection_type": ""}
 
 
+def _refuse_foreign_request(handler: BaseHTTPRequestHandler, *, page: bool = False) -> bool:
+    """Refuse (403) a request that does not name this server
+    (``127.0.0.1`` or ``localhost``, on whatever port a forward or the
+    default hides), or that another site sends; True when it was
+    refused. With *page*, a browser's top-level navigation to the page
+    is served from any site: the page holds no secret and cannot be
+    framed, and following a link to the printed address arrives
+    cross-site."""
+    host = (handler.headers.get("Host") or "").strip().lower()
+    name, _, port = host.partition(":")
+    origin = handler.headers.get("Origin")
+    site = (handler.headers.get("Sec-Fetch-Site") or "").strip().lower()
+    navigation = (page and (handler.headers.get("Sec-Fetch-Mode") or "").lower() == "navigate"
+                  and (handler.headers.get("Sec-Fetch-Dest") or "").lower() == "document")
+    if (name not in ("127.0.0.1", "localhost") or (port and not port.isdigit())
+            or (origin is not None and origin.strip().lower() != "http://" + host)
+            or (site not in ("", "same-origin", "none") and not navigation)):
+        body = b"Forbidden"
+        handler.send_response(403)
+        handler.send_header("Content-Type", "text/plain; charset=utf-8")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.end_headers()
+        handler.wfile.write(body)
+        return True
+    return False
+
+
+def _proxy_to_upstream(handler: BaseHTTPRequestHandler, upstream: str, method: str,
+                       body: bytes | None = None) -> None:
+    """Relay the request *handler* is serving to *upstream*, and the answer
+    back to the browser."""
+    url = upstream + handler.path
+
+    # Origin/Referer are rewritten from localhost to the upstream domain;
+    # the browser's own UA is forwarded while the WAF still needs it.
+    fwd = _sdk_headers(url=upstream, browser_user_agent=handler.headers.get("user-agent"))
+    for hdr in ("authorization", "content-type", "accept", "x-request-id", "accept-language"):
+        v = handler.headers.get(hdr)
+        if v:
+            fwd[hdr] = v
+
+    is_sse = method == "POST" and "messages" in handler.path and "conversations" in handler.path
+    timeout = 300.0 if is_sse else 30.0
+
+    req = urllib.request.Request(url, data=body, headers=fwd, method=method)
+    try:
+        # A redirect is not followed, so the browser's Authorization
+        # header goes upstream only; its status is relayed below.
+        with cloud._urlopen(req, timeout=timeout) as resp:
+            handler.send_response(resp.status)
+            # The page is this server's own origin, so it needs no
+            # CORS grant; none is sent, and none is passed on.
+            for k, v in resp.headers.items():
+                if k.lower() not in _HOP_BY_HOP and not k.lower().startswith("access-control-"):
+                    handler.send_header(k, v)
+            handler.end_headers()
+            if is_sse:
+                while chunk := resp.read(256):
+                    handler.wfile.write(chunk)
+                    handler.wfile.flush()
+            else:
+                handler.wfile.write(resp.read())
+    except urllib.error.HTTPError as exc:
+        payload = exc.read()
+        handler.send_response(exc.code)
+        handler.send_header("Content-Type", exc.headers.get("Content-Type", "application/json"))
+        handler.send_header("Content-Length", str(len(payload)))
+        handler.end_headers()
+        handler.wfile.write(payload)
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc).encode()
+        handler.send_response(502)
+        handler.send_header("Content-Type", "text/plain; charset=utf-8")
+        handler.send_header("Content-Length", str(len(msg)))
+        handler.end_headers()
+        handler.wfile.write(msg)
+
+
 def _make_handler(base_url: str, html_bytes: bytes, api_key: str, *,
                   launch_secret: str | None = None) -> type[BaseHTTPRequestHandler]:
     """Return a request-handler class closed over the server configuration.
@@ -1275,30 +1353,9 @@ def _make_handler(base_url: str, html_bytes: bytes, api_key: str, *,
         # ── Who may ask ───────────────────────────────────────────────────
 
         def _refused(self, *, page: bool = False) -> bool:
-            """Refuse (403) a request that does not name this server
-            (``127.0.0.1`` or ``localhost``, on whatever port a forward or the
-            default hides), or that another site sends; True when it was
-            refused. With *page*, a browser's top-level navigation to the page
-            is served from any site: the page holds no secret and cannot be
-            framed, and following a link to the printed address arrives
-            cross-site."""
-            host = (self.headers.get("Host") or "").strip().lower()
-            name, _, port = host.partition(":")
-            origin = self.headers.get("Origin")
-            site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
-            navigation = (page and (self.headers.get("Sec-Fetch-Mode") or "").lower() == "navigate"
-                          and (self.headers.get("Sec-Fetch-Dest") or "").lower() == "document")
-            if (name not in ("127.0.0.1", "localhost") or (port and not port.isdigit())
-                    or (origin is not None and origin.strip().lower() != "http://" + host)
-                    or (site not in ("", "same-origin", "none") and not navigation)):
-                body = b"Forbidden"
-                self.send_response(403)
-                self.send_header("Content-Type", "text/plain; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-                return True
-            return False
+            """True when the request was refused (403): see
+            :func:`_refuse_foreign_request`."""
+            return _refuse_foreign_request(self, page=page)
 
         def _launched(self) -> bool:
             """Whether the request carries this run's launch secret."""
@@ -1308,51 +1365,7 @@ def _make_handler(base_url: str, html_bytes: bytes, api_key: str, *,
         # ── API proxy ─────────────────────────────────────────────────────
 
         def _proxy(self, method: str, body: bytes | None = None) -> None:
-            url = upstream + self.path
-
-            # Origin/Referer are rewritten from localhost to the upstream domain;
-            # the browser's own UA is forwarded while the WAF still needs it.
-            fwd = _sdk_headers(url=upstream, browser_user_agent=self.headers.get("user-agent"))
-            for hdr in ("authorization", "content-type", "accept", "x-request-id", "accept-language"):
-                v = self.headers.get(hdr)
-                if v:
-                    fwd[hdr] = v
-
-            is_sse = method == "POST" and "messages" in self.path and "conversations" in self.path
-            timeout = 300.0 if is_sse else 30.0
-
-            req = urllib.request.Request(url, data=body, headers=fwd, method=method)
-            try:
-                # A redirect is not followed, so the browser's Authorization
-                # header goes upstream only; its status is relayed below.
-                with cloud._urlopen(req, timeout=timeout) as resp:
-                    self.send_response(resp.status)
-                    # The page is this server's own origin, so it needs no
-                    # CORS grant; none is sent, and none is passed on.
-                    for k, v in resp.headers.items():
-                        if k.lower() not in _HOP_BY_HOP and not k.lower().startswith("access-control-"):
-                            self.send_header(k, v)
-                    self.end_headers()
-                    if is_sse:
-                        while chunk := resp.read(256):
-                            self.wfile.write(chunk)
-                            self.wfile.flush()
-                    else:
-                        self.wfile.write(resp.read())
-            except urllib.error.HTTPError as exc:
-                payload = exc.read()
-                self.send_response(exc.code)
-                self.send_header("Content-Type", exc.headers.get("Content-Type", "application/json"))
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-            except Exception as exc:  # noqa: BLE001
-                msg = str(exc).encode()
-                self.send_response(502)
-                self.send_header("Content-Type", "text/plain; charset=utf-8")
-                self.send_header("Content-Length", str(len(msg)))
-                self.end_headers()
-                self.wfile.write(msg)
+            _proxy_to_upstream(self, upstream, method, body)
 
         # ── Local GUI endpoints ───────────────────────────────────────────
 

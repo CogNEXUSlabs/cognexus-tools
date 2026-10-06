@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.39
+
+### Changed
+
+- **The command line, the bundle verifier and the GUI handler are built
+  from smaller functions.** `artzain`'s parser is assembled one command
+  group at a time, the offline audit verifier runs its steps as named
+  helpers in the same order, and the GUI's proxy and refusal moved out of
+  the request handler. Commands, options, help text, verdicts and every
+  report and response are unchanged; tests pin them as they were.
+
 ## 0.6.38
 
 ### Fixed

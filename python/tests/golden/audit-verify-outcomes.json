@@ -1,0 +1,2506 @@
+{
+ "bad_handover_and_edited_seal": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 0,
+   "signatures_checked": 4,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "key handover row carries fields outside the allowlist: invoice_reference",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      0",
+   "  signatures checked: 4",
+   "",
+   "FAILED: key handover row carries fields outside the allowlist: invoice_reference"
+  ]
+ },
+ "bad_leaf_signature": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 1,
+   "seals_checked": 0,
+   "signatures_checked": 1,
+   "signatures_skipped": false,
+   "first_bad_seq": 2,
+   "error": "bad leaf signature at seq 2",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     1",
+   "  seals checked:      0",
+   "  signatures checked: 1",
+   "",
+   "FAILED (first bad seq: 2): bad leaf signature at seq 2"
+  ]
+ },
+ "bad_seal_signature": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 5,
+   "seals_checked": 0,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "bad seal signature for S0",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      0",
+   "  signatures checked: 5",
+   "",
+   "FAILED: bad seal signature for S0"
+  ]
+ },
+ "cert_expired_at_signing_time": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "leaf seq 1 not covered by a certificate valid at signing time"
+   ],
+   "certificates_checked": 2,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "  certificates:       2 checked",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: leaf seq 1 not covered by a certificate valid at signing time"
+  ]
+ },
+ "certificate_chain_malformed": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "certificate chain malformed — provenance not evaluated"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: certificate chain malformed — provenance not evaluated"
+  ]
+ },
+ "certificates_not_an_object": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ },
+ "certified_against_the_pinned_root": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "ATTESTED",
+   "attestation_reasons": [],
+   "certificates_checked": 2,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "  certificates:       2 checked",
+   "",
+   "VERIFIED, ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "The signing keys chain to the CogNEXUS Evidence Root and were certified at signing time."
+  ]
+ },
+ "certified_attested": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "ATTESTED",
+   "attestation_reasons": [],
+   "certificates_checked": 2,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "  certificates:       2 checked",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "VERIFIED, ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "The signing keys chain to the root you supplied and were certified at signing time."
+  ]
+ },
+ "certified_no_pinned_root": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no Evidence Root fingerprint pinned (pre-ceremony verifier)"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: no Evidence Root fingerprint pinned (pre-ceremony verifier)"
+  ]
+ },
+ "certified_without_signed_manifest": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 6,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "certified bundle without a signed manifest"
+   ],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no verifiable signed manifest — the exported record set is not bound to the certified key, so its completeness cannot be attested"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 6",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "  ! certified bundle without a signed manifest",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: no verifiable signed manifest — the exported record set is not bound to the certified key, so its completeness cannot be attested"
+  ]
+ },
+ "chain_linkage_broken": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 1,
+   "seals_checked": 0,
+   "signatures_checked": 1,
+   "signatures_skipped": false,
+   "first_bad_seq": 2,
+   "error": "chain linkage broken at seq 2",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     1",
+   "  seals checked:      0",
+   "  signatures checked: 1",
+   "",
+   "FAILED (first bad seq: 2): chain linkage broken at seq 2"
+  ]
+ },
+ "clean": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 6,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 6",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ },
+ "clean_stdlib_only": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 0,
+   "signatures_skipped": true,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'"
+   ],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures:         SKIPPED (install 'artzain[verify]')",
+   "  ! cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots are intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ },
+ "committed_key_ids_not_a_list": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ },
+ "committed_key_missing": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 0,
+   "signatures_checked": 4,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "keys.json is missing key(s) the signed manifest commits to: <retiring>",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      0",
+   "  signatures checked: 4",
+   "",
+   "FAILED: keys.json is missing key(s) the signed manifest commits to: <retiring>"
+  ]
+ },
+ "committed_key_missing_and_handovers_dropped": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 0,
+   "signatures_checked": 4,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "keys.json is missing key(s) the signed manifest commits to: <retiring>",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      0",
+   "  signatures checked: 4",
+   "",
+   "FAILED: keys.json is missing key(s) the signed manifest commits to: <retiring>"
+  ]
+ },
+ "cross_bundle_splice": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 1,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": 3,
+   "error": "signed manifest commits to records that are not present — records suppressed or substituted (leaves_digest mismatch (exported leaf set altered))",
+   "warnings": [
+    "seq gap 3->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 5->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seal S0 only partially present (3/9 leaves) — boundary of a filtered export, root not recomputed"
+   ],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      1",
+   "  signatures checked: 5",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "  ! seq gap 3->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seq gap 5->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seal S0 only partially present (3/9 leaves) — boundary of a filtered export, root not recomputed",
+   "",
+   "FAILED (first bad seq: 3): signed manifest commits to records that are not present — records suppressed or substituted (leaves_digest mismatch (exported leaf set altered))"
+  ]
+ },
+ "deleted_leaf_and_record_set_mismatch": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 4,
+   "seals_checked": 0,
+   "signatures_checked": 6,
+   "signatures_skipped": false,
+   "first_bad_seq": 3,
+   "error": "deleted leaf — seal S0 expects 5 leaves in seq 1..5, found 4 (missing seq 3)",
+   "warnings": [
+    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)"
+   ],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     4",
+   "  seals checked:      0",
+   "  signatures checked: 6",
+   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "",
+   "FAILED (first bad seq: 3): deleted leaf — seal S0 expects 5 leaves in seq 1..5, found 4 (missing seq 3)"
+  ]
+ },
+ "deleted_leaf_at_the_seal_tail": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 4,
+   "seals_checked": 0,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": 4,
+   "error": "deleted leaf — seal S0 expects 4 leaves in seq 1..4, found 3 (missing seq 4)",
+   "warnings": [
+    "seq gap 3->5 (range/tenant-filtered export; linkage across the gap not checkable offline)"
+   ],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     4",
+   "  seals checked:      0",
+   "  signatures checked: 5",
+   "  ! seq gap 3->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "",
+   "FAILED (first bad seq: 4): deleted leaf — seal S0 expects 4 leaves in seq 1..4, found 3 (missing seq 4)"
+  ]
+ },
+ "dense_prefix_window_attests": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 3,
+   "seals_checked": 1,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "seal S0 only partially present (3/9 leaves) — boundary of a filtered export, root not recomputed"
+   ],
+   "attestation": "ATTESTED",
+   "attestation_reasons": [],
+   "certificates_checked": 2,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      1",
+   "  signatures checked: 5",
+   "  certificates:       2 checked",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "  ! seal S0 only partially present (3/9 leaves) — boundary of a filtered export, root not recomputed",
+   "",
+   "VERIFIED, ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "The signing keys chain to the root you supplied and were certified at signing time."
+  ]
+ },
+ "dense_window_truncated_without_digest": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 0,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": 4,
+   "error": "truncated log — seal S0 commits to seq 1..9 but leaves end at 3",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      0",
+   "  signatures checked: 5",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "FAILED (first bad seq: 4): truncated log — seal S0 commits to seq 1..9 but leaves end at 3"
+  ]
+ },
+ "duplicate_leaf_hash": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 1,
+   "seals_checked": 0,
+   "signatures_checked": 1,
+   "signatures_skipped": false,
+   "first_bad_seq": 5,
+   "error": "duplicate leaf_hash at seq 5 (a record was copied into another's slot)",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     1",
+   "  seals checked:      0",
+   "  signatures checked: 1",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "FAILED (first bad seq: 5): duplicate leaf_hash at seq 5 (a record was copied into another's slot)"
+  ]
+ },
+ "duplicate_leaf_seq": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 4,
+   "seals_checked": 0,
+   "signatures_checked": 4,
+   "signatures_skipped": false,
+   "first_bad_seq": 5,
+   "error": "duplicate leaf seq 5 (record set padded)",
+   "warnings": [
+    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)"
+   ],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     4",
+   "  seals checked:      0",
+   "  signatures checked: 4",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "",
+   "FAILED (first bad seq: 5): duplicate leaf seq 5 (record set padded)"
+  ]
+ },
+ "edited_leaf_and_forged_seal": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 4,
+   "seals_checked": 0,
+   "signatures_checked": 4,
+   "signatures_skipped": false,
+   "first_bad_seq": 5,
+   "error": "leaf_hash mismatch at seq 5 (record tampered)",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     4",
+   "  seals checked:      0",
+   "  signatures checked: 4",
+   "",
+   "FAILED (first bad seq: 5): leaf_hash mismatch at seq 5 (record tampered)"
+  ]
+ },
+ "forged_manifest_and_forged_seal": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 5,
+   "seals_checked": 0,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "manifest signature invalid (custody broken)",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      0",
+   "  signatures checked: 5",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "FAILED: manifest signature invalid (custody broken)"
+  ]
+ },
+ "gapped_window_without_digest": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 3,
+   "seals_checked": 1,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "seq gap 3->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 5->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seal S0 only partially present (3/9 leaves) — boundary of a filtered export, root not recomputed"
+   ],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "signed manifest carries no leaves_digest — the exact exported leaf set is not bound to the certified key, so content substitution within a windowed export cannot be ruled out (re-export to attest)"
+   ],
+   "certificates_checked": 2,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      1",
+   "  signatures checked: 5",
+   "  certificates:       2 checked",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "  ! seq gap 3->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seq gap 5->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seal S0 only partially present (3/9 leaves) — boundary of a filtered export, root not recomputed",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: signed manifest carries no leaves_digest — the exact exported leaf set is not bound to the certified key, so content substitution within a windowed export cannot be ruled out (re-export to attest)"
+  ]
+ },
+ "genuine_handover": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 3,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 1,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ },
+ "genuine_handover_stdlib_only": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 3,
+   "seals_checked": 1,
+   "signatures_checked": 0,
+   "signatures_skipped": true,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'",
+    "signed manifest present but not verified (cryptography missing)",
+    "key handovers present but the manifest is not trusted — they are checked for self-consistency only",
+    "key handover <retiring>-><successor> not verified (cryptography missing)"
+   ],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      1",
+   "  signatures:         SKIPPED (install 'artzain[verify]')",
+   "  ! cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'",
+   "  ! signed manifest present but not verified (cryptography missing)",
+   "  ! key handovers present but the manifest is not trusted — they are checked for self-consistency only",
+   "  ! key handover <retiring>-><successor> not verified (cryptography missing)",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots are intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ },
+ "handover_forged_retiring_signature": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 0,
+   "signatures_checked": 4,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "invalid retiring signature on a key handover",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      0",
+   "  signatures checked: 4",
+   "",
+   "FAILED: invalid retiring signature on a key handover"
+  ]
+ },
+ "handover_names_unregistered_key": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 3,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "key handover <retiring>-><successor> is internally sound but the bundle carries no public key for <retiring>, so it cannot be tied to a key this bundle uses"
+   ],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 1,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "  ! key handover <retiring>-><successor> is internally sound but the bundle carries no public key for <retiring>, so it cannot be tied to a key this bundle uses",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ },
+ "handover_pem_differs_from_registry": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 0,
+   "signatures_checked": 6,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "a key handover's public key differs from the one the bundle registers for <retiring>",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 1,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      0",
+   "  signatures checked: 6",
+   "",
+   "FAILED: a key handover's public key differs from the one the bundle registers for <retiring>"
+  ]
+ },
+ "handover_row_outside_allowlist": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 0,
+   "signatures_checked": 4,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "key handover row carries fields outside the allowlist: invoice_reference",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      0",
+   "  signatures checked: 4",
+   "",
+   "FAILED: key handover row carries fields outside the allowlist: invoice_reference"
+  ]
+ },
+ "handovers_dropped_and_seal_edited": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 0,
+   "signatures_checked": 4,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "key handover set does not match the signed manifest (rotations_digest mismatch)",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      0",
+   "  signatures checked: 4",
+   "",
+   "FAILED: key handover set does not match the signed manifest (rotations_digest mismatch)"
+  ]
+ },
+ "handovers_with_untrusted_manifest": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 3,
+   "seals_checked": 1,
+   "signatures_checked": 6,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "key handovers present but the manifest is not trusted — they are checked for self-consistency only"
+   ],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 1,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      1",
+   "  signatures checked: 6",
+   "  ! key handovers present but the manifest is not trusted — they are checked for self-consistency only",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ },
+ "handovers_without_committed_digest": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 3,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 1,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ },
+ "huge_seal_range": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 5,
+   "seals_checked": 0,
+   "signatures_checked": 6,
+   "signatures_skipped": false,
+   "first_bad_seq": 6,
+   "error": "truncated log — seal S0 commits to seq 1..1000000000000000 but leaves end at 5",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      0",
+   "  signatures checked: 6",
+   "",
+   "FAILED (first bad seq: 6): truncated log — seal S0 commits to seq 1..1000000000000000 but leaves end at 5"
+  ]
+ },
+ "interior_per_batch_seals_attest": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 4,
+   "seals_checked": 4,
+   "signatures_checked": 9,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "seq gap 2->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 5->8 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 8->11 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seal S0 only partially present (1/3 leaves) — boundary of a filtered export, root not recomputed",
+    "seal S1 only partially present (1/3 leaves) — boundary of a filtered export, root not recomputed",
+    "seal S2 only partially present (1/3 leaves) — boundary of a filtered export, root not recomputed",
+    "seal S3 only partially present (1/3 leaves) — boundary of a filtered export, root not recomputed"
+   ],
+   "attestation": "ATTESTED",
+   "attestation_reasons": [],
+   "certificates_checked": 2,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     4",
+   "  seals checked:      4",
+   "  signatures checked: 9",
+   "  certificates:       2 checked",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "  ! seq gap 2->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seq gap 5->8 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seq gap 8->11 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seal S0 only partially present (1/3 leaves) — boundary of a filtered export, root not recomputed",
+   "  ! seal S1 only partially present (1/3 leaves) — boundary of a filtered export, root not recomputed",
+   "  ! seal S2 only partially present (1/3 leaves) — boundary of a filtered export, root not recomputed",
+   "  ! seal S3 only partially present (1/3 leaves) — boundary of a filtered export, root not recomputed",
+   "",
+   "VERIFIED, ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "The signing keys chain to the root you supplied and were certified at signing time."
+  ]
+ },
+ "interior_per_batch_seals_without_digest": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 4,
+   "seals_checked": 0,
+   "signatures_checked": 6,
+   "signatures_skipped": false,
+   "first_bad_seq": 4,
+   "error": "deleted leaf — seal S1 expects 3 leaves in seq 4..6, found 1 (missing seq 4)",
+   "warnings": [
+    "seq gap 2->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 5->8 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 8->11 (range/tenant-filtered export; linkage across the gap not checkable offline)"
+   ],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     4",
+   "  seals checked:      0",
+   "  signatures checked: 6",
+   "  ! seq gap 2->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seq gap 5->8 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seq gap 8->11 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "",
+   "FAILED (first bad seq: 4): deleted leaf — seal S1 expects 3 leaves in seq 4..6, found 1 (missing seq 4)"
+  ]
+ },
+ "key_label_spoof": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "leaf seq 1 not covered by a certificate valid at signing time"
+   ],
+   "certificates_checked": 2,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "  certificates:       2 checked",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: leaf seq 1 not covered by a certificate valid at signing time"
+  ]
+ },
+ "keys_json_unparseable": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 0,
+   "seals_checked": 0,
+   "signatures_checked": 0,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "could not read bundle: Expecting value: line 1 column 1 (char 0)",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     0",
+   "  seals checked:      0",
+   "  signatures checked: 0",
+   "",
+   "FAILED: could not read bundle: Expecting value: line 1 column 1 (char 0)"
+  ]
+ },
+ "last_seq_mismatch": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": 1,
+   "error": "signed manifest commits to records that are not present — records suppressed or substituted (last_seq 6≠5)",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "FAILED (first bad seq: 1): signed manifest commits to records that are not present — records suppressed or substituted (last_seq 6≠5)"
+  ]
+ },
+ "leaf_count_not_an_integer": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": 1,
+   "error": "signed manifest commits to records that are not present — records suppressed or substituted (leaf_count five≠5)",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "FAILED (first bad seq: 1): signed manifest commits to records that are not present — records suppressed or substituted (leaf_count five≠5)"
+  ]
+ },
+ "leaf_hash_mismatch": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 2,
+   "seals_checked": 0,
+   "signatures_checked": 2,
+   "signatures_skipped": false,
+   "first_bad_seq": 3,
+   "error": "leaf_hash mismatch at seq 3 (record tampered)",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     2",
+   "  seals checked:      0",
+   "  signatures checked: 2",
+   "",
+   "FAILED (first bad seq: 3): leaf_hash mismatch at seq 3 (record tampered)"
+  ]
+ },
+ "leaf_record_not_an_object": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 0,
+   "seals_checked": 0,
+   "signatures_checked": 0,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "could not read bundle: audit record is not a JSON object",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     0",
+   "  seals checked:      0",
+   "  signatures checked: 0",
+   "",
+   "FAILED: could not read bundle: audit record is not a JSON object"
+  ]
+ },
+ "leaf_seq_not_an_integer": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 0,
+   "seals_checked": 0,
+   "signatures_checked": 0,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "non-integer leaf seq (malformed record)",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     0",
+   "  seals checked:      0",
+   "  signatures checked: 0",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "FAILED: non-integer leaf seq (malformed record)"
+  ]
+ },
+ "manifest_not_an_object": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 6,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "certified bundle without a signed manifest"
+   ],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no verifiable signed manifest — the exported record set is not bound to the certified key, so its completeness cannot be attested"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 6",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "  ! certified bundle without a signed manifest",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: no verifiable signed manifest — the exported record set is not bound to the certified key, so its completeness cannot be attested"
+  ]
+ },
+ "manifest_signature_invalid": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 5,
+   "seals_checked": 0,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "manifest signature invalid (custody broken)",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      0",
+   "  signatures checked: 5",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "FAILED: manifest signature invalid (custody broken)"
+  ]
+ },
+ "manifest_signer_no_handover_names": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 3,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "key <notary> signed records here and no handover names it — either a second signing process, or a key that was never authorised"
+   ],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 1,
+   "unexplained_key_ids": [
+    "<notary>"
+   ],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "  ! key <notary> signed records here and no handover names it — either a second signing process, or a key that was never authorised",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ },
+ "merkle_root_mismatch": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 5,
+   "seals_checked": 0,
+   "signatures_checked": 6,
+   "signatures_skipped": false,
+   "first_bad_seq": 1,
+   "error": "merkle root mismatch for seal S0",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      0",
+   "  signatures checked: 6",
+   "",
+   "FAILED (first bad seq: 1): merkle root mismatch for seal S0"
+  ]
+ },
+ "no_public_key_for_leaf": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 0,
+   "seals_checked": 0,
+   "signatures_checked": 0,
+   "signatures_skipped": false,
+   "first_bad_seq": 1,
+   "error": "no public key <signer> for leaf seq 1",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     0",
+   "  seals checked:      0",
+   "  signatures checked: 0",
+   "",
+   "FAILED (first bad seq: 1): no public key <signer> for leaf seq 1"
+  ]
+ },
+ "no_public_key_for_seal": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 5,
+   "seals_checked": 0,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "no public key <other> for seal S0",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      0",
+   "  signatures checked: 5",
+   "",
+   "FAILED: no public key <other> for seal S0"
+  ]
+ },
+ "partial_seal_then_record_set_mismatch": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 1,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": 3,
+   "error": "signed manifest commits to records that are not present — records suppressed or substituted (leaf_count 4≠3)",
+   "warnings": [
+    "seal S0 only partially present (3/5 leaves) — boundary of a filtered export, root not recomputed"
+   ],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      1",
+   "  signatures checked: 5",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "  ! seal S0 only partially present (3/5 leaves) — boundary of a filtered export, root not recomputed",
+   "",
+   "FAILED (first bad seq: 3): signed manifest commits to records that are not present — records suppressed or substituted (leaf_count 4≠3)"
+  ]
+ },
+ "path_not_found": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 0,
+   "seals_checked": 0,
+   "signatures_checked": 0,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "bundle path not found: <bundle>",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     0",
+   "  seals checked:      0",
+   "  signatures checked: 0",
+   "",
+   "FAILED: bundle path not found: <bundle>"
+  ]
+ },
+ "prefix_deletion_suppressed": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 4,
+   "seals_checked": 1,
+   "signatures_checked": 6,
+   "signatures_skipped": false,
+   "first_bad_seq": 2,
+   "error": "signed manifest commits to records that are not present — records suppressed or substituted (first_seq 1≠2, leaf_count 5≠4, leaves_digest mismatch (exported leaf set altered))",
+   "warnings": [
+    "seal S0 only partially present (4/5 leaves) — boundary of a filtered export, root not recomputed"
+   ],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     4",
+   "  seals checked:      1",
+   "  signatures checked: 6",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "  ! seal S0 only partially present (4/5 leaves) — boundary of a filtered export, root not recomputed",
+   "",
+   "FAILED (first bad seq: 2): signed manifest commits to records that are not present — records suppressed or substituted (first_seq 1≠2, leaf_count 5≠4, leaves_digest mismatch (exported leaf set altered))"
+  ]
+ },
+ "resigned_by_uncertified_key": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 4,
+   "seals_checked": 1,
+   "signatures_checked": 6,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "seal S0 only partially present (4/5 leaves) — boundary of a filtered export, root not recomputed"
+   ],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "signed manifest is not signed by a certified deployment key — the committed record set is not bound to the Evidence Root"
+   ],
+   "certificates_checked": 2,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     4",
+   "  seals checked:      1",
+   "  signatures checked: 6",
+   "  certificates:       2 checked",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "  ! seal S0 only partially present (4/5 leaves) — boundary of a filtered export, root not recomputed",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: signed manifest is not signed by a certified deployment key — the committed record set is not bound to the Evidence Root"
+  ]
+ },
+ "rotations_digest_mismatch": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 0,
+   "signatures_checked": 4,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "key handover set does not match the signed manifest (rotations_digest mismatch)",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      0",
+   "  signatures checked: 4",
+   "",
+   "FAILED: key handover set does not match the signed manifest (rotations_digest mismatch)"
+  ]
+ },
+ "seal_chain_gap": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 2,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "seal chain gap before S1 (earlier seal not in this bundle)"
+   ],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      2",
+   "  signatures checked: 7",
+   "  ! seal chain gap before S1 (earlier seal not in this bundle)",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ },
+ "seal_hash_mismatch": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 5,
+   "seals_checked": 0,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "seal_hash mismatch for seal S0",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      0",
+   "  signatures checked: 5",
+   "",
+   "FAILED: seal_hash mismatch for seal S0"
+  ]
+ },
+ "seal_range_not_an_integer": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 5,
+   "seals_checked": 0,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "non-integer seal range for seal S0 (malformed record)",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      0",
+   "  signatures checked: 7",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "FAILED: non-integer seal range for seal S0 (malformed record)"
+  ]
+ },
+ "seal_signer_no_handover_names": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 3,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "key <sealer> signed records here and no handover names it — either a second signing process, or a key that was never authorised"
+   ],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 1,
+   "unexplained_key_ids": [
+    "<sealer>"
+   ],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "  ! key <sealer> signed records here and no handover names it — either a second signing process, or a key that was never authorised",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ },
+ "seals_stripped": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 5,
+   "seals_checked": 0,
+   "signatures_checked": 6,
+   "signatures_skipped": false,
+   "first_bad_seq": 1,
+   "error": "signed manifest commits to records that are not present — records suppressed or substituted (seal_count 1≠0)",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      0",
+   "  signatures checked: 6",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "FAILED (first bad seq: 1): signed manifest commits to records that are not present — records suppressed or substituted (seal_count 1≠0)"
+  ]
+ },
+ "seq_gap_then_deleted_leaf": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 4,
+   "seals_checked": 0,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": 3,
+   "error": "deleted leaf — seal S0 expects 5 leaves in seq 1..5, found 4 (missing seq 3)",
+   "warnings": [
+    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)"
+   ],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     4",
+   "  seals checked:      0",
+   "  signatures checked: 5",
+   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "",
+   "FAILED (first bad seq: 3): deleted leaf — seal S0 expects 5 leaves in seq 1..5, found 4 (missing seq 3)"
+  ]
+ },
+ "signed_manifest_key_absent": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 0,
+   "seals_checked": 0,
+   "signatures_checked": 0,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "signed manifest key <stranger> not in the bundle — custody not verified"
+   ],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     0",
+   "  seals checked:      0",
+   "  signatures checked: 0",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "  ! signed manifest key <stranger> not in the bundle — custody not verified",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ },
+ "signed_manifest_stdlib_only": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 0,
+   "signatures_skipped": true,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'",
+    "signed manifest present but not verified (cryptography missing)"
+   ],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "cryptography not installed — certificate chain not evaluated"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures:         SKIPPED (install 'artzain[verify]')",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "  ! cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'",
+   "  ! signed manifest present but not verified (cryptography missing)",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots are intact.",
+   "  self-attested because: cryptography not installed — certificate chain not evaluated"
+  ]
+ },
+ "sole_signer_no_handover_names": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 9,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "key <attacker> signed records here and no handover names it — either a second signing process, or a key that was never authorised"
+   ],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 1,
+   "unexplained_key_ids": [
+    "<attacker>"
+   ],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 9",
+   "  ! key <attacker> signed records here and no handover names it — either a second signing process, or a key that was never authorised",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ },
+ "substituted_keypair": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "leaf seq 1 not covered by a certificate valid at signing time"
+   ],
+   "certificates_checked": 2,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "  certificates:       2 checked",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: leaf seq 1 not covered by a certificate valid at signing time"
+  ]
+ },
+ "tampered_issuing_certificate_noted": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "ATTESTED",
+   "attestation_reasons": [
+    "issuing certificate ISS-TAMPERED signature invalid"
+   ],
+   "certificates_checked": 2,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "  certificates:       2 checked",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "VERIFIED, ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "Notes on the certificate chain:",
+   "  - issuing certificate ISS-TAMPERED signature invalid",
+   "The signing keys chain to the root you supplied and were certified at signing time."
+  ]
+ },
+ "truncated_log": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 0,
+   "signatures_checked": 4,
+   "signatures_skipped": false,
+   "first_bad_seq": 4,
+   "error": "truncated log — seal S0 commits to seq 1..5 but leaves end at 3",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      0",
+   "  signatures checked: 4",
+   "",
+   "FAILED (first bad seq: 4): truncated log — seal S0 commits to seq 1..5 but leaves end at 3"
+  ]
+ },
+ "truncated_log_under_an_unsigned_digest": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 0,
+   "signatures_checked": 4,
+   "signatures_skipped": false,
+   "first_bad_seq": 4,
+   "error": "truncated log — seal S0 commits to seq 1..5 but leaves end at 3",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      0",
+   "  signatures checked: 4",
+   "",
+   "FAILED (first bad seq: 4): truncated log — seal S0 commits to seq 1..5 but leaves end at 3"
+  ]
+ },
+ "truncated_log_under_an_unverified_digest": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 0,
+   "signatures_checked": 0,
+   "signatures_skipped": true,
+   "first_bad_seq": 4,
+   "error": "truncated log — seal S0 commits to seq 1..5 but leaves end at 3",
+   "warnings": [
+    "cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'",
+    "signed manifest present but not verified (cryptography missing)"
+   ],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      0",
+   "  signatures:         SKIPPED (install 'artzain[verify]')",
+   "  ! cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'",
+   "  ! signed manifest present but not verified (cryptography missing)",
+   "",
+   "FAILED (first bad seq: 4): truncated log — seal S0 commits to seq 1..5 but leaves end at 3"
+  ]
+ },
+ "unhashable_leaf_signer": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 0,
+   "seals_checked": 0,
+   "signatures_checked": 0,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "malformed bundle (TypeError)",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     0",
+   "  seals checked:      0",
+   "  signatures checked: 0",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "FAILED: malformed bundle (TypeError)"
+  ]
+ },
+ "unhashable_leaf_signer_stdlib_only": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 5,
+   "seals_checked": 0,
+   "signatures_checked": 0,
+   "signatures_skipped": true,
+   "first_bad_seq": null,
+   "error": "malformed bundle (TypeError)",
+   "warnings": [
+    "cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'"
+   ],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      0",
+   "  signatures:         SKIPPED (install 'artzain[verify]')",
+   "  ! cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'",
+   "",
+   "FAILED: malformed bundle (TypeError)"
+  ]
+ },
+ "unhashable_manifest_signer": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 5,
+   "seals_checked": 0,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "malformed bundle (TypeError)",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      0",
+   "  signatures checked: 5",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "FAILED: malformed bundle (TypeError)"
+  ]
+ },
+ "unsigned_manifest_counts_unchecked": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 6,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 6",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ },
+ "whole_log_deleted": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 0,
+   "seals_checked": 1,
+   "signatures_checked": 2,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "signed manifest commits to records that are not present — records suppressed or substituted (first_seq 1≠None, last_seq 5≠None, leaf_count 5≠0)",
+   "warnings": [
+    "seal S0 only partially present (0/5 leaves) — boundary of a filtered export, root not recomputed"
+   ],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     0",
+   "  seals checked:      1",
+   "  signatures checked: 2",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "  ! seal S0 only partially present (0/5 leaves) — boundary of a filtered export, root not recomputed",
+   "",
+   "FAILED: signed manifest commits to records that are not present — records suppressed or substituted (first_seq 1≠None, last_seq 5≠None, leaf_count 5≠0)"
+  ]
+ },
+ "windowed_export_attests": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 3,
+   "seals_checked": 1,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "seal S0 only partially present (3/5 leaves) — boundary of a filtered export, root not recomputed"
+   ],
+   "attestation": "ATTESTED",
+   "attestation_reasons": [],
+   "certificates_checked": 2,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      1",
+   "  signatures checked: 5",
+   "  certificates:       2 checked",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "  ! seal S0 only partially present (3/5 leaves) — boundary of a filtered export, root not recomputed",
+   "",
+   "VERIFIED, ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "The signing keys chain to the root you supplied and were certified at signing time."
+  ]
+ },
+ "without_leaves_digest": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "signed manifest carries no leaves_digest — the exact exported leaf set is not bound to the certified key, so content substitution within a windowed export cannot be ruled out (re-export to attest)"
+   ],
+   "certificates_checked": 2,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "  certificates:       2 checked",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: signed manifest carries no leaves_digest — the exact exported leaf set is not bound to the certified key, so content substitution within a windowed export cannot be ruled out (re-export to attest)"
+  ]
+ },
+ "wrong_key_for_leaf": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 0,
+   "seals_checked": 0,
+   "signatures_checked": 0,
+   "signatures_skipped": false,
+   "first_bad_seq": 1,
+   "error": "bad leaf signature at seq 1",
+   "warnings": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     0",
+   "  seals checked:      0",
+   "  signatures checked: 0",
+   "",
+   "FAILED (first bad seq: 1): bad leaf signature at seq 1"
+  ]
+ },
+ "wrong_root_fingerprint": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "root public key fingerprint mismatch — does not chain to the pinned Evidence Root"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "abababababababababababababababababababababababababababababababab",
+   "root_fingerprint_overridden": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: root public key fingerprint mismatch — does not chain to the pinned Evidence Root"
+  ]
+ },
+ "zip_bundle": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 6,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 6",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ }
+}

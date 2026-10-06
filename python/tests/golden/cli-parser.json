@@ -1,0 +1,3633 @@
+{
+ "prog": "artzain",
+ "usage": null,
+ "description": "Cognexus LLM safety SDK — prompt defence, guards, kill switch, audit.",
+ "epilog": null,
+ "formatter_class": "HelpFormatter",
+ "add_help": true,
+ "allow_abbrev": true,
+ "defaults": {},
+ "groups": [
+  [
+   "command"
+  ],
+  [
+   "help"
+  ]
+ ],
+ "actions": [
+  {
+   "kind": "_HelpAction",
+   "option_strings": [
+    "-h",
+    "--help"
+   ],
+   "dest": "help",
+   "nargs": 0,
+   "const": null,
+   "default": "==SUPPRESS==",
+   "type": null,
+   "required": false,
+   "help": "show this help message and exit",
+   "metavar": null,
+   "choices": null
+  },
+  {
+   "kind": "_SubParsersAction",
+   "option_strings": [],
+   "dest": "command",
+   "nargs": "A...",
+   "const": null,
+   "default": null,
+   "type": null,
+   "required": true,
+   "help": null,
+   "metavar": null,
+   "commands": [
+    {
+     "name": "quickstart",
+     "help": "Resolve API key, then run an interactive SDK tour.",
+     "parser": {
+      "prog": "artzain quickstart",
+      "usage": null,
+      "description": null,
+      "epilog": null,
+      "formatter_class": "HelpFormatter",
+      "add_help": true,
+      "allow_abbrev": true,
+      "defaults": {
+       "func": "<cmd_quickstart>"
+      },
+      "groups": [
+       [],
+       [
+        "help"
+       ]
+      ],
+      "actions": [
+       {
+        "kind": "_HelpAction",
+        "option_strings": [
+         "-h",
+         "--help"
+        ],
+        "dest": "help",
+        "nargs": 0,
+        "const": null,
+        "default": "==SUPPRESS==",
+        "type": null,
+        "required": false,
+        "help": "show this help message and exit",
+        "metavar": null,
+        "choices": null
+       }
+      ]
+     }
+    },
+    {
+     "name": "init",
+     "help": "Scaffold a runnable example placing decide() in your framework.",
+     "parser": {
+      "prog": "artzain init",
+      "usage": null,
+      "description": "Writes a worked example showing where the decision goes for a given framework:\n\n  langgraph  a guard node + conditional edge (only `allow` reaches act)\n  mcp        a gate inside call_tool, before the tool executes\n  crewai     a @governed decorator wrapping the tool the agent calls\n  openclaw   a before_tool_call hook (block deny/review/errors; not a ClawHub plugin)\n\nThese are examples to copy from, not adapters to depend on.",
+      "epilog": null,
+      "formatter_class": "RawDescriptionHelpFormatter",
+      "add_help": true,
+      "allow_abbrev": true,
+      "defaults": {
+       "func": "<cmd_init>"
+      },
+      "groups": [
+       [],
+       [
+        "help",
+        "framework",
+        "output",
+        "force"
+       ]
+      ],
+      "actions": [
+       {
+        "kind": "_HelpAction",
+        "option_strings": [
+         "-h",
+         "--help"
+        ],
+        "dest": "help",
+        "nargs": 0,
+        "const": null,
+        "default": "==SUPPRESS==",
+        "type": null,
+        "required": false,
+        "help": "show this help message and exit",
+        "metavar": null,
+        "choices": null
+       },
+       {
+        "kind": "_StoreAction",
+        "option_strings": [
+         "--framework",
+         "-f"
+        ],
+        "dest": "framework",
+        "nargs": null,
+        "const": null,
+        "default": null,
+        "type": null,
+        "required": true,
+        "help": "Which framework scaffold to write.",
+        "metavar": null,
+        "choices": [
+         "crewai",
+         "langgraph",
+         "mcp",
+         "openclaw",
+         "openshell"
+        ]
+       },
+       {
+        "kind": "_StoreAction",
+        "option_strings": [
+         "--output",
+         "-o"
+        ],
+        "dest": "output",
+        "nargs": null,
+        "const": null,
+        "default": null,
+        "type": null,
+        "required": false,
+        "help": "Write to this path instead of the default.",
+        "metavar": null,
+        "choices": null
+       },
+       {
+        "kind": "_StoreTrueAction",
+        "option_strings": [
+         "--force"
+        ],
+        "dest": "force",
+        "nargs": 0,
+        "const": true,
+        "default": false,
+        "type": null,
+        "required": false,
+        "help": "Overwrite an existing file.",
+        "metavar": null,
+        "choices": null
+       }
+      ]
+     }
+    },
+    {
+     "name": "login",
+     "help": "Sign in via browser device code; write ~/.artzain/credentials.toml.",
+     "parser": {
+      "prog": "artzain login",
+      "usage": null,
+      "description": null,
+      "epilog": null,
+      "formatter_class": "HelpFormatter",
+      "add_help": true,
+      "allow_abbrev": true,
+      "defaults": {
+       "func": "<cmd_login>"
+      },
+      "groups": [
+       [],
+       [
+        "help"
+       ]
+      ],
+      "actions": [
+       {
+        "kind": "_HelpAction",
+        "option_strings": [
+         "-h",
+         "--help"
+        ],
+        "dest": "help",
+        "nargs": 0,
+        "const": null,
+        "default": "==SUPPRESS==",
+        "type": null,
+        "required": false,
+        "help": "show this help message and exit",
+        "metavar": null,
+        "choices": null
+       }
+      ]
+     }
+    },
+    {
+     "name": "signup",
+     "help": "Open the get-a-key page, then run device login.",
+     "parser": {
+      "prog": "artzain signup",
+      "usage": null,
+      "description": null,
+      "epilog": null,
+      "formatter_class": "HelpFormatter",
+      "add_help": true,
+      "allow_abbrev": true,
+      "defaults": {
+       "func": "<cmd_signup>"
+      },
+      "groups": [
+       [],
+       [
+        "help"
+       ]
+      ],
+      "actions": [
+       {
+        "kind": "_HelpAction",
+        "option_strings": [
+         "-h",
+         "--help"
+        ],
+        "dest": "help",
+        "nargs": 0,
+        "const": null,
+        "default": "==SUPPRESS==",
+        "type": null,
+        "required": false,
+        "help": "show this help message and exit",
+        "metavar": null,
+        "choices": null
+       }
+      ]
+     }
+    },
+    {
+     "name": "gui",
+     "help": "Open Artzain Chat (local) — a chat client connected to the platform.",
+     "parser": {
+      "prog": "artzain gui",
+      "usage": null,
+      "description": "Artzain Chat (local): a lightweight HTTP proxy on 127.0.0.1 that opens the\ndefault browser at that address.  All /api/* traffic is forwarded to the\nCogNEXUS platform API (COGNEXUS_API_BASE_URL or https://app.cognexuslabs.ai\nby default).  This is the local chat client, not the hosted dashboard —\nthe dashboard lives at <base>/dashboard.html.\n\nSign in with your CogNEXUS account credentials in the browser to start chatting.\nUse @legalAgent / @propensityAgent / @complianceMonitor / @codeBastion to route\nmessages to specific agents, or pick one from the dropdown in the composer.",
+      "epilog": null,
+      "formatter_class": "RawDescriptionHelpFormatter",
+      "add_help": true,
+      "allow_abbrev": true,
+      "defaults": {
+       "func": "<cmd_gui>"
+      },
+      "groups": [
+       [],
+       [
+        "help",
+        "port",
+        "no_browser"
+       ]
+      ],
+      "actions": [
+       {
+        "kind": "_HelpAction",
+        "option_strings": [
+         "-h",
+         "--help"
+        ],
+        "dest": "help",
+        "nargs": 0,
+        "const": null,
+        "default": "==SUPPRESS==",
+        "type": null,
+        "required": false,
+        "help": "show this help message and exit",
+        "metavar": null,
+        "choices": null
+       },
+       {
+        "kind": "_StoreAction",
+        "option_strings": [
+         "--port"
+        ],
+        "dest": "port",
+        "nargs": null,
+        "const": null,
+        "default": null,
+        "type": "<int>",
+        "required": false,
+        "help": "Local TCP port (default: random free port).",
+        "metavar": "PORT",
+        "choices": null
+       },
+       {
+        "kind": "_StoreTrueAction",
+        "option_strings": [
+         "--no-browser"
+        ],
+        "dest": "no_browser",
+        "nargs": 0,
+        "const": true,
+        "default": false,
+        "type": null,
+        "required": false,
+        "help": "Start the server without opening a browser tab (headless / CI use).",
+        "metavar": null,
+        "choices": null
+       }
+      ]
+     }
+    },
+    {
+     "name": "audit",
+     "help": "Audit evidence tooling (offline bundle verification).",
+     "parser": {
+      "prog": "artzain audit",
+      "usage": null,
+      "description": null,
+      "epilog": null,
+      "formatter_class": "HelpFormatter",
+      "add_help": true,
+      "allow_abbrev": true,
+      "defaults": {},
+      "groups": [
+       [
+        "audit_command"
+       ],
+       [
+        "help"
+       ]
+      ],
+      "actions": [
+       {
+        "kind": "_HelpAction",
+        "option_strings": [
+         "-h",
+         "--help"
+        ],
+        "dest": "help",
+        "nargs": 0,
+        "const": null,
+        "default": "==SUPPRESS==",
+        "type": null,
+        "required": false,
+        "help": "show this help message and exit",
+        "metavar": null,
+        "choices": null
+       },
+       {
+        "kind": "_SubParsersAction",
+        "option_strings": [],
+        "dest": "audit_command",
+        "nargs": "A...",
+        "const": null,
+        "default": null,
+        "type": null,
+        "required": true,
+        "help": null,
+        "metavar": null,
+        "commands": [
+         {
+          "name": "verify",
+          "help": "Verify an exported audit evidence bundle (directory or .zip) offline.",
+          "parser": {
+           "prog": "artzain audit verify",
+           "usage": null,
+           "description": "Recompute every leaf hash, check hash-chain linkage and Merkle roots,\nand verify Ed25519 signatures against the bundle's public keys, with\nzero network. Those keys come from the bundle, so trust in the\nproducing server drops out only at VERIFIED, ATTESTED, which needs the\nsigning keys to chain to the pinned CogNEXUS Evidence Root. This\nrelease pins no Evidence Root: an intact bundle reports\nVERIFIED, SELF-ATTESTED unless --root-fingerprint supplies a test root.\nDownload a bundle from GET /api/v1/audit/export. Signature checks\nrequire 'artzain[verify]'.",
+           "epilog": null,
+           "formatter_class": "RawDescriptionHelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_audit_verify>"
+           },
+           "groups": [
+            [
+             "bundle"
+            ],
+            [
+             "help",
+             "json",
+             "root_fingerprint"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [],
+             "dest": "bundle",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": "Path to the bundle directory or .zip file.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--json"
+             ],
+             "dest": "json",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": "Emit a JSON result.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--root-fingerprint"
+             ],
+             "dest": "root_fingerprint",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Override the pinned CogNEXUS Evidence Root fingerprint (test roots only — the output states when a non-default root is in use).",
+             "metavar": "SHA256HEX",
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "export",
+          "help": "Download an audit evidence bundle (ZIP) from the server.",
+          "parser": {
+           "prog": "artzain audit export",
+           "usage": null,
+           "description": "Download a self-contained, offline-verifiable evidence bundle from\nGET /api/v1/audit/export. Use --profile to add a framework artifact\nset (control mapping, bundle history, promotion trail, and a\ncompliance summary): eu-ai-act, nist-ai-rmf, iso-42001, or\nsoc2-ai-controls. Requires COGNEXUS_API_KEY.",
+           "epilog": null,
+           "formatter_class": "RawDescriptionHelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_audit_export>"
+           },
+           "groups": [
+            [],
+            [
+             "help",
+             "profile",
+             "from_",
+             "to",
+             "out"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--profile"
+             ],
+             "dest": "profile",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Evidence profile (adds a framework-mapped artifact set).",
+             "metavar": null,
+             "choices": [
+              "eu-ai-act",
+              "nist-ai-rmf",
+              "iso-42001",
+              "soc2-ai-controls"
+             ]
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--from"
+             ],
+             "dest": "from_",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "ISO-8601 lower bound on created_at.",
+             "metavar": "ISO",
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--to"
+             ],
+             "dest": "to",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "ISO-8601 upper bound on created_at.",
+             "metavar": "ISO",
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--out"
+             ],
+             "dest": "out",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Output ZIP path (default: ./artzain-audit-<stamp>.zip).",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         }
+        ],
+        "choices": [
+         "verify",
+         "export"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "name": "licence",
+     "help": "Licence lifecycle: request, install, attest, anchor, verify.",
+     "parser": {
+      "prog": "artzain licence",
+      "usage": null,
+      "description": null,
+      "epilog": null,
+      "formatter_class": "HelpFormatter",
+      "add_help": true,
+      "allow_abbrev": true,
+      "defaults": {},
+      "groups": [
+       [
+        "licence_command"
+       ],
+       [
+        "help"
+       ]
+      ],
+      "actions": [
+       {
+        "kind": "_HelpAction",
+        "option_strings": [
+         "-h",
+         "--help"
+        ],
+        "dest": "help",
+        "nargs": 0,
+        "const": null,
+        "default": "==SUPPRESS==",
+        "type": null,
+        "required": false,
+        "help": "show this help message and exit",
+        "metavar": null,
+        "choices": null
+       },
+       {
+        "kind": "_SubParsersAction",
+        "option_strings": [],
+        "dest": "licence_command",
+        "nargs": "A...",
+        "const": null,
+        "default": null,
+        "type": null,
+        "required": true,
+        "help": null,
+        "metavar": null,
+        "commands": [
+         {
+          "name": "request",
+          "help": "Write a certificate signing request (public key only).",
+          "parser": {
+           "prog": "artzain licence request",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_licence_request>"
+           },
+           "groups": [
+            [],
+            [
+             "help",
+             "install_id",
+             "public_key",
+             "deployment_class",
+             "customer_id",
+             "out"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--install-id"
+             ],
+             "dest": "install_id",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--public-key"
+             ],
+             "dest": "public_key",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": "Path to this deployment's audit_signing_key.pub.pem.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--deployment-class"
+             ],
+             "dest": "deployment_class",
+             "nargs": null,
+             "const": null,
+             "default": "private",
+             "type": null,
+             "required": false,
+             "help": null,
+             "metavar": null,
+             "choices": [
+              "hosted",
+              "private",
+              "sovereign",
+              "airgapped"
+             ]
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--customer-id"
+             ],
+             "dest": "customer_id",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--out"
+             ],
+             "dest": "out",
+             "nargs": null,
+             "const": null,
+             "default": "licence-request.json",
+             "type": null,
+             "required": false,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "install",
+          "help": "Verify a certificate to the Evidence Root and install it.",
+          "parser": {
+           "prog": "artzain licence install",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_licence_install>"
+           },
+           "groups": [
+            [
+             "certificate"
+            ],
+            [
+             "help",
+             "chain",
+             "root_key",
+             "issuing",
+             "root_fingerprint",
+             "offline_only",
+             "dir",
+             "base_url",
+             "allow_remote"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [],
+             "dest": "certificate",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": "Path to the certificate JSON.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--chain"
+             ],
+             "dest": "chain",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Certificate chain JSON (root key + issuing certs).",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--root-key"
+             ],
+             "dest": "root_key",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Evidence Root public key PEM.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--issuing"
+             ],
+             "dest": "issuing",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Issuing certificate(s) JSON.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--root-fingerprint"
+             ],
+             "dest": "root_fingerprint",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Override the pinned Evidence Root fingerprint.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--offline-only"
+             ],
+             "dest": "offline_only",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": "Verify and write the file, but do not install.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--dir"
+             ],
+             "dest": "dir",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Where to write it with --offline-only.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--base-url"
+             ],
+             "dest": "base_url",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Deployment to talk to (default: this machine).",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--allow-remote"
+             ],
+             "dest": "allow_remote",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": "Permit a non-loopback --base-url.",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "attest",
+          "help": "Write a Sealed Usage Attestation for a period.",
+          "parser": {
+           "prog": "artzain licence attest",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_licence_attest>"
+           },
+           "groups": [
+            [],
+            [
+             "help",
+             "period_start",
+             "period_end",
+             "licence_id",
+             "out",
+             "base_url",
+             "allow_remote"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--period-start"
+             ],
+             "dest": "period_start",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": "ISO-8601.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--period-end"
+             ],
+             "dest": "period_end",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": "ISO-8601.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--licence-id"
+             ],
+             "dest": "licence_id",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--out"
+             ],
+             "dest": "out",
+             "nargs": null,
+             "const": null,
+             "default": "usage-attestation.json",
+             "type": null,
+             "required": false,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--base-url"
+             ],
+             "dest": "base_url",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Deployment to talk to (default: this machine).",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--allow-remote"
+             ],
+             "dest": "allow_remote",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": "Permit a non-loopback --base-url.",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "anchor-request",
+          "help": "Write the document CogNEXUS countersigns to make an anchor.",
+          "parser": {
+           "prog": "artzain licence anchor-request",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_licence_anchor_request>"
+           },
+           "groups": [
+            [],
+            [
+             "help",
+             "out",
+             "base_url",
+             "allow_remote"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--out"
+             ],
+             "dest": "out",
+             "nargs": null,
+             "const": null,
+             "default": "anchor-request.json",
+             "type": null,
+             "required": false,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--base-url"
+             ],
+             "dest": "base_url",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Deployment to talk to (default: this machine).",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--allow-remote"
+             ],
+             "dest": "allow_remote",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": "Permit a non-loopback --base-url.",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "anchor",
+          "help": "Store a CogNEXUS-signed anchor in this deployment.",
+          "parser": {
+           "prog": "artzain licence anchor",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_licence_anchor>"
+           },
+           "groups": [
+            [
+             "anchor"
+            ],
+            [
+             "help",
+             "base_url",
+             "allow_remote"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [],
+             "dest": "anchor",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": "Path to the signed anchor JSON.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--base-url"
+             ],
+             "dest": "base_url",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Deployment to talk to (default: this machine).",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--allow-remote"
+             ],
+             "dest": "allow_remote",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": "Permit a non-loopback --base-url.",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "anchors",
+          "help": "Export stored anchors for offline verification.",
+          "parser": {
+           "prog": "artzain licence anchors",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_licence_anchors>"
+           },
+           "groups": [
+            [],
+            [
+             "help",
+             "out",
+             "limit",
+             "base_url",
+             "allow_remote"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--out"
+             ],
+             "dest": "out",
+             "nargs": null,
+             "const": null,
+             "default": "anchors.json",
+             "type": null,
+             "required": false,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--limit"
+             ],
+             "dest": "limit",
+             "nargs": null,
+             "const": null,
+             "default": 1000,
+             "type": "<int>",
+             "required": false,
+             "help": "Maximum anchors to export (newest first).",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--base-url"
+             ],
+             "dest": "base_url",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Deployment to talk to (default: this machine).",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--allow-remote"
+             ],
+             "dest": "allow_remote",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": "Permit a non-loopback --base-url.",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "verify",
+          "help": "Verify an attestation offline (no network).",
+          "parser": {
+           "prog": "artzain licence verify",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_licence_verify>"
+           },
+           "groups": [
+            [
+             "attestation"
+            ],
+            [
+             "help",
+             "public_key",
+             "certificates",
+             "anchors",
+             "issuer_key",
+             "root_fingerprint",
+             "json"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [],
+             "dest": "attestation",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--public-key"
+             ],
+             "dest": "public_key",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Deployment public key PEM, to check the signature.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--certificates"
+             ],
+             "dest": "certificates",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Certificate chain JSON. Without it the verdict is capped at SELF-ATTESTED.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--anchors"
+             ],
+             "dest": "anchors",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "JSON file of CogNEXUS-signed anchors to cross-check. Requires --issuer-key.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--issuer-key"
+             ],
+             "dest": "issuer_key",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "CogNEXUS issuing public key PEM, to verify anchors. Taken from --certificates when omitted.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--root-fingerprint"
+             ],
+             "dest": "root_fingerprint",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Override the pinned Evidence Root fingerprint.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--json"
+             ],
+             "dest": "json",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         }
+        ],
+        "choices": [
+         "request",
+         "install",
+         "attest",
+         "anchor-request",
+         "anchor",
+         "anchors",
+         "verify"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "name": "policy",
+     "help": "Policy bundle versioning (FR-6) — keys, signing, push, promote, diff.",
+     "parser": {
+      "prog": "artzain policy",
+      "usage": null,
+      "description": "Manage versioned, signed, per-team policy bundles. Keys are generated\nand bundles are signed locally (private keys never leave your machine);\nthe server rejects unsigned / wrong-key / tampered bundles at upload.\nBundles are resolved per team — a promoted bundle drives that team's\ndecisions. Signing needs the artzain[policy] extra.",
+      "epilog": null,
+      "formatter_class": "RawDescriptionHelpFormatter",
+      "add_help": true,
+      "allow_abbrev": true,
+      "defaults": {},
+      "groups": [
+       [
+        "policy_command"
+       ],
+       [
+        "help"
+       ]
+      ],
+      "actions": [
+       {
+        "kind": "_HelpAction",
+        "option_strings": [
+         "-h",
+         "--help"
+        ],
+        "dest": "help",
+        "nargs": 0,
+        "const": null,
+        "default": "==SUPPRESS==",
+        "type": null,
+        "required": false,
+        "help": "show this help message and exit",
+        "metavar": null,
+        "choices": null
+       },
+       {
+        "kind": "_SubParsersAction",
+        "option_strings": [],
+        "dest": "policy_command",
+        "nargs": "A...",
+        "const": null,
+        "default": null,
+        "type": null,
+        "required": true,
+        "help": null,
+        "metavar": null,
+        "commands": [
+         {
+          "name": "keygen",
+          "help": "Generate an Ed25519 signing keypair locally.",
+          "parser": {
+           "prog": "artzain policy keygen",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_policy_keygen>"
+           },
+           "groups": [
+            [],
+            [
+             "help",
+             "out"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--out"
+             ],
+             "dest": "out",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Key directory (default: ~/.artzain/policy).",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "register-key",
+          "help": "Upload the public key to your team (owner).",
+          "parser": {
+           "prog": "artzain policy register-key",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_policy_register_key>"
+           },
+           "groups": [
+            [],
+            [
+             "help",
+             "key"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--key"
+             ],
+             "dest": "key",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Key directory (default: ~/.artzain/policy).",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "sign",
+          "help": "Sign a bundle JSON file locally.",
+          "parser": {
+           "prog": "artzain policy sign",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_policy_sign>"
+           },
+           "groups": [
+            [
+             "bundle"
+            ],
+            [
+             "help",
+             "key",
+             "out"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [],
+             "dest": "bundle",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": "Path to the unsigned bundle JSON.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--key"
+             ],
+             "dest": "key",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Key directory (default: ~/.artzain/policy).",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--out"
+             ],
+             "dest": "out",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Output path (default: <bundle>.signed.json).",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "push",
+          "help": "Upload a signed bundle (→ draft).",
+          "parser": {
+           "prog": "artzain policy push",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_policy_push>"
+           },
+           "groups": [
+            [
+             "bundle"
+            ],
+            [
+             "help"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [],
+             "dest": "bundle",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": "Path to the signed bundle JSON.",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "shadow",
+          "help": "Move a bundle to shadow (owner/admin).",
+          "parser": {
+           "prog": "artzain policy shadow",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_policy_shadow>"
+           },
+           "groups": [
+            [
+             "bundle_id"
+            ],
+            [
+             "help"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [],
+             "dest": "bundle_id",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": "Bundle id.",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "promote",
+          "help": "Promote a bundle to active (owner).",
+          "parser": {
+           "prog": "artzain policy promote",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_policy_promote>"
+           },
+           "groups": [
+            [
+             "bundle_id"
+            ],
+            [
+             "help"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [],
+             "dest": "bundle_id",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": "Bundle id.",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "retire",
+          "help": "Retire a bundle (owner).",
+          "parser": {
+           "prog": "artzain policy retire",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_policy_retire>"
+           },
+           "groups": [
+            [
+             "bundle_id"
+            ],
+            [
+             "help"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [],
+             "dest": "bundle_id",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": "Bundle id.",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "diff",
+          "help": "Diff two bundles by id.",
+          "parser": {
+           "prog": "artzain policy diff",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_policy_diff>"
+           },
+           "groups": [
+            [
+             "a",
+             "b"
+            ],
+            [
+             "help"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [],
+             "dest": "a",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": "First bundle id.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [],
+             "dest": "b",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": "Second bundle id.",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         }
+        ],
+        "choices": [
+         "keygen",
+         "register-key",
+         "sign",
+         "push",
+         "shadow",
+         "promote",
+         "retire",
+         "diff"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "name": "registry",
+     "help": "Enterprise agent catalog (FR-12) — list, export, findings.",
+     "parser": {
+      "prog": "artzain registry",
+      "usage": null,
+      "description": "Query the merged agent catalog: the engine's governed identities plus\nagents discovered across your estate (MCP servers, Kubernetes workloads,\nCI/CD pipelines, Microsoft Copilot). Read-only; requires COGNEXUS_API_KEY.",
+      "epilog": null,
+      "formatter_class": "RawDescriptionHelpFormatter",
+      "add_help": true,
+      "allow_abbrev": true,
+      "defaults": {},
+      "groups": [
+       [
+        "registry_command"
+       ],
+       [
+        "help"
+       ]
+      ],
+      "actions": [
+       {
+        "kind": "_HelpAction",
+        "option_strings": [
+         "-h",
+         "--help"
+        ],
+        "dest": "help",
+        "nargs": 0,
+        "const": null,
+        "default": "==SUPPRESS==",
+        "type": null,
+        "required": false,
+        "help": "show this help message and exit",
+        "metavar": null,
+        "choices": null
+       },
+       {
+        "kind": "_SubParsersAction",
+        "option_strings": [],
+        "dest": "registry_command",
+        "nargs": "A...",
+        "const": null,
+        "default": null,
+        "type": null,
+        "required": true,
+        "help": null,
+        "metavar": null,
+        "commands": [
+         {
+          "name": "list",
+          "help": "List catalog entries.",
+          "parser": {
+           "prog": "artzain registry list",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_registry_list>"
+           },
+           "groups": [
+            [],
+            [
+             "help",
+             "q",
+             "source",
+             "lifecycle",
+             "limit",
+             "json"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--q"
+             ],
+             "dest": "q",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Search name / external id / framework.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--source"
+             ],
+             "dest": "source",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Filter by origin.",
+             "metavar": null,
+             "choices": [
+              "engine",
+              "mcp",
+              "kubernetes",
+              "cicd",
+              "microsoft",
+              "openai",
+              "code_scan",
+              "langgraph",
+              "anthropic",
+              "foundry",
+              "agentforce",
+              "n8n",
+              "openclaw",
+              "google",
+              "a2a",
+              "grokbot",
+              "openshell"
+             ]
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--lifecycle"
+             ],
+             "dest": "lifecycle",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Filter by lifecycle state.",
+             "metavar": null,
+             "choices": [
+              "discovered",
+              "sanctioned",
+              "deprecated",
+              "retired"
+             ]
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--limit"
+             ],
+             "dest": "limit",
+             "nargs": null,
+             "const": null,
+             "default": 100,
+             "type": "<int>",
+             "required": false,
+             "help": "Max entries (default 100).",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--json"
+             ],
+             "dest": "json",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": "Emit the raw JSON response.",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "export",
+          "help": "Download the catalog as CSV.",
+          "parser": {
+           "prog": "artzain registry export",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_registry_export>"
+           },
+           "groups": [
+            [],
+            [
+             "help",
+             "q",
+             "source",
+             "lifecycle",
+             "out"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--q"
+             ],
+             "dest": "q",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Search filter applied to the export.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--source"
+             ],
+             "dest": "source",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": null,
+             "metavar": null,
+             "choices": [
+              "engine",
+              "mcp",
+              "kubernetes",
+              "cicd",
+              "microsoft",
+              "openai",
+              "code_scan",
+              "langgraph",
+              "anthropic",
+              "foundry",
+              "agentforce",
+              "n8n",
+              "openclaw",
+              "google",
+              "a2a",
+              "grokbot",
+              "openshell"
+             ]
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--lifecycle"
+             ],
+             "dest": "lifecycle",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": null,
+             "metavar": null,
+             "choices": [
+              "discovered",
+              "sanctioned",
+              "deprecated",
+              "retired"
+             ]
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--out"
+             ],
+             "dest": "out",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Output CSV path (default: ./agent-catalog-<date>.csv).",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "findings",
+          "help": "List advisory reconciliation findings.",
+          "parser": {
+           "prog": "artzain registry findings",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_registry_findings>"
+           },
+           "groups": [
+            [],
+            [
+             "help",
+             "status",
+             "kind",
+             "json"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--status"
+             ],
+             "dest": "status",
+             "nargs": null,
+             "const": null,
+             "default": "open",
+             "type": null,
+             "required": false,
+             "help": null,
+             "metavar": null,
+             "choices": [
+              "open",
+              "resolved"
+             ]
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--kind"
+             ],
+             "dest": "kind",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Filter by finding kind.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--json"
+             ],
+             "dest": "json",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": "Emit the raw JSON response.",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         }
+        ],
+        "choices": [
+         "list",
+         "export",
+         "findings"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "name": "local",
+     "help": "Run CogNexus in your own boundary: up, doctor, status, upgrade, down.",
+     "parser": {
+      "prog": "artzain local",
+      "usage": null,
+      "description": "The self-serve installer. `artzain local up` renders a compose\nworkspace in ~/.cognexus (images pinned by digest from the\nstable-channel manifest, secrets generated once), starts the\nengine + local dashboard, and opens the first-run page. No repo\naccess, no file editing, no email round-trip.",
+      "epilog": null,
+      "formatter_class": "RawDescriptionHelpFormatter",
+      "add_help": true,
+      "allow_abbrev": true,
+      "defaults": {},
+      "groups": [
+       [
+        "local_command"
+       ],
+       [
+        "help"
+       ]
+      ],
+      "actions": [
+       {
+        "kind": "_HelpAction",
+        "option_strings": [
+         "-h",
+         "--help"
+        ],
+        "dest": "help",
+        "nargs": 0,
+        "const": null,
+        "default": "==SUPPRESS==",
+        "type": null,
+        "required": false,
+        "help": "show this help message and exit",
+        "metavar": null,
+        "choices": null
+       },
+       {
+        "kind": "_SubParsersAction",
+        "option_strings": [],
+        "dest": "local_command",
+        "nargs": "A...",
+        "const": null,
+        "default": null,
+        "type": null,
+        "required": true,
+        "help": null,
+        "metavar": null,
+        "commands": [
+         {
+          "name": "up",
+          "help": "Install/start the stack and open the first-run page.",
+          "parser": {
+           "prog": "artzain local up",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_local_up>"
+           },
+           "groups": [
+            [],
+            [
+             "help",
+             "manifest",
+             "no_browser",
+             "port"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--manifest"
+             ],
+             "dest": "manifest",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Stable-channel manifest (default: COGNEXUS_CHANNEL_MANIFEST, else https://cognexuslabs.ai/downloads/stable.json).",
+             "metavar": "URL_OR_FILE",
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--no-browser"
+             ],
+             "dest": "no_browser",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": "Print the URL instead of opening a browser.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--port"
+             ],
+             "dest": "port",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": "<int>",
+             "required": false,
+             "help": "Dashboard port (default 8080; remembered in the workspace .env).",
+             "metavar": "PORT",
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "doctor",
+          "help": "Preflight checks; each failure names its fix.",
+          "parser": {
+           "prog": "artzain local doctor",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_local_doctor>"
+           },
+           "groups": [
+            [],
+            [
+             "help"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "status",
+          "help": "Engine health, trial days, update availability.",
+          "parser": {
+           "prog": "artzain local status",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_local_status>"
+           },
+           "groups": [
+            [],
+            [
+             "help",
+             "manifest"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--manifest"
+             ],
+             "dest": "manifest",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Stable-channel manifest (default: COGNEXUS_CHANNEL_MANIFEST, else https://cognexuslabs.ai/downloads/stable.json).",
+             "metavar": "URL_OR_FILE",
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "upgrade",
+          "help": "Dump the database, then re-pin to the channel's current release.",
+          "parser": {
+           "prog": "artzain local upgrade",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_local_upgrade>"
+           },
+           "groups": [
+            [],
+            [
+             "help",
+             "manifest"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--manifest"
+             ],
+             "dest": "manifest",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Stable-channel manifest (default: COGNEXUS_CHANNEL_MANIFEST, else https://cognexuslabs.ai/downloads/stable.json).",
+             "metavar": "URL_OR_FILE",
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "down",
+          "help": "Stop the stack (data stays). --purge destroys it.",
+          "parser": {
+           "prog": "artzain local down",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_local_down>"
+           },
+           "groups": [
+            [],
+            [
+             "help",
+             "purge"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--purge"
+             ],
+             "dest": "purge",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": "Destroy volumes incl. the UNRECOVERABLE audit signing keys (asks for confirmation).",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "reset",
+          "help": "Dirty reinstall: the --purge confirmation, then destroy volumes and workspace (backups kept).",
+          "parser": {
+           "prog": "artzain local reset",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_local_reset>"
+           },
+           "groups": [
+            [],
+            [
+             "help"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "create-admin",
+          "help": "Headless first-run: create the platform admin without a browser (reads the password from stdin when it is not a tty).",
+          "parser": {
+           "prog": "artzain local create-admin",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_local_create_admin>"
+           },
+           "groups": [
+            [],
+            [
+             "help",
+             "email",
+             "password_stdin"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--email"
+             ],
+             "dest": "email",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--password-stdin"
+             ],
+             "dest": "password_stdin",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": "Read the password from the first line of stdin (like `docker login --password-stdin`). Piped stdin implies this; the flag makes it explicit.",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "activate",
+          "help": "Verify and install a licence certificate into the local engine (alias for `licence install`; signs in with your dashboard email if no API key is configured).",
+          "parser": {
+           "prog": "artzain local activate",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_local_activate>"
+           },
+           "groups": [
+            [
+             "certificate"
+            ],
+            [
+             "help",
+             "chain",
+             "root_key",
+             "issuing",
+             "root_fingerprint"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [],
+             "dest": "certificate",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": "Path to the certificate JSON.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--chain"
+             ],
+             "dest": "chain",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Certificate chain JSON (root key + issuing certs).",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--root-key"
+             ],
+             "dest": "root_key",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Evidence Root public key PEM.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--issuing"
+             ],
+             "dest": "issuing",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Issuing certificate(s) JSON.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--root-fingerprint"
+             ],
+             "dest": "root_fingerprint",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Override the pinned Evidence Root fingerprint.",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         }
+        ],
+        "choices": [
+         "up",
+         "doctor",
+         "status",
+         "upgrade",
+         "down",
+         "reset",
+         "create-admin",
+         "activate"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "name": "openshell",
+     "help": "Govern an NVIDIA OpenShell gateway: run the ArtzAIn sidecar beside it.",
+     "parser": {
+      "prog": "artzain openshell",
+      "usage": null,
+      "description": null,
+      "epilog": null,
+      "formatter_class": "HelpFormatter",
+      "add_help": true,
+      "allow_abbrev": true,
+      "defaults": {},
+      "groups": [
+       [
+        "openshell_command"
+       ],
+       [
+        "help"
+       ]
+      ],
+      "actions": [
+       {
+        "kind": "_HelpAction",
+        "option_strings": [
+         "-h",
+         "--help"
+        ],
+        "dest": "help",
+        "nargs": 0,
+        "const": null,
+        "default": "==SUPPRESS==",
+        "type": null,
+        "required": false,
+        "help": "show this help message and exit",
+        "metavar": null,
+        "choices": null
+       },
+       {
+        "kind": "_SubParsersAction",
+        "option_strings": [],
+        "dest": "openshell_command",
+        "nargs": "A...",
+        "const": null,
+        "default": null,
+        "type": null,
+        "required": true,
+        "help": null,
+        "metavar": null,
+        "commands": [
+         {
+          "name": "sidecar",
+          "help": "Run the sidecar beside an OpenShell gateway (HTTP, loopback).",
+          "parser": {
+           "prog": "artzain openshell sidecar",
+           "usage": null,
+           "description": "Runs the ArtzAIn sidecar beside an OpenShell gateway. It answers\nthe gateway's interceptor calls from the ArtzAIn Decision API,\nlists sandboxes for the catalog and seals OpenShell policy events.\nIt only ever calls out to the engine.\n\nSettings (environment):\n  OPENSHELL_SIDECAR_GRPC    where the gateway calls the interceptor:\n      unix:///absolute/path or a loopback host:port\n      (needs: pip install 'artzain[openshell]')\n  OPENSHELL_JWT_PUBLIC_KEY / OPENSHELL_JWT_GATEWAY_ID  the gateway's\n      gateway_jwt public key file and id; every call must then carry\n      the gateway's signed token\n  OPENSHELL_SIDECAR_HOST / OPENSHELL_SIDECAR_PORT  HTTP bind address\n      (default 127.0.0.1:8088)\n  OPENSHELL_SIDECAR_TOKEN   bearer every request must carry\n  OPENSHELL_GATEWAY_ID      this gateway; names every decision\n  ARTZAIN_DECISION_URL      engine origin (http or https)\n  COGNEXUS_API_KEY          Decision API key\n  OPENSHELL_SIDECAR_DECIDE_TIMEOUT_MS  engine deadline\n      (default 1200; keep it below the gateway's interceptor timeout)\n\nOperator steps: the ArtzAIn operator manual, chapter 17.",
+           "epilog": null,
+           "formatter_class": "RawDescriptionHelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_openshell_sidecar>"
+           },
+           "groups": [
+            [],
+            [
+             "help"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         }
+        ],
+        "choices": [
+         "sidecar"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "name": "connect",
+     "help": "Connect a runtime on this host to ArtzAIn.",
+     "parser": {
+      "prog": "artzain connect",
+      "usage": null,
+      "description": null,
+      "epilog": null,
+      "formatter_class": "HelpFormatter",
+      "add_help": true,
+      "allow_abbrev": true,
+      "defaults": {},
+      "groups": [
+       [
+        "connect_runtime"
+       ],
+       [
+        "help"
+       ]
+      ],
+      "actions": [
+       {
+        "kind": "_HelpAction",
+        "option_strings": [
+         "-h",
+         "--help"
+        ],
+        "dest": "help",
+        "nargs": 0,
+        "const": null,
+        "default": "==SUPPRESS==",
+        "type": null,
+        "required": false,
+        "help": "show this help message and exit",
+        "metavar": null,
+        "choices": null
+       },
+       {
+        "kind": "_SubParsersAction",
+        "option_strings": [],
+        "dest": "connect_runtime",
+        "nargs": "A...",
+        "const": null,
+        "default": null,
+        "type": null,
+        "required": true,
+        "help": null,
+        "metavar": null,
+        "commands": [
+         {
+          "name": "openshell",
+          "help": "Bind this host's OpenShell gateway (deb or rpm, systemd user service).",
+          "parser": {
+           "prog": "artzain connect openshell",
+           "usage": null,
+           "description": "Binds the OpenShell gateway on this host to ArtzAIn, and undoes it.\n\n  up      swap an enroll token for the gateway's credential, install the\n          sidecar as a systemd user service, add the interceptor\n          registration to gateway.toml, restart the gateway and check\n          that a write ArtzAIn denies is refused. Run it again to\n          finish a run that stopped.\n  remove  put gateway.toml and gateway.env back as they were, remove\n          the sidecar, restart the gateway unbound and revoke the\n          credential.\n  status  what is installed, and whether it is up (JSON).\n  rotate-key  swap the gateway's credential for a new one; the sidecar\n          and the gateway restart, and the old credential is revoked.\n  doctor  check the services, the socket, the credential file, the\n          registration, the OpenShell release, the engine through the\n          proxy and the clock; exits 1 when a check fails.\n\nThe enroll token is read from ARTZAIN_ENROLL_TOKEN.\nOperator steps: the ArtzAIn operator manual, chapter 17.",
+           "epilog": null,
+           "formatter_class": "RawDescriptionHelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {},
+           "groups": [
+            [
+             "connect_command"
+            ],
+            [
+             "help"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_SubParsersAction",
+             "option_strings": [],
+             "dest": "connect_command",
+             "nargs": "A...",
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": null,
+             "metavar": null,
+             "commands": [
+              {
+               "name": "up",
+               "help": "Bind the gateway (token in ARTZAIN_ENROLL_TOKEN).",
+               "parser": {
+                "prog": "artzain connect openshell up",
+                "usage": null,
+                "description": null,
+                "epilog": null,
+                "formatter_class": "HelpFormatter",
+                "add_help": true,
+                "allow_abbrev": true,
+                "defaults": {
+                 "func": "<cmd_connect_openshell>"
+                },
+                "groups": [
+                 [],
+                 [
+                  "help",
+                  "config_digest",
+                  "engine",
+                  "proxy",
+                  "ca_bundle",
+                  "port"
+                 ]
+                ],
+                "actions": [
+                 {
+                  "kind": "_HelpAction",
+                  "option_strings": [
+                   "-h",
+                   "--help"
+                  ],
+                  "dest": "help",
+                  "nargs": 0,
+                  "const": null,
+                  "default": "==SUPPRESS==",
+                  "type": null,
+                  "required": false,
+                  "help": "show this help message and exit",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--config-digest"
+                  ],
+                  "dest": "config_digest",
+                  "nargs": null,
+                  "const": null,
+                  "default": "",
+                  "type": null,
+                  "required": false,
+                  "help": "the SHA-256 of the configuration you approved, as the dashboard showed it",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--engine"
+                  ],
+                  "dest": "engine",
+                  "nargs": null,
+                  "const": null,
+                  "default": "https://app.cognexuslabs.ai",
+                  "type": null,
+                  "required": false,
+                  "help": "the ArtzAIn engine to redeem the token at (default: %(default)s)",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--proxy"
+                  ],
+                  "dest": "proxy",
+                  "nargs": null,
+                  "const": null,
+                  "default": "",
+                  "type": null,
+                  "required": false,
+                  "help": "'env', or http://[user:password@]host[:port], for this run and for the sidecar",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--ca-bundle"
+                  ],
+                  "dest": "ca_bundle",
+                  "nargs": null,
+                  "const": null,
+                  "default": "",
+                  "type": null,
+                  "required": false,
+                  "help": "a PEM file of the authorities to trust for the engine",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--port"
+                  ],
+                  "dest": "port",
+                  "nargs": null,
+                  "const": null,
+                  "default": 8088,
+                  "type": "<int>",
+                  "required": false,
+                  "help": "the sidecar's loopback HTTP port (default: %(default)s)",
+                  "metavar": null,
+                  "choices": null
+                 }
+                ]
+               }
+              },
+              {
+               "name": "remove",
+               "help": "Undo up, and revoke the credential.",
+               "parser": {
+                "prog": "artzain connect openshell remove",
+                "usage": null,
+                "description": null,
+                "epilog": null,
+                "formatter_class": "HelpFormatter",
+                "add_help": true,
+                "allow_abbrev": true,
+                "defaults": {
+                 "func": "<cmd_connect_openshell>"
+                },
+                "groups": [
+                 [],
+                 [
+                  "help",
+                  "keep_credential"
+                 ]
+                ],
+                "actions": [
+                 {
+                  "kind": "_HelpAction",
+                  "option_strings": [
+                   "-h",
+                   "--help"
+                  ],
+                  "dest": "help",
+                  "nargs": 0,
+                  "const": null,
+                  "default": "==SUPPRESS==",
+                  "type": null,
+                  "required": false,
+                  "help": "show this help message and exit",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreTrueAction",
+                  "option_strings": [
+                   "--keep-credential"
+                  ],
+                  "dest": "keep_credential",
+                  "nargs": 0,
+                  "const": true,
+                  "default": false,
+                  "type": null,
+                  "required": false,
+                  "help": "do not revoke the gateway's credential in the engine",
+                  "metavar": null,
+                  "choices": null
+                 }
+                ]
+               }
+              },
+              {
+               "name": "status",
+               "help": "What is installed, and whether it is up.",
+               "parser": {
+                "prog": "artzain connect openshell status",
+                "usage": null,
+                "description": null,
+                "epilog": null,
+                "formatter_class": "HelpFormatter",
+                "add_help": true,
+                "allow_abbrev": true,
+                "defaults": {
+                 "func": "<cmd_connect_openshell>"
+                },
+                "groups": [
+                 [],
+                 [
+                  "help"
+                 ]
+                ],
+                "actions": [
+                 {
+                  "kind": "_HelpAction",
+                  "option_strings": [
+                   "-h",
+                   "--help"
+                  ],
+                  "dest": "help",
+                  "nargs": 0,
+                  "const": null,
+                  "default": "==SUPPRESS==",
+                  "type": null,
+                  "required": false,
+                  "help": "show this help message and exit",
+                  "metavar": null,
+                  "choices": null
+                 }
+                ]
+               }
+              },
+              {
+               "name": "rotate-key",
+               "help": "Swap the gateway's credential for a new one.",
+               "parser": {
+                "prog": "artzain connect openshell rotate-key",
+                "usage": null,
+                "description": null,
+                "epilog": null,
+                "formatter_class": "HelpFormatter",
+                "add_help": true,
+                "allow_abbrev": true,
+                "defaults": {
+                 "func": "<cmd_connect_openshell>"
+                },
+                "groups": [
+                 [],
+                 [
+                  "help"
+                 ]
+                ],
+                "actions": [
+                 {
+                  "kind": "_HelpAction",
+                  "option_strings": [
+                   "-h",
+                   "--help"
+                  ],
+                  "dest": "help",
+                  "nargs": 0,
+                  "const": null,
+                  "default": "==SUPPRESS==",
+                  "type": null,
+                  "required": false,
+                  "help": "show this help message and exit",
+                  "metavar": null,
+                  "choices": null
+                 }
+                ]
+               }
+              },
+              {
+               "name": "doctor",
+               "help": "Check what binds the gateway; exit 1 on a failure.",
+               "parser": {
+                "prog": "artzain connect openshell doctor",
+                "usage": null,
+                "description": null,
+                "epilog": null,
+                "formatter_class": "HelpFormatter",
+                "add_help": true,
+                "allow_abbrev": true,
+                "defaults": {
+                 "func": "<cmd_connect_openshell>"
+                },
+                "groups": [
+                 [],
+                 [
+                  "help",
+                  "json"
+                 ]
+                ],
+                "actions": [
+                 {
+                  "kind": "_HelpAction",
+                  "option_strings": [
+                   "-h",
+                   "--help"
+                  ],
+                  "dest": "help",
+                  "nargs": 0,
+                  "const": null,
+                  "default": "==SUPPRESS==",
+                  "type": null,
+                  "required": false,
+                  "help": "show this help message and exit",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreTrueAction",
+                  "option_strings": [
+                   "--json"
+                  ],
+                  "dest": "json",
+                  "nargs": 0,
+                  "const": true,
+                  "default": false,
+                  "type": null,
+                  "required": false,
+                  "help": "print the checks as JSON",
+                  "metavar": null,
+                  "choices": null
+                 }
+                ]
+               }
+              }
+             ],
+             "choices": [
+              "up",
+              "remove",
+              "status",
+              "rotate-key",
+              "doctor"
+             ]
+            }
+           ]
+          }
+         }
+        ],
+        "choices": [
+         "openshell"
+        ]
+       }
+      ]
+     }
+    }
+   ],
+   "choices": [
+    "quickstart",
+    "init",
+    "login",
+    "signup",
+    "gui",
+    "audit",
+    "licence",
+    "policy",
+    "registry",
+    "local",
+    "openshell",
+    "connect"
+   ]
+  }
+ ]
+}
