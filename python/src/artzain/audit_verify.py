@@ -851,9 +851,79 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
         )
 
     # 1) Per-leaf hash + signature + 2) chain linkage on contiguous seq runs.
+    leaf_by_seq: dict[int, dict[str, Any]] = {}
+    failed = _verify_leaves(res, leaves, pubkeys, leaf_by_seq)
+    if failed is not None:
+        return failed
+
+    # 3) Verify the signed manifest's custody signature UP FRONT (the record-set
+    #    cross-check itself stays after the seals). The seal truncation/deletion
+    #    heuristics below defer to a trusted, content-committing manifest: when a
+    #    signed leaves_digest binds the exact present set, a seal that reaches
+    #    past the present leaves is a legitimate boundary seal of a windowed
+    #    export, not evidence of a deletion.
+    manifest = bundle.get("manifest") or {}
+    failed, manifest_trusted, manifest_signer_kid = _verify_manifest_signature(
+        res, manifest, bundle, pubkeys)
+    if failed is not None:
+        return failed
+    # A trusted manifest that commits a content digest binds the exact present
+    # (seq, leaf_hash) set — the flag the seal heuristics and the attestation
+    # gate below both key off.
+    manifest_binds_content = manifest_trusted and manifest.get("leaves_digest") is not None
+
+    # 3a) The keys the signed manifest commits to, and 3b) the signing-key
+    #     handovers (WS-8) it binds.
+    failed = _verify_key_custody(res, bundle, manifest, leaves, seals, pubkeys,
+                                 manifest_trusted=manifest_trusted,
+                                 manifest_signer_kid=manifest_signer_kid)
+    if failed is not None:
+        return failed
+
+    # 4) Seals.
+    failed = _verify_seals(res, seals, leaf_by_seq, pubkeys, manifest_binds_content)
+    if failed is not None:
+        return failed
+
+    # 5) The record set a trusted signed manifest commits to.
+    if manifest_trusted:
+        failed = _verify_manifest_record_set(res, manifest, leaf_by_seq, leaves, seals)
+        if failed is not None:
+            return failed
+
+    # 5) Provenance (WS-4): does the intact chain also chain to the pinned
+    #    Evidence Root?  Never fails the bundle — caps the claim instead.
+    try:
+        _evaluate_attestation(
+            res,
+            certs=bundle.get("certificates") or {},
+            keys=bundle.get("keys") or [],
+            leaves=leaves,
+            seals=seals,
+            root_fingerprint=effective_root,
+            manifest_trusted=manifest_trusted,
+            manifest_signer_kid=manifest_signer_kid,
+            manifest_binds_content=manifest_binds_content,
+        )
+    except Exception:  # noqa: BLE001
+        # Provenance is a *cap*, never a failure (see module docstring): a
+        # malformed certificate structure degrades to SELF-ATTESTED, it does
+        # not crash or fail an otherwise-intact bundle.
+        res.attestation = "SELF-ATTESTED"
+        res.attestation_reasons.append(
+            "certificate chain malformed — provenance not evaluated")
+    return res
+
+
+def _verify_leaves(res: VerifyResult, leaves: list[dict[str, Any]], pubkeys,
+                   leaf_by_seq: dict[int, dict[str, Any]]) -> Optional[VerifyResult]:
+    """Steps 1 and 2: every leaf's hash and signature, and the chain linkage
+    on contiguous seq runs. Fills *leaf_by_seq* (seq -> leaf) as it goes.
+
+    Returns the failed result, or ``None`` when every leaf holds.
+    """
     prev_hash: Optional[str] = None
     prev_seq: Optional[int] = None
-    leaf_by_seq: dict[int, dict[str, Any]] = {}
     seen_leaf_hashes: set[str] = set()
     for leaf in leaves:
         seq = _as_int(leaf.get("seq"))
@@ -907,14 +977,18 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
         prev_hash = leaf.get("leaf_hash")
         prev_seq = seq
         res.leaves_checked += 1
+    return None
 
-    # 3) Verify the signed manifest's custody signature UP FRONT (the record-set
-    #    cross-check itself stays after the seals). The seal truncation/deletion
-    #    heuristics below defer to a trusted, content-committing manifest: when a
-    #    signed leaves_digest binds the exact present set, a seal that reaches
-    #    past the present leaves is a legitimate boundary seal of a windowed
-    #    export, not evidence of a deletion.
-    manifest = bundle.get("manifest") or {}
+
+def _verify_manifest_signature(
+    res: VerifyResult, manifest: dict[str, Any], bundle: dict[str, Any], pubkeys,
+) -> tuple[Optional[VerifyResult], bool, Optional[str]]:
+    """Step 3: the signed manifest's custody signature.
+
+    Returns ``(failed, manifest_trusted, manifest_signer_kid)``: the failed
+    result when the signature does not verify, else ``None`` with whether the
+    manifest verified and the key that signed it.
+    """
     manifest_trusted = False
     manifest_signer_kid: Optional[str] = None
     if manifest.get("sig"):
@@ -931,17 +1005,26 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
                     if k not in ("sig", "signer_key_id")}
             signed_hash = hashlib.sha256(_canonical(body)).hexdigest()
             if not _verify_sig(pk, signed_hash, manifest.get("sig") or ""):
-                return res._fail(None, "manifest signature invalid (custody broken)")
+                return (res._fail(None, "manifest signature invalid (custody broken)"),
+                        False, None)
             res.signatures_checked += 1
             manifest_trusted = True
             manifest_signer_kid = kid
     elif (bundle.get("certificates") or {}).get("deployment_certificates"):
         res.warnings.append("certified bundle without a signed manifest")
-    # A trusted manifest that commits a content digest binds the exact present
-    # (seq, leaf_hash) set — the flag the seal heuristics and the attestation
-    # gate below both key off.
-    manifest_binds_content = manifest_trusted and manifest.get("leaves_digest") is not None
+    return None, manifest_trusted, manifest_signer_kid
 
+
+def _verify_key_custody(
+    res: VerifyResult, bundle: dict[str, Any], manifest: dict[str, Any],
+    leaves: list[dict[str, Any]], seals: list[dict[str, Any]], pubkeys, *,
+    manifest_trusted: bool, manifest_signer_kid: Optional[str],
+) -> Optional[VerifyResult]:
+    """Steps 3a and 3b: the key ids the signed manifest commits to, and the
+    signing-key handovers.
+
+    Returns the failed result, or ``None`` to go on.
+    """
     # 3a) The signed manifest lists the keys the server exported. Nothing read
     #     that list until WS-8's review found why it matters: deleting an entry
     #     from keys.json is otherwise invisible, and it is a general tool —
@@ -988,7 +1071,16 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
         res.warnings.append(
             f"key {kid} signed records here and no handover names it — either "
             "a second signing process, or a key that was never authorised")
+    return None
 
+
+def _verify_seals(res: VerifyResult, seals: list[dict[str, Any]],
+                  leaf_by_seq: dict[int, dict[str, Any]], pubkeys,
+                  manifest_binds_content: bool) -> Optional[VerifyResult]:
+    """Step 4: every seal's hash, signature and Merkle root.
+
+    Returns the failed result, or ``None`` when every seal holds.
+    """
     # 4) Seals: hash + signature + Merkle root over covered leaves.
     #    A seal commits to *exactly* its [first_seq, last_seq] range.  When that
     #    range lies entirely within the leaves we have (a full / contiguous
@@ -1096,7 +1188,18 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
                 "root not recomputed"
             )
         res.seals_checked += 1
+    return None
 
+
+def _verify_manifest_record_set(res: VerifyResult, manifest: dict[str, Any],
+                                leaf_by_seq: dict[int, dict[str, Any]],
+                                leaves: list[dict[str, Any]],
+                                seals: list[dict[str, Any]]) -> Optional[VerifyResult]:
+    """Step 5, for a trusted manifest: the record set it commits to against
+    the leaves and seals present.
+
+    Returns the failed result, or ``None`` when they match.
+    """
     # 5) Signed manifest record-set cross-check (WS-4 chain of custody).  The
     #    signature was already verified in step 3; here the committed range /
     #    counts / content digest are checked against the leaves present.  A valid
@@ -1104,64 +1207,41 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
     #    substitution (FAILURE).  An unverifiable / absent manifest only *caps*
     #    the claim — a non-empty bundle whose signer key is absent already failed
     #    at leaf verification above.
-    if manifest_trusted:
-        present = list(leaf_by_seq)  # validated int seqs, duplicates rejected above
-        exp_first = min(present) if present else None
-        exp_last = max(present) if present else None
-        mism: list[str] = []
-        # Only fields the signed body actually carries — the signature makes
-        # it impossible to strip one to dodge the check.  A count that will
-        # not parse to an int is treated as a mismatch (fail closed), never
-        # a crash: the manifest is attacker-shaped input.
-        if "first_seq" in manifest and manifest.get("first_seq") != exp_first:
-            mism.append(f"first_seq {manifest.get('first_seq')}≠{exp_first}")
-        if "last_seq" in manifest and manifest.get("last_seq") != exp_last:
-            mism.append(f"last_seq {manifest.get('last_seq')}≠{exp_last}")
-        mc = manifest.get("leaf_count")
-        if mc is not None and _as_int(mc) != len(leaves):
-            mism.append(f"leaf_count {mc}≠{len(leaves)}")
-        # seal_count is committed by the server manifest too (api/audit.py):
-        # without this check every Merkle seal could be stripped from a
-        # certified bundle while the signed manifest still matched the leaves,
-        # removing the tamper-evidence the seals provide.
-        sc = manifest.get("seal_count")
-        if sc is not None and _as_int(sc) != len(seals):
-            mism.append(f"seal_count {sc}≠{len(seals)}")
-        # Content digest: first_seq/last_seq/leaf_count/seal_count bind only the
-        # counts and endpoints, so a substitution that swaps an interior leaf for
-        # another (freed seq re-used, count unchanged) slips past them.
-        # ``leaves_digest`` commits the exact (seq, leaf_hash) set; a mismatch is
-        # record substitution or suppression → FAIL.  (Its presence is also what
-        # lets an intact bundle claim ATTESTED — see _evaluate_attestation.)
-        md = manifest.get("leaves_digest")
-        if md is not None and md != _leaves_digest(leaves):
-            mism.append("leaves_digest mismatch (exported leaf set altered)")
-        if mism:
-            return res._fail(
-                exp_first,
-                "signed manifest commits to records that are not present — "
-                "records suppressed or substituted (" + ", ".join(mism) + ")",
-            )
-
-    # 5) Provenance (WS-4): does the intact chain also chain to the pinned
-    #    Evidence Root?  Never fails the bundle — caps the claim instead.
-    try:
-        _evaluate_attestation(
-            res,
-            certs=bundle.get("certificates") or {},
-            keys=bundle.get("keys") or [],
-            leaves=leaves,
-            seals=seals,
-            root_fingerprint=effective_root,
-            manifest_trusted=manifest_trusted,
-            manifest_signer_kid=manifest_signer_kid,
-            manifest_binds_content=manifest_binds_content,
+    present = list(leaf_by_seq)  # validated int seqs, duplicates rejected above
+    exp_first = min(present) if present else None
+    exp_last = max(present) if present else None
+    mism: list[str] = []
+    # Only fields the signed body actually carries — the signature makes
+    # it impossible to strip one to dodge the check.  A count that will
+    # not parse to an int is treated as a mismatch (fail closed), never
+    # a crash: the manifest is attacker-shaped input.
+    if "first_seq" in manifest and manifest.get("first_seq") != exp_first:
+        mism.append(f"first_seq {manifest.get('first_seq')}≠{exp_first}")
+    if "last_seq" in manifest and manifest.get("last_seq") != exp_last:
+        mism.append(f"last_seq {manifest.get('last_seq')}≠{exp_last}")
+    mc = manifest.get("leaf_count")
+    if mc is not None and _as_int(mc) != len(leaves):
+        mism.append(f"leaf_count {mc}≠{len(leaves)}")
+    # seal_count is committed by the server manifest too (api/audit.py):
+    # without this check every Merkle seal could be stripped from a
+    # certified bundle while the signed manifest still matched the leaves,
+    # removing the tamper-evidence the seals provide.
+    sc = manifest.get("seal_count")
+    if sc is not None and _as_int(sc) != len(seals):
+        mism.append(f"seal_count {sc}≠{len(seals)}")
+    # Content digest: first_seq/last_seq/leaf_count/seal_count bind only the
+    # counts and endpoints, so a substitution that swaps an interior leaf for
+    # another (freed seq re-used, count unchanged) slips past them.
+    # ``leaves_digest`` commits the exact (seq, leaf_hash) set; a mismatch is
+    # record substitution or suppression → FAIL.  (Its presence is also what
+    # lets an intact bundle claim ATTESTED — see _evaluate_attestation.)
+    md = manifest.get("leaves_digest")
+    if md is not None and md != _leaves_digest(leaves):
+        mism.append("leaves_digest mismatch (exported leaf set altered)")
+    if mism:
+        return res._fail(
+            exp_first,
+            "signed manifest commits to records that are not present — "
+            "records suppressed or substituted (" + ", ".join(mism) + ")",
         )
-    except Exception:  # noqa: BLE001
-        # Provenance is a *cap*, never a failure (see module docstring): a
-        # malformed certificate structure degrades to SELF-ATTESTED, it does
-        # not crash or fail an otherwise-intact bundle.
-        res.attestation = "SELF-ATTESTED"
-        res.attestation_reasons.append(
-            "certificate chain malformed — provenance not evaluated")
-    return res
+    return None

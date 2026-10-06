@@ -1845,13 +1845,29 @@ def cmd_openshell_sidecar(_args: argparse.Namespace) -> None:
     sidecar.main()
 
 
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(
-        prog="artzain",
-        description="Cognexus LLM safety SDK — prompt defence, guards, kill switch, audit.",
-    )
-    sub = parser.add_subparsers(dest="command", required=True)
+def _local_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--base-url", default=None,
+                        help="Deployment to talk to (default: this machine).")
+    parser.add_argument("--allow-remote", action="store_true",
+                        help="Permit a non-loopback --base-url.")
 
+
+def _licence_cert_flags(parser_: argparse.ArgumentParser) -> None:
+    """Shared by `licence install` and its alias `local activate` — one
+    flag set, so an addition to either cannot silently miss the other."""
+    parser_.add_argument("certificate", help="Path to the certificate JSON.")
+    parser_.add_argument("--chain", default=None,
+                         help="Certificate chain JSON (root key + issuing certs).")
+    parser_.add_argument("--root-key", default=None,
+                         help="Evidence Root public key PEM.")
+    parser_.add_argument("--issuing", default=None,
+                         help="Issuing certificate(s) JSON.")
+    parser_.add_argument("--root-fingerprint", default=None,
+                         help="Override the pinned Evidence Root fingerprint.")
+
+
+def _add_getting_started_parsers(sub: argparse._SubParsersAction) -> None:
+    """``artzain quickstart``, ``init``, ``login`` and ``signup``."""
     p_quick = sub.add_parser("quickstart", help="Resolve API key, then run an interactive SDK tour.")
     p_quick.set_defaults(func=cmd_quickstart)
 
@@ -1895,6 +1911,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     p_signup.set_defaults(func=cmd_signup)
 
+
+def _add_gui_parser(sub: argparse._SubParsersAction) -> None:
+    """``artzain gui``."""
     p_gui = sub.add_parser(
         "gui",
         help="Open Artzain Chat (local) — a chat client connected to the platform.",
@@ -1924,6 +1943,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     p_gui.set_defaults(func=cmd_gui)
 
+
+def _add_audit_parser(sub: argparse._SubParsersAction) -> None:
+    """``artzain audit verify`` and ``export``."""
     p_audit = sub.add_parser(
         "audit",
         help="Audit evidence tooling (offline bundle verification).",
@@ -1977,17 +1999,14 @@ def main(argv: list[str] | None = None) -> None:
     p_export.add_argument("--out", help="Output ZIP path (default: ./artzain-audit-<stamp>.zip).")
     p_export.set_defaults(func=cmd_audit_export)
 
+
+def _add_licence_parser(sub: argparse._SubParsersAction) -> None:
+    """``artzain licence ...``."""
     p_licence = sub.add_parser(
         "licence",
         help="Licence lifecycle: request, install, attest, anchor, verify.",
     )
     licence_sub = p_licence.add_subparsers(dest="licence_command", required=True)
-
-    def _local_flags(parser: argparse.ArgumentParser) -> None:
-        parser.add_argument("--base-url", default=None,
-                            help="Deployment to talk to (default: this machine).")
-        parser.add_argument("--allow-remote", action="store_true",
-                            help="Permit a non-loopback --base-url.")
 
     p_lreq = licence_sub.add_parser(
         "request", help="Write a certificate signing request (public key only).")
@@ -1999,19 +2018,6 @@ def main(argv: list[str] | None = None) -> None:
     p_lreq.add_argument("--customer-id", default=None)
     p_lreq.add_argument("--out", default="licence-request.json")
     p_lreq.set_defaults(func=cmd_licence_request)
-
-    def _licence_cert_flags(parser_: argparse.ArgumentParser) -> None:
-        """Shared by `licence install` and its alias `local activate` — one
-        flag set, so an addition to either cannot silently miss the other."""
-        parser_.add_argument("certificate", help="Path to the certificate JSON.")
-        parser_.add_argument("--chain", default=None,
-                             help="Certificate chain JSON (root key + issuing certs).")
-        parser_.add_argument("--root-key", default=None,
-                             help="Evidence Root public key PEM.")
-        parser_.add_argument("--issuing", default=None,
-                             help="Issuing certificate(s) JSON.")
-        parser_.add_argument("--root-fingerprint", default=None,
-                             help="Override the pinned Evidence Root fingerprint.")
 
     p_lins = licence_sub.add_parser(
         "install", help="Verify a certificate to the Evidence Root and install it.")
@@ -2072,6 +2078,9 @@ def main(argv: list[str] | None = None) -> None:
     p_lver.add_argument("--json", action="store_true")
     p_lver.set_defaults(func=cmd_licence_verify)
 
+
+def _add_policy_parser(sub: argparse._SubParsersAction) -> None:
+    """``artzain policy ...``."""
     p_policy = sub.add_parser(
         "policy",
         help="Policy bundle versioning (FR-6) — keys, signing, push, promote, diff.",
@@ -2121,6 +2130,9 @@ def main(argv: list[str] | None = None) -> None:
     pd.add_argument("b", help="Second bundle id.")
     pd.set_defaults(func=cmd_policy_diff)
 
+
+def _add_registry_parser(sub: argparse._SubParsersAction) -> None:
+    """``artzain registry ...``."""
     p_registry = sub.add_parser(
         "registry",
         help="Enterprise agent catalog (FR-12) — list, export, findings.",
@@ -2158,6 +2170,9 @@ def main(argv: list[str] | None = None) -> None:
     rf.add_argument("--json", action="store_true", help="Emit the raw JSON response.")
     rf.set_defaults(func=cmd_registry_findings)
 
+
+def _add_local_parser(sub: argparse._SubParsersAction) -> None:
+    """``artzain local ...``."""
     p_local = sub.add_parser(
         "local",
         help="Run CogNexus in your own boundary: up, doctor, status, "
@@ -2237,6 +2252,9 @@ def main(argv: list[str] | None = None) -> None:
     _licence_cert_flags(la)
     la.set_defaults(func=cmd_local_activate)
 
+
+def _add_openshell_parser(sub: argparse._SubParsersAction) -> None:
+    """``artzain openshell sidecar``."""
     p_openshell = sub.add_parser(
         "openshell",
         help="Govern an NVIDIA OpenShell gateway: run the ArtzAIn sidecar beside it.",
@@ -2271,6 +2289,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     os_sidecar.set_defaults(func=cmd_openshell_sidecar)
 
+
+def _add_connect_parser(sub: argparse._SubParsersAction) -> None:
+    """``artzain connect openshell ...``."""
     p_connect = sub.add_parser(
         "connect",
         help="Connect a runtime on this host to ArtzAIn.",
@@ -2328,7 +2349,30 @@ def main(argv: list[str] | None = None) -> None:
     c_doctor.add_argument("--json", action="store_true", help="print the checks as JSON")
     c_doctor.set_defaults(func=cmd_connect_openshell)
 
-    args = parser.parse_args(argv)
+
+def _build_parser() -> argparse.ArgumentParser:
+    """The ``artzain`` command line: every command group, in the order
+    ``artzain --help`` lists them."""
+    parser = argparse.ArgumentParser(
+        prog="artzain",
+        description="Cognexus LLM safety SDK — prompt defence, guards, kill switch, audit.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    _add_getting_started_parsers(sub)
+    _add_gui_parser(sub)
+    _add_audit_parser(sub)
+    _add_licence_parser(sub)
+    _add_policy_parser(sub)
+    _add_registry_parser(sub)
+    _add_local_parser(sub)
+    _add_openshell_parser(sub)
+    _add_connect_parser(sub)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = _build_parser().parse_args(argv)
     args.func(args)
 
 
