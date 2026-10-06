@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.40
+
+### Fixed
+
+- **`artzain connect openshell up` reports the whole inventory after the
+  gateway restarts.** The sidecar lists sandboxes as it starts, and `up`
+  restarts the gateway just after that so the gateway picks up the
+  interceptor. A listing that landed during the restart was sent as
+  partial, and the next listing waited five minutes, so `up` said the
+  engine did not have every sandbox. A failed listing is now tried again
+  every two seconds for about half a minute, and `up` waits for that whole
+  inventory before it reports. A gateway that stays unlistable is still
+  reported as partial, with the same message.
+
 ## 0.6.39
 
 ### Changed

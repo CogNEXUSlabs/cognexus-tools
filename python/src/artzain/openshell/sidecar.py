@@ -163,6 +163,15 @@ INVENTORY_SECONDS = 300.0
 BASE_POLICY_SECONDS = 300.0
 #: How long a change waits before it is sent, so a burst is one snapshot.
 INVENTORY_CHANGE_DELAY_SECONDS = 5.0
+#: A listing that fails is tried again this soon. ``up`` restarts the gateway
+#: just after the sidecar starts, and the first listing can land while that
+#: restart is in progress; the next ordinary inventory is five minutes away.
+LISTING_RETRY_SECONDS = 2.0
+#: Prompt tries after a failed listing, then the ordinary interval. About as
+#: long as ``up`` waits for the first inventory: enough for the gateway to
+#: come back, and then a gateway that stays unlistable is not listed every
+#: two seconds.
+LISTING_RETRY_LIMIT = 15
 #: A CLI listing: sandboxes per page, the most pages read, and the deadline
 #: for all of them. More pages than this is more sandboxes than a snapshot
 #: carries.
@@ -1019,12 +1028,15 @@ class Reporter:
       the p50 and p95 of recent decision round trips, and how many reports
       failed since the last heartbeat the engine took.
     * The inventory every five minutes, and a few seconds after the ledger
-      changes.
+      changes. A listing that failed is tried again after
+      :data:`LISTING_RETRY_SECONDS`, up to :data:`LISTING_RETRY_LIMIT`
+      times, and each try is still sent: a partial one says the list may
+      not be every sandbox.
     * The engine's answer may ask for another interval; it is held to
       30 s .. 1 h.
-    * Nothing here raises, and nothing is retried before its next turn. A
-      heartbeat or an inventory that fails is counted, not queued: the
-      next one carries the same state.
+    * Nothing here raises, and a heartbeat or an inventory the engine did
+      not take is not retried before its next turn. It is counted, not
+      queued: the next one carries the same state.
     * With a base policy store, the base policy is fetched first, at start
       and every five minutes.
     """
@@ -1050,6 +1062,7 @@ class Reporter:
         self._inventory_every = INVENTORY_SECONDS
         self._next_heartbeat = clock()
         self._next_inventory = clock()
+        self._listing_retries = 0
         self._sent_revision: Optional[int] = None
         self._changed_at: Optional[float] = None
         self._status_lock = threading.Lock()
@@ -1131,6 +1144,24 @@ class Reporter:
                                           self._inventory_every)
         return True
 
+    def _listing_retry_due(self) -> bool:
+        """Whether a listing that just failed should be tried again shortly.
+
+        A post the engine did not take is not one of these: that failure
+        waits for the ordinary interval. A listing that keeps failing gets
+        :data:`LISTING_RETRY_LIMIT` prompt tries, and then the ordinary
+        interval too, until a listing succeeds.
+        """
+        with self._status_lock:
+            failed = bool(self._status.get("listing_error"))
+        if not failed:
+            self._listing_retries = 0
+            return False
+        if self._listing_retries >= LISTING_RETRY_LIMIT:
+            return False
+        self._listing_retries += 1
+        return True
+
     def step(self) -> float:
         """Send what is due. Returns the seconds until something is."""
         now = self._clock()
@@ -1148,9 +1179,14 @@ class Reporter:
         settled = (self._changed_at is not None
                    and now - self._changed_at >= INVENTORY_CHANGE_DELAY_SECONDS)
         if now >= self._next_inventory or settled:
-            self.send_inventory()
+            posted = self.send_inventory()
             self._next_inventory = now + self._inventory_every
             self._changed_at = None
+            # The engine has the partial inventory. Try the listing again
+            # shortly, so a gateway that was restarting is listed once it
+            # is back, instead of at the next ordinary interval.
+            if posted and self._listing_retry_due():
+                self._next_inventory = now + LISTING_RETRY_SECONDS
         due = min(self._next_heartbeat, self._next_inventory)
         if self._base is not None:
             due = min(due, self._next_base)
