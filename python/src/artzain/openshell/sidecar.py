@@ -33,8 +33,10 @@ Settings (environment):
 * ``OPENSHELL_JWT_PUBLIC_KEY`` and ``OPENSHELL_JWT_GATEWAY_ID``: the gateway's
   ``gateway_jwt`` public key file and id. When set, every gRPC call must carry
   the gateway's signed token.
-* ``OPENSHELL_SIDECAR_TOKEN``: when set, every request needs it as
-  ``Authorization: Bearer``, compared in constant time.
+* ``OPENSHELL_SIDECAR_TOKEN``: when set, every request but ``/healthz``
+  needs it as ``Authorization: Bearer``, compared in constant time. A
+  sidecar that holds a gateway credential (``cnxg_...``) answers nothing
+  but ``/healthz`` until it is set; ``artzain connect openshell up`` sets it.
 * ``OPENSHELL_GATEWAY_ID``: this sidecar's gateway. It names the decision
   target, the agent (``openshell:<gateway id>``) and the inventory; a request
   cannot choose another.
@@ -113,7 +115,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from artzain.openshell import base_policy as base_policies
-from artzain.openshell import transport
+from artzain.openshell import registration, transport
 from artzain.openshell.interceptor import (
     BOUND_POST,
     DEFAULT_WORKSPACE,
@@ -823,10 +825,22 @@ def handle_ocsf(event: Dict[str, Any], *,
     }
 
 
+def _holds_gateway_credential() -> bool:
+    return (os.environ.get("COGNEXUS_API_KEY") or "").startswith(GATEWAY_KEY_PREFIX)
+
+
+#: Why a sidecar that speaks for a gateway refuses a caller without a token.
+_NO_TOKEN = ("this sidecar holds a gateway credential: its routes take OPENSHELL_SIDECAR_TOKEN "
+             "(`artzain connect openshell up` sets it)")
+
+
 def _authorized(header: str) -> bool:
     expected = os.environ.get("OPENSHELL_SIDECAR_TOKEN") or ""
     if not expected:
-        return True
+        # A sidecar that holds a gateway credential speaks for its gateway:
+        # open, its port would let any process on the host have decisions
+        # and OCSF activity sealed as the gateway, and read its inventory.
+        return not _holds_gateway_credential()
     prefix = "Bearer "
     if not header.startswith(prefix):
         return False
@@ -868,7 +882,9 @@ def make_handler(inventory_fn: InventoryFn, decide: DecideFn,
         def _gate(self) -> bool:
             if _authorized(self.headers.get("Authorization") or ""):
                 return True
-            self._json(401, {"allowed": False, "reason": "sidecar token rejected"})
+            unset = not (os.environ.get("OPENSHELL_SIDECAR_TOKEN") or "")
+            self._json(401, {"allowed": False,
+                             "reason": _NO_TOKEN if unset else "sidecar token rejected"})
             return False
 
         def do_GET(self) -> None:  # noqa: N802 - stdlib hook
@@ -961,6 +977,22 @@ def refresh_base_policy(store: base_policies.BasePolicyStore,
     return answer if store.accept(answer) else None
 
 
+def registration_found(path: str) -> str:
+    """What gateway.toml at *path* registers, for the heartbeat: the
+    :func:`registration.digest` of the registration in its managed block,
+    ``missing`` when there is no whole block (or no file), or ``unreadable``.
+    A gateway that no longer names this sidecar does not call it."""
+    try:
+        with open(path, "rb") as handle:
+            text = handle.read().decode("utf-8")
+    except FileNotFoundError:
+        return "missing"
+    except (OSError, UnicodeError):
+        return "unreadable"
+    held = registration.found(text)
+    return "missing" if held is None else registration.digest(held)
+
+
 #: How long the gateway's own version is kept before it is asked again: its
 #: package can be upgraded under a running sidecar.
 GATEWAY_VERSION_SECONDS = 600
@@ -983,8 +1015,11 @@ def _gateway_openshell_version() -> str:
         binary = shutil.which("openshell-gateway")
         if binary:
             try:
+                # It needs neither the credential nor the token to say it.
+                env = {name: value for name, value in os.environ.items()
+                       if name not in _NOT_FOR_THE_CLI}
                 done = subprocess.run([binary, "--version"], capture_output=True, text=True,
-                                      timeout=10, check=False)
+                                      timeout=10, check=False, env=env)
                 found = _VERSION_IN.search(f"{done.stdout or ''} {done.stderr or ''}")
                 if done.returncode == 0 and found:
                     value = found.group(0)
@@ -1097,6 +1132,9 @@ class Reporter:
         digest = (os.environ.get("OPENSHELL_REGISTRATION_DIGEST") or "").strip().lower()
         if len(digest) == 64 and all(ch in "0123456789abcdef" for ch in digest):
             body["registration_digest"] = digest
+        toml_path = (os.environ.get("OPENSHELL_GATEWAY_TOML") or "").strip()
+        if toml_path:
+            body["registration_found"] = registration_found(toml_path)
         for name, fraction in (("decide_p50_ms", 0.5), ("decide_p95_ms", 0.95)):
             value = self._latency.percentile(fraction)
             if value is not None:
@@ -1349,6 +1387,8 @@ def main() -> None:
         logger.info("heartbeat and inventory are not sent: they need a gateway "
                     "credential and ARTZAIN_DECISION_URL")
     logger.info("openshell sidecar listening on %s:%s", host, port)
+    if _holds_gateway_credential() and not os.environ.get("OPENSHELL_SIDECAR_TOKEN"):
+        logger.warning("only /healthz answers on %s:%s: %s", host, port, _NO_TOKEN)
     # The socket and the port are bound: whatever waits for the sidecar may
     # start now.
     _notify_ready()

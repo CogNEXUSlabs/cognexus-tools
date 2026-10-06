@@ -82,14 +82,19 @@ def _done(code=0, out="", err=""):
     return subprocess.CompletedProcess([], code, out, err)
 
 
-def _settings_key(path):
-    """The credential in the sidecar's settings file, or empty."""
+def _settings_value(path, name):
+    """*name*'s value in the sidecar's settings file, or empty."""
     if not path.exists():
         return ""
     for line in path.read_text(encoding="utf-8").splitlines():
-        if line.startswith("COGNEXUS_API_KEY="):
+        if line.startswith(name + "="):
             return line.split("=", 1)[1].strip('"')
     return ""
+
+
+def _settings_key(path):
+    """The credential in the sidecar's settings file, or empty."""
+    return _settings_value(path, "COGNEXUS_API_KEY")
 
 
 def _stat(mode, uid):
@@ -229,10 +234,15 @@ class _Gateway:
         return ((self.units[connect.SIDECAR_UNIT] == "active" or self.stray)
                 and not self.silent)
 
-    def reports(self, port):
+    def reports(self, port, token=""):
         if self.units[connect.SIDECAR_UNIT] != "active":
             return None
         key = _settings_key(self.paths.sidecar_env)
+        # As the sidecar answers: one that holds a gateway credential says
+        # nothing to a caller without its token.
+        expected = _settings_value(self.paths.sidecar_env, "OPENSHELL_SIDECAR_TOKEN")
+        if key.startswith("cnxg_") and (not expected or token != expected):
+            return None
         if key and key not in self.live_keys:  # the engine refuses its heartbeat
             return dict(REPORTED, heartbeat="failed", heartbeat_error="HTTPError")
         return dict(self.reported.pop(0) if len(self.reported) > 1 else self.reported[0])
@@ -1197,7 +1207,7 @@ def test_reports_the_engine_has_not_taken_are_a_note_not_a_failure(gateway, monk
                                                                    reported, says):
     gateway.reported = [reported]
     if reported is None:
-        monkeypatch.setattr(gateway, "reports", lambda port: None)
+        monkeypatch.setattr(gateway, "reports", lambda port, token="": None)
     host = gateway.host(reports=gateway.reports)
     said = []
     record = connect.up(host, token=TOKEN, digest=DIGEST, out=said.append)
@@ -1245,7 +1255,7 @@ def test_a_listing_lost_while_the_gateway_restarts_is_not_what_up_reports(gatewa
     def sleep(seconds):
         clock["now"] += seconds
 
-    def reports(_port):
+    def reports(_port, _token=""):
         # The sidecar's loop has been running since the service started.
         reporter.step()
         return reporter.status()
@@ -1439,10 +1449,10 @@ def test_a_heartbeat_that_is_never_taken_is_not_taken_as_working(gateway, monkey
     before = gateway.paths.sidecar_env.read_bytes()
     real = gateway.reports
 
-    def pending_with_the_new_key(port):
+    def pending_with_the_new_key(port, token=""):
         if _settings_key(gateway.paths.sidecar_env) == NEW_CREDENTIAL:
             return {"reporting": True, "heartbeat": "pending", "inventory": "pending"}
-        return real(port)
+        return real(port, token)
 
     monkeypatch.setattr(gateway, "reports", pending_with_the_new_key)
     with pytest.raises(connect.ConnectError, match="back on the old credential"):
@@ -1823,3 +1833,212 @@ def test_doctor_with_only_warnings_succeeds_and_can_print_json(monkeypatch, caps
     monkeypatch.setattr(connect, "doctor", lambda host: warned)
     cli.main(["connect", "openshell", "doctor", "--json"])
     assert json.loads(capsys.readouterr().out) == warned
+
+
+# ---------------------------------------------------------------------------
+# The sidecar's token, and the engine over HTTPS (0.6.41)
+# ---------------------------------------------------------------------------
+
+
+def _without_token(path, *names):
+    names = names or ("OPENSHELL_SIDECAR_TOKEN",)
+    text = path.read_text(encoding="utf-8")
+    kept = "".join(line for line in text.splitlines(keepends=True)
+                   if not line.startswith(tuple(name + "=" for name in names)))
+    path.write_text(kept, encoding="utf-8")
+    return kept
+
+
+@needs_tomllib
+def test_up_again_brings_a_pre_0_6_41_sidecars_settings_up_to_date(gateway):
+    """0.6.40 wrote neither the token nor where gateway.toml is: `up` again
+    adds both, keeps the rest, and restarts the sidecar once."""
+    _up(gateway)
+    env = gateway.paths.sidecar_env
+    kept = _without_token(env, "OPENSHELL_SIDECAR_TOKEN", "OPENSHELL_GATEWAY_TOML")
+    restart = ["systemctl", "--user", "restart", connect.SIDECAR_UNIT]
+    restarts = gateway.commands("systemctl").count(restart)
+    said = []
+    connect.up(gateway.host(), out=said.append, engine="https://engine.example/")
+    assert _settings_value(env, "OPENSHELL_GATEWAY_TOML") == gateway.paths.gateway_toml.as_posix()
+    assert len(_settings_value(env, "OPENSHELL_SIDECAR_TOKEN")) >= 43
+    assert env.read_text(encoding="utf-8").startswith(kept)
+    assert gateway.commands("systemctl").count(restart) == restarts + 1
+    assert any("gateway.toml" in line for line in said), said
+
+
+VENV_PYTHON = "/home/op/.local/share/artzain/openshell/venv-0.6.41/bin/python"
+
+
+@needs_tomllib
+def test_up_from_another_environment_moves_the_service_there(gateway):
+    """The connect script of 0.6.41 installs artzain into an environment of
+    its own and runs `up` from there: the sidecar's unit is rewritten to run
+    from it, and the sidecar restarts once (the gateway with it). The uv
+    tool the earlier script installed can then go."""
+    _up(gateway)
+    restart = ["systemctl", "--user", "restart", connect.SIDECAR_UNIT]
+    restarts = gateway.commands("systemctl").count(restart)
+    reloads = gateway.commands("systemctl").count(["systemctl", "--user", "daemon-reload"])
+    said = []
+    connect.up(gateway.host(executable=VENV_PYTHON), out=said.append,
+               engine="https://engine.example/")
+    unit = gateway.paths.sidecar_unit.read_text(encoding="utf-8")
+    assert f'ExecStart="{VENV_PYTHON}" -m artzain.cli openshell sidecar' in unit
+    assert gateway.commands("systemctl").count(restart) == restarts + 1
+    assert gateway.commands("systemctl").count(
+        ["systemctl", "--user", "daemon-reload"]) == reloads + 1
+    assert any("sidecar" in line and "restart" in line for line in said), said
+
+
+@needs_tomllib
+def test_a_gateway_that_does_not_come_back_after_the_move_stops_up(gateway):
+    _up(gateway)
+    gateway.gateway_after_sidecar_restart = ["failed"]
+    with pytest.raises(connect.ConnectError, match="did not stay up"):
+        connect.up(gateway.host(executable=VENV_PYTHON), out=lambda _s: None,
+                   engine="https://engine.example/")
+
+
+@needs_tomllib
+def test_settings_and_environment_brought_up_to_date_restart_the_sidecar_once(gateway):
+    _up(gateway)
+    _without_token(gateway.paths.sidecar_env, "OPENSHELL_SIDECAR_TOKEN", "OPENSHELL_GATEWAY_TOML")
+    restart = ["systemctl", "--user", "restart", connect.SIDECAR_UNIT]
+    restarts = gateway.commands("systemctl").count(restart)
+    connect.up(gateway.host(executable=VENV_PYTHON), out=lambda _s: None,
+               engine="https://engine.example/")
+    assert gateway.commands("systemctl").count(restart) == restarts + 1
+    assert _settings_value(gateway.paths.sidecar_env, "OPENSHELL_SIDECAR_TOKEN")
+    assert VENV_PYTHON in gateway.paths.sidecar_unit.read_text(encoding="utf-8")
+
+
+@needs_tomllib
+def test_up_again_on_an_up_to_date_sidecar_changes_nothing(gateway):
+    _up(gateway)
+    before = gateway.paths.sidecar_env.read_bytes()
+    restart = ["systemctl", "--user", "restart", connect.SIDECAR_UNIT]
+    restarts = gateway.commands("systemctl").count(restart)
+    connect.up(gateway.host(), out=lambda _s: None, engine="https://engine.example/")
+    assert gateway.paths.sidecar_env.read_bytes() == before
+    assert gateway.commands("systemctl").count(restart) == restarts
+
+
+@needs_tomllib
+def test_the_sidecar_watches_the_registration_up_wrote(gateway):
+    """What the heartbeat reports from gateway.toml is the digest the
+    sidecar was installed for, until someone changes the file."""
+    _up(gateway)
+    env, toml = gateway.paths.sidecar_env, gateway.paths.gateway_toml
+    installed = _settings_value(env, "OPENSHELL_REGISTRATION_DIGEST")
+    assert sidecar.registration_found(_settings_value(env, "OPENSHELL_GATEWAY_TOML")) == installed
+    toml.write_bytes(connect.strip_block(toml.read_bytes()))
+    assert sidecar.registration_found(toml.as_posix()) == "missing"
+
+
+@needs_tomllib
+def test_up_gives_the_sidecar_a_token_of_its_own(gateway):
+    """The sidecar speaks for the gateway, so its loopback routes answer
+    only a caller with its token; `up` writes one beside the credential."""
+    record, _said = _up(gateway)
+    token = _settings_value(gateway.paths.sidecar_env, "OPENSHELL_SIDECAR_TOKEN")
+    assert len(token) >= 43 and token.replace("-", "").replace("_", "").isalnum()
+    assert token not in (CREDENTIAL, TOKEN)
+    # It reads the sidecar's reports with it.
+    assert record["reports"] == REPORTED
+    assert connect.status(gateway.host())["reports"] == REPORTED
+
+
+@needs_tomllib
+def test_up_again_gives_a_sidecar_connected_before_the_token_one(gateway):
+    """A gateway connected by 0.6.40 or earlier has no token: running `up`
+    again with this artzain adds one, keeps every other setting as it was,
+    and restarts the sidecar so it takes it."""
+    _up(gateway)
+    kept = _without_token(gateway.paths.sidecar_env)
+    restarts = gateway.commands("systemctl").count(
+        ["systemctl", "--user", "restart", connect.SIDECAR_UNIT])
+    said = []
+    record = connect.up(gateway.host(), out=said.append, engine="https://engine.example/")
+    after = gateway.paths.sidecar_env.read_text(encoding="utf-8")
+    token = _settings_value(gateway.paths.sidecar_env, "OPENSHELL_SIDECAR_TOKEN")
+    assert len(token) >= 43
+    assert [line for line in after.splitlines()
+            if not line.startswith("OPENSHELL_SIDECAR_TOKEN=")] == kept.splitlines()
+    assert gateway.commands("systemctl").count(
+        ["systemctl", "--user", "restart", connect.SIDECAR_UNIT]) == restarts + 1
+    assert record["reports"] == REPORTED
+    assert any("token" in line for line in said), said
+    assert token not in "\n".join(said)
+
+
+@needs_tomllib
+def test_doctor_says_when_the_sidecar_has_no_token(gateway):
+    _up(gateway)
+    _without_token(gateway.paths.sidecar_env)
+    said = connect.doctor(gateway.host())
+    found = next(item for item in said["checks"] if item["check"] == "credential")
+    assert found["result"] == "fail", found
+    assert "OPENSHELL_SIDECAR_TOKEN" in found["says"]
+    assert "artzain connect openshell up" in found["says"]
+    assert said["ok"] is False
+
+
+def test_the_sidecars_reports_are_asked_with_its_token(monkeypatch):
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    asked = []
+
+    class Sidecar(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            return None
+
+        def do_GET(self):  # noqa: N802
+            asked.append((self.path, self.headers.get("Authorization")))
+            raw = json.dumps(REPORTED).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Sidecar)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        assert connect._reports(port, "sidecar-secret") == REPORTED
+        connect._healthy(port)
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+    assert asked == [("/artzain/reports", "Bearer sidecar-secret"), ("/healthz", None)]
+
+
+@pytest.mark.parametrize("engine", ["http://engine.example", "http://10.0.0.5:8000",
+                                    "HTTP://engine.example"])
+def test_the_enroll_token_never_goes_to_an_engine_over_plain_http(gateway, engine):
+    with pytest.raises(connect.ConnectError, match="https"):
+        connect.redeem(gateway.host(), engine=engine, token=TOKEN, digest=DIGEST)
+    assert gateway.posts == []
+
+
+@pytest.mark.parametrize("engine", ["http://127.0.0.1:8000", "http://localhost:8000",
+                                    "http://[::1]:8000", "https://engine.example"])
+def test_an_engine_on_this_host_may_be_plain_http(gateway, engine):
+    connect.redeem(gateway.host(), engine=engine, token=TOKEN, digest=DIGEST)
+    assert gateway.posts[0]["url"].startswith(engine)
+
+
+@pytest.mark.parametrize("url, refused", [("http://engine.example", True),
+                                          ("http://192.168.1.4:8000", True),
+                                          ("http://127.0.0.1:8000", False),
+                                          ("https://engine.example", False)])
+def test_a_configuration_that_sends_decisions_over_plain_http_is_refused(url, refused):
+    """The sidecar sends the gateway's credential to the decision URL."""
+    config = dict(CONFIG, decision_url=url)
+    if refused:
+        with pytest.raises(connect.ConnectError, match="https"):
+            connect.parse_config(config)
+    else:
+        assert connect.parse_config(config).decision_url == url

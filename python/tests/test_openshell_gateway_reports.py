@@ -32,7 +32,7 @@ import pytest
 
 import artzain
 from artzain.openshell import interceptor as osi
-from artzain.openshell import sidecar
+from artzain.openshell import registration, sidecar
 from artzain.openshell.journal import Journal
 from artzain.openshell.state import GatewayLedger
 
@@ -83,7 +83,8 @@ class _Engine:
 def _sidecar_env(monkeypatch):
     monkeypatch.setenv("OPENSHELL_GATEWAY_ID", "gw-a")
     for name in ("OPENSHELL_SIDECAR_LIST_WORKSPACES", "OPENSHELL_SIDECAR_STATE",
-                 "OPENSHELL_REGISTRATION_DIGEST", "ARTZAIN_DECISION_URL"):
+                 "OPENSHELL_REGISTRATION_DIGEST", "OPENSHELL_GATEWAY_TOML",
+                 "ARTZAIN_DECISION_URL"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("COGNEXUS_API_KEY", "cnxg_sidecar_test_credential")
     monkeypatch.setattr(sidecar, "_LEDGER", GatewayLedger(gateway_id="gw-a"))
@@ -727,6 +728,20 @@ def test_the_heartbeat_reports_the_gateways_own_version(gateway_binary, stream):
     assert kwargs.get("timeout") and not kwargs.get("shell")
 
 
+def test_the_gateways_binary_is_not_given_the_credential(gateway_binary, monkeypatch):
+    """It is asked its version, and needs neither the gateway's credential
+    nor the sidecar's token to say it."""
+    monkeypatch.setenv("COGNEXUS_API_KEY", "cnxg_" + "k" * 43)
+    monkeypatch.setenv("OPENSHELL_SIDECAR_TOKEN", "sidecar-secret")
+    monkeypatch.setenv("HOME", "/home/op")
+    assert sidecar._openshell_version() == "0.1.3"
+    [(_argv, kwargs)] = gateway_binary["runs"]
+    env = kwargs.get("env")
+    assert env is not None, "the binary ran with the sidecar's whole environment"
+    assert "COGNEXUS_API_KEY" not in env and "OPENSHELL_SIDECAR_TOKEN" not in env
+    assert env.get("HOME") == "/home/op"
+
+
 def test_without_the_gateways_binary_the_sdk_version_is_reported(gateway_binary, monkeypatch):
     gateway_binary["path"] = None
     assert sidecar._openshell_version() == "0.1.2"
@@ -901,3 +916,94 @@ def test_a_report_goes_to_the_engine_with_its_own_deadline(monkeypatch):
     monkeypatch.delenv("ARTZAIN_DECISION_URL")
     with pytest.raises(RuntimeError):
         sidecar._report("/api/v1/openshell/heartbeat", {})
+
+
+# ---------------------------------------------------------------------------
+# What gateway.toml registers (S5.5 review, finding 3)
+# ---------------------------------------------------------------------------
+
+SOCKET = "unix:///run/user/1000/artzain/openshell.sock"
+OPERATOR = '[openshell.gateway]\nlog_level = "info"\n'
+
+
+def _registered(tmp_path, monkeypatch, *, version_table=False, edit=None, text=None):
+    """A gateway.toml with the managed block `up` writes, the sidecar told
+    where it is and what it was installed for. Returns the reporter's
+    heartbeat body."""
+    from artzain.openshell import connect
+
+    rendered = registration.render(SOCKET, timeout_ms=1500)
+    in_block = registration.render(SOCKET, timeout_ms=1500, version_table=version_table)
+    if edit:
+        in_block = in_block.replace(*edit)
+    path = tmp_path / "gateway.toml"
+    if text is None:
+        base = "" if version_table else OPERATOR
+        path.write_bytes(connect.add_block(base.encode("utf-8"), in_block))
+    elif text != "absent":
+        path.write_bytes(text)
+    monkeypatch.setenv("OPENSHELL_REGISTRATION_DIGEST", registration.digest(rendered))
+    monkeypatch.setenv("OPENSHELL_GATEWAY_TOML", str(path))
+    monkeypatch.setattr(sidecar, "_openshell_version", lambda: "")
+    return sidecar.Reporter(GatewayLedger(gateway_id="gw-a"), post=lambda *_a: None,
+                            clock=lambda: 0.0, latency=sidecar.LatencyWindow(),
+                            undelivered=sidecar.Counter()).heartbeat_body()
+
+
+@pytest.mark.parametrize("version_table", [False, True])
+def test_the_heartbeat_says_gateway_toml_registers_the_sidecar(tmp_path, monkeypatch,
+                                                              version_table):
+    """With or without the [openshell] table `up` opens the block with on a
+    file that had none, the registration found is the one installed."""
+    body = _registered(tmp_path, monkeypatch, version_table=version_table)
+    assert body["registration_found"] == body["registration_digest"]
+
+
+@pytest.mark.parametrize("edit", [('failure_policy = "fail_closed"', 'failure_policy = "fail_open"'),
+                                  ('timeout        = "1500ms"', 'timeout        = "60000ms"')])
+def test_an_edited_registration_is_another_digest(tmp_path, monkeypatch, edit):
+    body = _registered(tmp_path, monkeypatch, edit=edit)
+    found = body["registration_found"]
+    assert len(found) == 64 and found != body["registration_digest"]
+
+
+@pytest.mark.parametrize("text", [OPERATOR.encode("utf-8"), b"", "absent"])
+def test_a_gateway_toml_without_the_block_says_missing(tmp_path, monkeypatch, text):
+    body = _registered(tmp_path, monkeypatch, text=text)
+    assert body["registration_found"] == "missing"
+
+
+def test_a_gateway_toml_that_cannot_be_read_says_unreadable(tmp_path, monkeypatch):
+    body = _registered(tmp_path, monkeypatch, text=b"\xff\xfe not utf-8")
+    assert body["registration_found"] == "unreadable"
+    (tmp_path / "gateway.toml").unlink()
+    (tmp_path / "gateway.toml").mkdir()  # reading a folder fails
+    reporter = sidecar.Reporter(GatewayLedger(gateway_id="gw-a"), post=lambda *_a: None,
+                                clock=lambda: 0.0, latency=sidecar.LatencyWindow(),
+                                undelivered=sidecar.Counter())
+    assert reporter.heartbeat_body()["registration_found"] == "unreadable"
+
+
+def test_two_blocks_are_not_the_registration(tmp_path, monkeypatch):
+    from artzain.openshell import connect
+
+    rendered = registration.render(SOCKET, timeout_ms=1500)
+    twice = connect.add_block(connect.add_block(OPERATOR.encode("utf-8"), rendered), rendered)
+    body = _registered(tmp_path, monkeypatch, text=twice)
+    assert body["registration_found"] == "missing"
+
+
+def test_a_marker_that_is_not_its_own_line_is_no_block():
+    """As `remove` reads the file: the markers `up` writes start their line."""
+    rendered = registration.render(SOCKET, timeout_ms=1500)
+    whole = f"{registration.BLOCK_BEGIN}\n{rendered}{registration.BLOCK_END}\n"
+    assert registration.found(whole) == rendered
+    assert registration.found("key = 1 " + whole) is None
+
+
+def test_without_the_path_the_heartbeat_says_nothing_of_gateway_toml(wire, monkeypatch):
+    monkeypatch.setenv("OPENSHELL_REGISTRATION_DIGEST", "ab" * 32)
+    monkeypatch.setattr(sidecar, "_openshell_version", lambda: "")
+    reporter = _reporter(wire)
+    reporter.step()
+    assert "registration_found" not in wire.sent("heartbeat")[0][1]
