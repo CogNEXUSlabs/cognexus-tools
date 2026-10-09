@@ -66,7 +66,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from artzain._private_files import private_dir, replace_file, write_private
-from artzain.openshell import registration, transport
+from artzain.openshell import install, registration, transport
 
 #: What the configuration a token carries says it is, and the one version
 #: this release reads.
@@ -97,6 +97,9 @@ _GATEWAY_ID = re.compile(r"^gw_[0-9A-HJKMNP-TV-Z]{26}$")
 _DECISION_ID = re.compile(r"decision (?:deny|review) \(([0-9A-HJKMNP-TV-Z]{26})\)")
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+#: A decision id as a receipt link carries it (the engine's
+#: GET /api/v1/audit/decisions?decision= takes the same).
+_RECEIPT_ID = re.compile(r"[0-9A-Za-z]{26}")
 #: Characters a value written into a systemd unit or environment file must
 #: not hold.
 _UNSAFE = re.compile(r"[\x00-\x1f\x7f\"'\\$%`]")
@@ -493,6 +496,55 @@ class Shape:
     kind: str
     openshell_version: str
     paths: Layout
+
+
+def receipt_url(engine: Any, decision_id: Any) -> str:
+    """The dashboard's page of *decision_id*'s receipt on *engine* (its
+    origin), or "" when either is not one: ``/dashboard.html?receipt=<id>``
+    opens the sealed leaf, after a sign-in if need be."""
+    if not isinstance(decision_id, str) or not _RECEIPT_ID.fullmatch(decision_id):
+        return ""
+    parts = urllib.parse.urlsplit(engine if isinstance(engine, str) else "")
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return ""
+    return f"{parts.scheme}://{parts.netloc}/dashboard.html?receipt={decision_id}"
+
+
+def _install_question(plan: install.Plan) -> str:
+    packages = ", ".join(f"{name} (SHA-256 {sha[:12]}\u2026)" for name, sha in plan.packages)
+    return (f"OpenShell {install.RELEASE} is not installed. Install it now? This downloads "
+            f"{packages} from NVIDIA's release on GitHub, checks each against the SHA-256 this "
+            f"artzain release pins, installs {'it' if len(plan.packages) == 1 else 'them'} with "
+            f"`{'sudo ' if plan.sudo else ''}{plan.tool}`, and starts the openshell-gateway user "
+            "service. [y/N] ")
+
+
+def _openshell_installed(host: Host, *, install_openshell: bool,
+                         ask: Optional[Callable[[str], str]], out: Callable[[str], None]) -> None:
+    """Install OpenShell when the host has systemd and no OpenShell, and the
+    operator said to: ``--install-openshell``, or yes at the terminal.
+    Otherwise say how, before any token is spent."""
+    missing = [tool for tool in ("openshell-gateway", "openshell") if not host.which(tool)]
+    if (not missing or not host.platform.startswith("linux") or sys.version_info < (3, 11)
+            or not host.which("systemctl")):
+        return  # detect says what is wrong, if anything is
+    try:
+        plan = install.plan(host)
+    except install.InstallError as exc:
+        raise ConnectError(f"{missing[0]} is not on PATH, and OpenShell cannot be installed "
+                           f"here: {exc}") from None
+    if not install_openshell:
+        answer = ask(_install_question(plan)) if ask is not None else ""
+        if answer.strip().lower() not in ("y", "yes"):
+            steps = "\n".join("  " + line for line in plan.by_hand())
+            raise ConnectError(
+                f"{missing[0]} is not on PATH: OpenShell {install.RELEASE} is not installed. "
+                "Run `artzain connect openshell up --install-openshell` to install it, "
+                f"or run these yourself:\n{steps}\nthen run this again (no token was spent)")
+    try:
+        install.install(host, plan, say=lambda message: _say(out, message))
+    except install.InstallError as exc:
+        raise ConnectError(f"installing OpenShell {install.RELEASE}: {exc}") from None
 
 
 def detect(host: Host) -> Shape:
@@ -947,10 +999,13 @@ def self_test(host: Host) -> str:
 
 def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_ENGINE,
        proxy: str = "", ca_bundle: str = "", port: int = DEFAULT_PORT,
+       install_openshell: bool = False, ask: Optional[Callable[[str], str]] = None,
        out: Callable[[str], None] = print) -> Dict[str, Any]:
     """Bind this host's gateway. Returns the record. Raises
     :class:`ConnectError` at the first step that cannot be done; what was
-    done before it stays recorded."""
+    done before it stays recorded. On a host without OpenShell, installs it
+    first when *install_openshell* is set or *ask* is answered yes."""
+    _openshell_installed(host, install_openshell=install_openshell, ask=ask, out=out)
     shape = detect(host)
     paths = shape.paths
     if "/.cache/uv/" in host.executable.replace("\\", "/"):
@@ -1092,6 +1147,9 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
     record.mark("self-test", self_test_decision_id=decision, connected=True)
     _say(out, f"gateway {gateway_id} is governed: the self-test write was refused by "
               f"ArtzAIn decision {decision}.")
+    receipt = receipt_url(record.data.get("engine") or engine, decision)
+    if receipt:
+        _say(out, f"its receipt: {receipt}")
 
     # 8. The first heartbeat and inventory. The sidecar sends them as it
     # starts, which can be while this restarts the gateway, so a listing
@@ -1452,6 +1510,8 @@ def status(host: Host) -> Dict[str, Any]:
         "steps": record.get("steps", []),
         "connected": bool(record.get("connected")),
         "self_test_decision_id": record.get("self_test_decision_id"),
+        "self_test_receipt": receipt_url(record.get("engine"), record.get("self_test_decision_id"))
+        or None,
         "credential_saved": paths.sidecar_env.exists(),
         "registration_in_gateway_toml": strip_block(toml) is not None,
         "drop_in": paths.dropin.exists(),
@@ -1612,8 +1672,10 @@ def doctor(host: Host) -> Dict[str, Any]:
         found("record", "fail", str(exc))
     else:
         if data.get("connected"):
+            receipt = receipt_url(data.get("engine"), data.get("self_test_decision_id"))
             found("record", "ok", f"gateway {data.get('gateway_id')} is connected (self-test "
-                                  f"decision {data.get('self_test_decision_id')})")
+                                  f"decision {data.get('self_test_decision_id')}"
+                                  + (f", receipt {receipt})" if receipt else ")"))
         else:
             found("record", "fail", "this host's gateway is not connected: run "
                                     "`artzain connect openshell up`")

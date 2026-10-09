@@ -1812,10 +1812,14 @@ def cmd_connect_openshell(args: argparse.Namespace) -> None:
         if args.connect_command == "up":
             # The token comes from the environment only: an argument would be
             # on display in the process list.
+            # On a host without OpenShell, up installs it when told to, or
+            # asks the person at the terminal first.
             connect.up(host, token=os.environ.get("ARTZAIN_ENROLL_TOKEN", "").strip(),
                        digest=(args.config_digest or "").strip().lower(),
                        engine=args.engine, proxy=args.proxy or "",
-                       ca_bundle=args.ca_bundle or "", port=args.port)
+                       ca_bundle=args.ca_bundle or "", port=args.port,
+                       install_openshell=args.install_openshell,
+                       ask=input if sys.stdin is not None and sys.stdin.isatty() else None)
         elif args.connect_command == "remove":
             connect.remove(host, keep_credential=args.keep_credential)
         elif args.connect_command == "rotate-key":
@@ -2340,6 +2344,9 @@ def _add_connect_parser(sub: argparse._SubParsersAction) -> None:
                       help="a PEM file of the authorities to trust for the engine")
     c_up.add_argument("--port", type=int, default=8088,
                       help="the sidecar's loopback HTTP port (default: %(default)s)")
+    c_up.add_argument("--install-openshell", action="store_true",
+                      help="on a host without OpenShell, install NVIDIA's deb or rpm of the "
+                           "pinned release (checked against its SHA-256) without asking")
     c_up.set_defaults(func=cmd_connect_openshell)
     c_remove = c_os_sub.add_parser("remove", help="Undo up, and revoke the credential.")
     c_remove.add_argument("--keep-credential", action="store_true",

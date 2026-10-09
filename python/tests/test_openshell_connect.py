@@ -33,7 +33,7 @@ from pathlib import Path
 import pytest
 
 from artzain import _private_files
-from artzain.openshell import connect, registration, sidecar
+from artzain.openshell import connect, install, registration, sidecar
 from artzain.openshell.state import GatewayLedger
 
 needs_tomllib = pytest.mark.skipif(sys.version_info < (3, 11), reason="connect reads TOML")
@@ -52,6 +52,12 @@ DIGEST = connect.config_digest(CONFIG)
 NO_WINDOW = {"enabled": True, "window": None, "pending": 0}
 REPORTED = {"reporting": True, "heartbeat": "ok", "inventory": "ok", "sandboxes": 2,
             "partial": False}
+
+#: The deb a host without OpenShell is given, and the pins it is checked
+#: against in these tests (the real ones are install.DEB).
+PACKAGE = b"the openshell deb"
+PINNED_DEB = {"amd64": (("openshell_0.1.2-1_amd64.deb", hashlib.sha256(PACKAGE).hexdigest()),)}
+RECEIPT = f"https://engine.example/dashboard.html?receipt={DECISION}"
 
 GATEWAY_TOML = """\
 [openshell]
@@ -165,11 +171,24 @@ class _Gateway:
         self.engine_status, self.engine_skew, self.engine_raises = 200, 0.0, False
         self.engine_gets = []
         self.wall_now = 1_800_000_000.0
+        # A host without OpenShell: what `up` may install (plan S3.2).
+        self.openshell_installed = True
+        self.package = PACKAGE  # what the download of the deb serves
 
     # the commands --------------------------------------------------------
     def run(self, argv, env, timeout):
         self.calls.append(list(argv))
         name, args = argv[0], argv[1:]
+        if argv == ["dpkg", "--print-architecture"]:
+            return _done(0, "amd64\n")
+        if name == "curl":
+            Path(args[args.index("-o") + 1]).write_bytes(self.package)
+            return _done()
+        if argv[:4] == ["sudo", "env", "DEBIAN_FRONTEND=noninteractive", "apt-get"]:
+            self.openshell_installed = True
+            return _done()
+        if name == "openshell" and args[:2] == ["gateway", "add"]:
+            return _done()
         if name == "openshell-gateway":
             if args == ["--version"]:
                 return _done(0, self.version + "\n")
@@ -326,11 +345,16 @@ class _Gateway:
             reports=self.reports, break_glass=self.break_glass, stat=self.stat,
             get_engine=self.get_engine,
             wall=lambda: self.wall_now,
-            post_json=self.post_json, which=lambda name: f"/usr/bin/{name}",
+            post_json=self.post_json, which=self.which,
             sleep=lambda _s: None, clock=_Clock(), platform="linux",
             executable="/home/op/.local/share/uv/tools/artzain/bin/python", uid=1000)
         settings.update(overrides)
         return connect.Host(**settings)
+
+    def which(self, name):
+        if name in ("openshell", "openshell-gateway") and not self.openshell_installed:
+            return None
+        return f"/usr/bin/{name}"
 
     @property
     def paths(self) -> connect.Layout:
@@ -706,8 +730,10 @@ def test_up_binds_the_gateway_and_checks_it_is_governed(gateway):
     assert record["steps"] == ["redeemed", "approval-manual", "gateway-env", "sidecar",
                                "toml-saved", "registration", "gateway-restarted", "self-test",
                                "reported"]
-    # The governed line, then what the engine took of the first reports.
-    assert DECISION in said[-2] and GATEWAY in said[-2]
+    # The governed line, its receipt, then what the engine took of the first
+    # reports.
+    assert DECISION in said[-3] and GATEWAY in said[-3]
+    assert said[-2] == f"its receipt: {RECEIPT}"
     assert not any(CREDENTIAL in line or TOKEN in line for line in said)
     assert CREDENTIAL not in paths.record.read_text(encoding="utf-8")
 
@@ -866,6 +892,124 @@ def test_a_host_this_release_cannot_bind_is_refused_before_anything(gateway, cha
     with pytest.raises(connect.ConnectError, match=says):
         connect.up(gateway.host(**change), token=TOKEN, digest=DIGEST, out=lambda _s: None)
     assert gateway.posts == []
+
+
+# ---------------------------------------------------------------------------
+# A host without OpenShell (plan S3.2): up installs it when told to
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def bare(gateway, monkeypatch):
+    """The gateway's host before OpenShell is installed on it."""
+    monkeypatch.setattr(install, "DEB", PINNED_DEB)
+    gateway.openshell_installed = False
+    return gateway
+
+
+@needs_tomllib
+def test_without_openshell_up_says_how_to_install_it_and_spends_no_token(bare):
+    with pytest.raises(connect.ConnectError) as caught:
+        _up(bare)
+    says = str(caught.value)
+    assert says.startswith("openshell-gateway is not on PATH: OpenShell 0.1.2 is not installed")
+    assert "--install-openshell" in says
+    assert f"echo '{PINNED_DEB['amd64'][0][1]}  openshell_0.1.2-1_amd64.deb' | sha256sum -c -" in says
+    assert "no token was spent" in says
+    assert bare.posts == []
+    assert not any(c[0] in ("curl", "sudo") for c in bare.calls)
+
+
+@needs_tomllib
+def test_up_installs_openshell_when_told_to_then_binds_it(bare):
+    record, said = _up(bare, install_openshell=True)
+    assert record["connected"] is True and bare.openshell_installed
+    sequence = [c[0] for c in bare.calls]
+    # Installed, and its CLI answering, before the token is spent.
+    assert sequence.index("sudo") < sequence.index("openshell-gateway")
+    assert bare.posts[0]["url"].endswith(connect.REDEEM_PATH)
+    assert any("installing OpenShell 0.1.2 with apt-get under sudo" in line for line in said)
+
+
+@needs_tomllib
+@pytest.mark.parametrize("answer", ["y", "Y", "yes", " yes \n"])
+def test_up_asks_before_installing_and_a_yes_installs(bare, answer):
+    asked = []
+    record, _said = _up(bare, ask=lambda question: asked.append(question) or answer)
+    (question,) = asked
+    assert "OpenShell 0.1.2 is not installed" in question
+    assert "openshell_0.1.2-1_amd64.deb" in question and PINNED_DEB["amd64"][0][1][:12] in question
+    assert "sudo apt-get" in question and question.endswith("[y/N] ")
+    assert record["connected"] is True and bare.openshell_installed
+
+
+@needs_tomllib
+@pytest.mark.parametrize("answer", ["", "n", "no", "maybe"])
+def test_anything_but_yes_installs_nothing(bare, answer):
+    with pytest.raises(connect.ConnectError, match="OpenShell 0.1.2 is not installed"):
+        _up(bare, ask=lambda _question: answer)
+    assert not any(c[0] in ("curl", "sudo") for c in bare.calls) and bare.posts == []
+
+
+@needs_tomllib
+def test_a_package_that_is_not_its_pinned_build_stops_up_before_the_token(bare):
+    bare.package = b"something else"
+    with pytest.raises(connect.ConnectError, match="installing OpenShell 0.1.2: "
+                                                   "openshell_0.1.2-1_amd64.deb is not the build"):
+        _up(bare, install_openshell=True)
+    assert not any(c[0] == "sudo" for c in bare.calls) and bare.posts == []
+
+
+@needs_tomllib
+def test_a_host_without_systemd_is_not_offered_an_install(bare):
+    host = bare.host(which=lambda name: None if name in ("systemctl", "openshell",
+                                                        "openshell-gateway") else f"/usr/bin/{name}")
+    with pytest.raises(connect.ConnectError, match="systemctl is not on PATH"):
+        connect.up(host, token=TOKEN, digest=DIGEST, install_openshell=True, out=lambda _s: None)
+    assert not any(c[0] in ("curl", "sudo") for c in bare.calls)
+
+
+@needs_tomllib
+def test_a_host_with_openshell_is_not_asked(gateway):
+    record, _said = _up(gateway, ask=lambda _q: pytest.fail("asked"), install_openshell=True)
+    assert record["connected"] is True
+    assert not any(c[0] in ("curl", "sudo") for c in gateway.calls)
+
+
+def test_up_installs_from_the_command_line_when_told_to_or_asks_at_a_terminal(monkeypatch):
+    from artzain import cli
+
+    seen = []
+    monkeypatch.setattr(connect, "up", lambda host, **kw: seen.append(kw) or {})
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
+    cli.main(["connect", "openshell", "up", "--install-openshell"])
+    cli.main(["connect", "openshell", "up"])
+    assert [kw["install_openshell"] for kw in seen] == [True, False]
+    assert seen[1]["ask"] is None
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+    cli.main(["connect", "openshell", "up"])
+    assert callable(seen[2]["ask"])
+
+
+# ---------------------------------------------------------------------------
+# The receipt link (plan S3.2, step 13)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("engine, decision, link", [
+    ("https://app.cognexuslabs.ai", DECISION,
+     f"https://app.cognexuslabs.ai/dashboard.html?receipt={DECISION}"),
+    ("https://engine.example/", DECISION, RECEIPT),
+    ("https://engine.example/api/", DECISION, RECEIPT),
+    ("http://127.0.0.1:8000", DECISION, f"http://127.0.0.1:8000/dashboard.html?receipt={DECISION}"),
+    ("https://engine.example", DECISION[:-1], ""),
+    ("https://engine.example", DECISION + "&x=1", ""),
+    ("https://engine.example", None, ""),
+    ("ftp://engine.example", DECISION, ""),
+    ("", DECISION, ""),
+])
+def test_the_receipt_link_is_the_dashboards_page_of_the_decision(engine, decision, link):
+    assert connect.receipt_url(engine, decision) == link
 
 
 @needs_tomllib
@@ -1159,7 +1303,7 @@ def test_status_says_what_is_installed_and_holds_no_credential(gateway):
     after = connect.status(gateway.host())
     assert after == {
         "gateway_id": GATEWAY, "steps": after["steps"], "connected": True,
-        "self_test_decision_id": DECISION, "credential_saved": True,
+        "self_test_decision_id": DECISION, "self_test_receipt": RECEIPT, "credential_saved": True,
         "registration_in_gateway_toml": True, "drop_in": True, "sidecar_unit": True,
         "sidecar": "active", "sidecar_answers": True, "gateway": "active",
         "record_error": None, "reports": REPORTED, "break_glass": NO_WINDOW}
@@ -1591,6 +1735,8 @@ def _results(said):
 def test_doctor_finds_nothing_wrong_with_a_gateway_up_bound(gateway):
     _up(gateway)
     said = connect.doctor(gateway.host())
+    assert said["checks"][0]["says"] == (f"gateway {GATEWAY} is connected (self-test decision "
+                                         f"{DECISION}, receipt {RECEIPT})")
     assert [check["check"] for check in said["checks"]] == CHECKS
     assert set(_results(said).values()) == {"ok"} and said["ok"] is True
     assert gateway.engine_gets == [{"url": "https://engine.example/health", "proxy": "",
@@ -1779,11 +1925,13 @@ def test_the_command_takes_the_token_from_the_environment_only(monkeypatch):
         seen.update(kwargs)
 
     monkeypatch.setattr(connect, "up", up)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
     monkeypatch.setenv("ARTZAIN_ENROLL_TOKEN", f"  {TOKEN}  ")
     cli.main(["connect", "openshell", "up", "--config-digest", DIGEST.upper(),
               "--engine", "https://engine.example", "--proxy", "env", "--port", "8090"])
     assert seen == {"token": TOKEN, "digest": DIGEST, "engine": "https://engine.example",
-                    "proxy": "env", "ca_bundle": "", "port": 8090}
+                    "proxy": "env", "ca_bundle": "", "port": 8090,
+                    "install_openshell": False, "ask": None}
     with pytest.raises(SystemExit):
         cli.main(["connect", "openshell", "up", "--token", TOKEN])
 

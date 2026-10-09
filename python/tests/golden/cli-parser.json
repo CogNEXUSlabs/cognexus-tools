@@ -3303,7 +3303,8 @@
                   "engine",
                   "proxy",
                   "ca_bundle",
-                  "port"
+                  "port",
+                  "install_openshell"
                  ]
                 ],
                 "actions": [
@@ -3395,6 +3396,21 @@
                   "type": "<int>",
                   "required": false,
                   "help": "the sidecar's loopback HTTP port (default: %(default)s)",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreTrueAction",
+                  "option_strings": [
+                   "--install-openshell"
+                  ],
+                  "dest": "install_openshell",
+                  "nargs": 0,
+                  "const": true,
+                  "default": false,
+                  "type": null,
+                  "required": false,
+                  "help": "on a host without OpenShell, install NVIDIA's deb or rpm of the pinned release (checked against its SHA-256) without asking",
                   "metavar": null,
                   "choices": null
                  }

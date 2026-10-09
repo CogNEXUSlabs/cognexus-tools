@@ -37,6 +37,7 @@ openclaw/     # npm package @cognexuslabs/openclaw-artzain
 n8n/          # npm package @cognexuslabs/n8n-nodes-artzain
 grokbot/      # npm package @cognexuslabs/grokbot-artzain
 images/       # the OpenShell sidecar image (ghcr.io/cognexuslabs/artzain-openshell-sidecar)
+tools/        # standalone scripts: the decide latency benchmark
 ```
 
 Engine dual-home paths (private repo): `pypi-package/`, `sdk/typescript/`,
@@ -338,6 +339,27 @@ release whose sidecar passed conformance against that OpenShell release.
 here from the published wheel for linux/amd64 and linux/arm64, signed and
 SBOM-attested keylessly by `sidecar-image.yml` at its `sidecar-v<version>`
 tag (see [Releases](#releases)). Run it by digest.
+
+## Measure decide latency yourself
+
+[`tools/bench_decide.py`](tools/bench_decide.py) makes real decisions with
+your own API key and prints the median, 95th and 99th percentile of the
+round trip from your machine and of the engine's own time. It sends the
+same short request as the probes behind the published figures at
+[status.cognexuslabs.ai](https://status.cognexuslabs.ai/#latency), so the
+two compare like for like. Standard library only, Python 3.10 or later.
+
+```bash
+export COGNEXUS_API_KEY=cnx_…
+python tools/bench_decide.py                  # 50 requests on one warm connection
+python tools/bench_decide.py --cold --json    # and each on a new connection, as JSON
+python tools/bench_decide.py --url http://127.0.0.1:8000   # an engine of your own
+```
+
+Every request is a real decision: sealed into your audit chain and counted
+against your plan, so a plan with a daily cap spends it. A `429` is waited
+out for as long as the engine asks. The key is never printed. A long request,
+or one that needs the PII screen, takes the engine longer than this one.
 
 ## Development
 

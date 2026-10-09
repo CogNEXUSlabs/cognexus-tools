@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.43
+
+### Added
+
+- **`artzain connect openshell up` installs OpenShell on a host that has
+  none.** It used to stop with "openshell is not on PATH". Now, on a
+  systemd host with dpkg or rpm, it offers to install NVIDIA's packages of
+  the release this artzain binds (0.1.2): the deb, or the three rpms, for
+  the host's architecture. Each package is downloaded from NVIDIA's GitHub
+  release and checked against a SHA-256 this release pins before anything
+  runs as root. It then installs them with apt-get (or dpkg, dnf, yum,
+  zypper, rpm) under sudo, starts the `openshell-gateway` user service and
+  registers it with the `openshell` CLI. At a terminal it asks first; with
+  `--install-openshell` it does not ask. Without a terminal and without the
+  option, it prints the same steps as commands and stops, with no token
+  spent. `remove` leaves OpenShell installed.
+- **`up` prints the self-test's receipt link**:
+  `<engine>/dashboard.html?receipt=<decision id>`, which opens the sealed
+  leaf in the dashboard's audit drawer after a sign-in if need be. `status`
+  shows it as `self_test_receipt`, and `doctor` names it beside the
+  self-test's decision.
+
 ## 0.6.42
 
 ### Added
