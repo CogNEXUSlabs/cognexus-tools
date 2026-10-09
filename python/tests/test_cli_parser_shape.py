@@ -159,7 +159,7 @@ def test_every_command_prints_its_help(capsys, monkeypatch):
     (["connect", "openshell", "up", "--port", "9000"], "cmd_connect_openshell",
      {"command": "connect", "connect_runtime": "openshell", "connect_command": "up",
       "config_digest": "", "engine": "https://app.cognexuslabs.ai", "proxy": "",
-      "ca_bundle": "", "port": 9000}),
+      "ca_bundle": "", "port": 9000, "install_openshell": False}),
     (["connect", "openshell", "doctor", "--json"], "cmd_connect_openshell",
      {"command": "connect", "connect_runtime": "openshell", "connect_command": "doctor",
       "json": True}),

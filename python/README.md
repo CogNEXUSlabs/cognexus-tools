@@ -659,7 +659,10 @@ The script installs artzain and what it needs into an environment of its
 own, every wheel checked against the SHA-256 the script carries, and runs
 `artzain connect openshell up`, which installs the sidecar as a systemd user service
 beside the gateway OpenShell's deb or rpm package runs, and ends with a
-self-test ArtzAIn must refuse. Then:
+self-test ArtzAIn must refuse, and its receipt link. On a host without
+OpenShell, `up` offers to install NVIDIA's deb or rpm of the pinned release,
+each package checked against its SHA-256 first (`--install-openshell`
+installs without asking). Then:
 
 ```bash
 artzain connect openshell status        # what is installed, and what the engine took
