@@ -74,7 +74,9 @@ Settings (environment):
   restarted sidecar refuses a create with no policy until it does.
 * ``OPENSHELL_SIDECAR_JOURNAL``: a file to keep the reports the engine has
   not taken yet, so a restart does not lose them. Unset, they wait in
-  memory (:mod:`artzain.openshell.journal`).
+  memory (:mod:`artzain.openshell.journal`). Break-glass keeps its window
+  and its own journal in the same folder, and needs it: unset, no window
+  opens (:mod:`artzain.openshell.breakglass`).
 
 A connection reset is retried once inside the same deadline, only for a
 decision that carries a ``request_id``: the Decision API replays a repeated
@@ -91,6 +93,12 @@ refused with a reason that says so and how long to wait, and the gateway
 reports it as ``RESOURCE_EXHAUSTED``. It is not retried here: the operator
 runs the command again.
 
+Break-glass: the host user opens a window with ``artzain connect openshell
+break-glass``, which calls ``POST /artzain/break-glass`` with the sidecar's
+token (``GET`` reads it, ``POST /artzain/break-glass/close`` ends it). While
+it is open, a write the engine gave no answer for, or a 5xx, goes through
+and is journaled; the journal goes to the engine when it can be reached.
+
 Run it with ``artzain openshell sidecar`` or
 ``python -m artzain.openshell.sidecar``.
 """
@@ -98,12 +106,14 @@ Run it with ``artzain openshell sidecar`` or
 from __future__ import annotations
 
 import hmac
+import http.client
 import io
 import json
 import logging
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import threading
 import time
@@ -116,6 +126,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from artzain.openshell import base_policy as base_policies
 from artzain.openshell import registration, transport
+from artzain.openshell.breakglass import UPLOAD_BATCH, BreakGlass, Refused
 from artzain.openshell.interceptor import (
     BOUND_POST,
     DEFAULT_WORKSPACE,
@@ -123,6 +134,7 @@ from artzain.openshell.interceptor import (
     OperationLedger,
     classify_ocsf,
     evaluate,
+    mark_engine_down,
     method_name,
 )
 from artzain.openshell.journal import Journal
@@ -554,12 +566,26 @@ def http_decide(payload: Dict[str, Any]) -> Dict[str, Any]:
                            limited["retry_after"])
             return limited
         logger.warning("decision API unreachable: %s", type(exc).__name__)
-        return {"outcome": "deny", "status_code": 503, "decision_id": ""}
+        unavailable = {"outcome": "deny", "status_code": 503, "decision_id": ""}
+        return mark_engine_down(unavailable) if _engine_is_down(exc) else unavailable
     _LATENCY.add((time.monotonic() - started) * 1000.0)
     if not isinstance(body, dict):
         return {"outcome": "deny", "status_code": 503, "decision_id": ""}
     body.setdefault("status_code", 200)
     return body
+
+
+def _engine_is_down(exc: BaseException) -> bool:
+    """Whether a failed decision call means the engine could not answer:
+    no HTTP answer at all, or a 5xx. A 4xx (a revoked or refused
+    credential among them) or a 3xx is an answer, and is not. Nor is a
+    certificate that does not verify: that may be someone in the way."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code >= 500
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return False
+    return isinstance(exc, (OSError, http.client.HTTPException))
 
 
 def http_report_projection(payload: Dict[str, Any]) -> bool:
@@ -653,6 +679,64 @@ def deliver_reports() -> List[int]:
     return delivered
 
 
+def deliver_breakglass() -> int:
+    """Send the break-glass journal to the engine, oldest first, at most
+    :data:`~artzain.openshell.breakglass.UPLOAD_BATCH` entries a call. An
+    entry leaves the host only when the engine names it taken
+    (``accepted_seq``). Returns how many it took. Never raises.
+
+    Only a gateway credential sends it: the route is the gateway's own.
+    """
+    glass = _BREAKGLASS
+    key = os.environ.get("COGNEXUS_API_KEY") or ""
+    if glass is None or not key.startswith(GATEWAY_KEY_PREFIX):
+        return 0
+    gateway = urllib.parse.quote(_gateway_id(), safe="")
+    target = _engine_url(f"/api/v1/openshell/gateways/{gateway}/break-glass")
+    if not target or not _UPLOADING.acquire(blocking=False):
+        return 0
+    taken = 0
+    try:
+        while True:
+            entries = glass.journal.pending()[:UPLOAD_BATCH]
+            if not entries:
+                break
+            seq, prev = glass.journal.base
+            try:
+                answer = _post_engine(target, key, {"base": {"seq": seq, "hash": prev},
+                                                    "entries": entries},
+                                      retry_on_reset=False, timeout=REPORT_TIMEOUT_SECONDS)
+            except urllib.error.HTTPError as exc:
+                logger.warning("break-glass journal not taken: HTTP %d", exc.code)
+                break
+            except Exception as exc:  # noqa: BLE001 - it waits for the next turn
+                logger.warning("break-glass journal not sent: %s", type(exc).__name__)
+                break
+            accepted = answer.get("accepted_seq") if isinstance(answer, dict) else None
+            if (isinstance(accepted, bool) or not isinstance(accepted, int)
+                    or not entries[0]["seq"] <= accepted <= entries[-1]["seq"]):
+                logger.warning("break-glass journal: the engine's answer names no entry sent")
+                break
+            settled = glass.journal.settle_through(accepted)
+            taken += settled
+            if not settled or accepted < entries[-1]["seq"]:
+                break
+    finally:
+        _UPLOADING.release()
+    return taken
+
+
+def _breakglass_housekeeping() -> None:
+    """Close a window whose time is up, so its close is journaled now and
+    not at the next write, and send what waits."""
+    glass = _BREAKGLASS
+    if glass is None:
+        return
+    glass.window()
+    if len(glass.journal):
+        deliver_breakglass()
+
+
 class LatencyWindow:
     """The last *size* engine round trips, in milliseconds."""
 
@@ -705,6 +789,11 @@ _UNDELIVERED = Counter()
 _JOURNAL: Journal = Journal()
 #: Held by the one thread that is delivering the journal.
 _DELIVERING = threading.Lock()
+#: The break-glass window and its journal. :func:`main` makes one when the
+#: sidecar has a journal file; without one no window opens.
+_BREAKGLASS: Optional[BreakGlass] = None
+#: Held by the one thread that is sending the break-glass journal.
+_UPLOADING = threading.Lock()
 #: The base policy the engine delivered. None unless this sidecar holds a
 #: gateway credential (:func:`main`): a sidecar on an account key is not
 #: given one, and decides a create with no policy as it always did.
@@ -792,7 +881,7 @@ def handle_evaluate(request: Dict[str, Any], *,
         state, base_policy = _BASE.current()
         base_required = state == base_policies.UNKNOWN
     result = evaluate(request, decide=decide or http_decide, base_policy=base_policy,
-                      ledger=ledger, base_required=base_required)
+                      ledger=ledger, base_required=base_required, breakglass=_BREAKGLASS)
     if str(request.get("phase") or "") == PHASE_POST:
         try:
             _after_post_commit(request, result, ledger)
@@ -882,6 +971,11 @@ def make_handler(inventory_fn: InventoryFn, decide: DecideFn,
         def _gate(self) -> bool:
             if _authorized(self.headers.get("Authorization") or ""):
                 return True
+            # The body is read first, and dropped: answered over an unread
+            # body, a caller can see the connection reset instead of the 401.
+            length = int(self.headers.get("Content-Length") or 0)
+            if 0 < length <= 1_000_000:
+                self.rfile.read(length)
             unset = not (os.environ.get("OPENSHELL_SIDECAR_TOKEN") or "")
             self._json(401, {"allowed": False,
                              "reason": _NO_TOKEN if unset else "sidecar token rejected"})
@@ -897,6 +991,9 @@ def make_handler(inventory_fn: InventoryFn, decide: DecideFn,
                 return
             if path == "/artzain/reports":
                 self._json(200, reports_fn() if reports_fn is not None else {"reporting": False})
+                return
+            if path == "/artzain/break-glass":
+                self._break_glass(path, {})
                 return
             if path != "/artzain/inventory":
                 self._json(404, {"error": "not_found"})
@@ -917,7 +1014,35 @@ def make_handler(inventory_fn: InventoryFn, decide: DecideFn,
             if path == "/artzain/ocsf":
                 self._json(200, handle_ocsf(payload, decide=decide))
                 return
+            if path in ("/artzain/break-glass", "/artzain/break-glass/close"):
+                self._break_glass(path, payload, post=True)
+                return
             self._json(404, {"error": "not_found"})
+
+        def _break_glass(self, path: str, payload: Dict[str, Any], *, post: bool = False) -> None:
+            """Read, open or close the window. Only for a sidecar with its own
+            token: without one, its port would let any local process open it."""
+            if not (os.environ.get("OPENSHELL_SIDECAR_TOKEN") or ""):
+                self._json(403, {"reason": "break-glass needs OPENSHELL_SIDECAR_TOKEN "
+                                           "(`artzain connect openshell up` sets it)"})
+                return
+            glass = _BREAKGLASS
+            if glass is None:
+                self._json(409, {"reason": "break-glass needs the sidecar's journal file "
+                                           "(OPENSHELL_SIDECAR_JOURNAL)"})
+                return
+            if not post:
+                self._json(200, glass.status())
+                return
+            try:
+                if path == "/artzain/break-glass":
+                    window = glass.open(payload.get("minutes"), payload.get("reason"),
+                                        payload.get("opened_by") or "")
+                    self._json(200, {"window": window})
+                else:
+                    self._json(200, {"closed": glass.close()})
+            except Refused as exc:
+                self._json(exc.status, {"reason": str(exc)})
 
     return Handler
 
@@ -1278,16 +1403,19 @@ def warm() -> bool:
 
 class Housekeeper:
     """What the sidecar does between requests: renews the warm connection
-    every 30 s, and tries the reports that wait every 15 s."""
+    every 30 s, and every 15 s tries the reports that wait, closes a
+    break-glass window whose time is up and sends its journal."""
 
     def __init__(self, *, clock: Callable[[], float] = time.monotonic,
                  warm_fn: Optional[Callable[[], Any]] = None,
                  deliver: Optional[Callable[[], Any]] = None,
-                 waiting: Optional[Callable[[], int]] = None) -> None:
+                 waiting: Optional[Callable[[], int]] = None,
+                 breakglass: Optional[Callable[[], Any]] = None) -> None:
         self._clock = clock
         self._warm = warm_fn or warm
         self._deliver = deliver or deliver_reports
         self._waiting = waiting or (lambda: len(_JOURNAL))
+        self._breakglass = breakglass or _breakglass_housekeeping
         self._next_warm = clock() + transport.WARM_EVERY_SECONDS
         self._next_delivery = clock() + REPORT_RETRY_SECONDS
 
@@ -1298,6 +1426,7 @@ class Housekeeper:
             self._next_delivery = now + REPORT_RETRY_SECONDS
             if self._waiting():
                 self._deliver()
+            self._breakglass()
         if now >= self._next_warm:
             self._next_warm = now + transport.WARM_EVERY_SECONDS
             try:
@@ -1358,7 +1487,7 @@ def main() -> None:
     built = _CLIENT
     logger.info("engine connection: %s",
                 json.dumps(transport.describe(built[0] if built else None)))
-    global _LEDGER, _JOURNAL
+    global _LEDGER, _JOURNAL, _BREAKGLASS
     state_path = (os.environ.get("OPENSHELL_SIDECAR_STATE") or "").strip()
     _LEDGER = GatewayLedger(state_path=state_path or None, gateway_id=_gateway_id())
     journal_path = (os.environ.get("OPENSHELL_SIDECAR_JOURNAL") or "").strip()
@@ -1366,6 +1495,10 @@ def main() -> None:
     if len(_JOURNAL):
         logger.info("%d report(s) from before the restart wait for the engine",
                     len(_JOURNAL))
+    _BREAKGLASS = BreakGlass(os.path.dirname(journal_path) if journal_path else None,
+                             gateway_id=_gateway_id())
+    if _BREAKGLASS.window() is not None:
+        logger.warning("a break-glass window from before the restart is still open")
     if not state_path:
         logger.info("OPENSHELL_SIDECAR_STATE is unset: sandbox names are kept in "
                     "memory only, and a restart loses them")

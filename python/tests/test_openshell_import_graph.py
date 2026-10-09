@@ -54,7 +54,8 @@ def _modules():
 
 def test_the_package_has_the_modules_this_test_knows():
     assert {path.name for path in _modules()} == {
-        "__init__.py", "_wire.py", "base_policy.py", "bootstrap.py", "connect.py", "interceptor.py",
+        "__init__.py", "_wire.py", "base_policy.py", "bootstrap.py", "breakglass.py", "connect.py",
+        "interceptor.py",
         "journal.py", "registration.py", "servicer.py", "sidecar.py", "state.py",
         "templates.py", "transport.py"}
 
@@ -74,7 +75,8 @@ def test_every_import_is_the_standard_library_the_sdk_or_the_extra(path):
 
 @pytest.mark.parametrize("name", ["sidecar.py", "transport.py", "journal.py", "state.py",
                                   "interceptor.py", "base_policy.py", "__init__.py",
-                                  "registration.py", "connect.py", "templates.py"])
+                                  "registration.py", "connect.py", "templates.py",
+                                  "breakglass.py"])
 def test_importing_the_sidecar_needs_nothing_but_the_standard_library(name):
     at_module_level = {module for module, top in _imports(PACKAGE / name) if top}
     assert at_module_level - set(sys.stdlib_module_names) - {"artzain", "__future__"} == set()
@@ -94,7 +96,7 @@ def test_the_sidecar_imports_with_the_extra_and_the_engine_out_of_reach():
         "sys.meta_path.insert(0, Blocked())\n"
         "from artzain.openshell import sidecar, transport, journal, state, base_policy\n"
         "from artzain.openshell import connect, registration\n"
-        "from artzain.openshell import interceptor\n"
+        "from artzain.openshell import interceptor, breakglass\n"
         f"assert not set(sys.modules) & set({blocked!r}), sorted(set(sys.modules) & set({blocked!r}))\n"
         "print('imported')\n"
     )

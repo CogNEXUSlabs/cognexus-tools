@@ -665,6 +665,7 @@ self-test ArtzAIn must refuse. Then:
 artzain connect openshell status        # what is installed, and what the engine took
 artzain connect openshell doctor        # ok / warn / FAIL per check; exit 1 on a FAIL
 artzain connect openshell rotate-key    # swap the gateway's credential
+artzain connect openshell break-glass --minutes 60 --reason "..."   # while ArtzAIn cannot answer
 artzain connect openshell remove        # put the gateway's files back, revoke the credential
 ```
 

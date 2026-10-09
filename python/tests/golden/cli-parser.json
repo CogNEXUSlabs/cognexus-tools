@@ -3538,6 +3538,94 @@
                }
               },
               {
+               "name": "break-glass",
+               "help": "While ArtzAIn cannot answer, allow governed writes for a while, journaled and receipted later. With no option, show the open window.",
+               "parser": {
+                "prog": "artzain connect openshell break-glass",
+                "usage": null,
+                "description": null,
+                "epilog": null,
+                "formatter_class": "HelpFormatter",
+                "add_help": true,
+                "allow_abbrev": true,
+                "defaults": {
+                 "func": "<cmd_connect_openshell>"
+                },
+                "groups": [
+                 [],
+                 [
+                  "help",
+                  "minutes",
+                  "reason",
+                  "close"
+                 ]
+                ],
+                "actions": [
+                 {
+                  "kind": "_HelpAction",
+                  "option_strings": [
+                   "-h",
+                   "--help"
+                  ],
+                  "dest": "help",
+                  "nargs": 0,
+                  "const": null,
+                  "default": "==SUPPRESS==",
+                  "type": null,
+                  "required": false,
+                  "help": "show this help message and exit",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--minutes"
+                  ],
+                  "dest": "minutes",
+                  "nargs": null,
+                  "const": null,
+                  "default": null,
+                  "type": "<int>",
+                  "required": false,
+                  "help": "how long the window stays open: 1 to 240",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--reason"
+                  ],
+                  "dest": "reason",
+                  "nargs": null,
+                  "const": null,
+                  "default": "",
+                  "type": null,
+                  "required": false,
+                  "help": "why, in one line (required to open)",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreTrueAction",
+                  "option_strings": [
+                   "--close"
+                  ],
+                  "dest": "close",
+                  "nargs": 0,
+                  "const": true,
+                  "default": false,
+                  "type": null,
+                  "required": false,
+                  "help": "close the open window now",
+                  "metavar": null,
+                  "choices": null
+                 }
+                ]
+               }
+              },
+              {
                "name": "doctor",
                "help": "Check what binds the gateway; exit 1 on a failure.",
                "parser": {
@@ -3599,6 +3687,7 @@
               "remove",
               "status",
               "rotate-key",
+              "break-glass",
               "doctor"
              ]
             }

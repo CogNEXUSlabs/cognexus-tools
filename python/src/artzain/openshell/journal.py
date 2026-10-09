@@ -104,6 +104,13 @@ class Journal:
         with self._lock:
             return self._head()
 
+    @property
+    def base(self) -> Tuple[int, str]:
+        """``(seq, hash)`` of the entry just before the oldest that waits:
+        the last one settled, or the chain's start."""
+        with self._lock:
+            return self._base
+
     def _head(self) -> Tuple[int, str]:
         if self._entries:
             return (self._entries[-1]["seq"], self._entries[-1]["hash"])
@@ -126,9 +133,15 @@ class Journal:
 
     # -- writing ------------------------------------------------------------
 
-    def append(self, kind: str, body: Mapping[str, Any]) -> Optional[int]:
+    def append(self, kind: str, body: Mapping[str, Any], *,
+               durable: bool = False) -> Optional[int]:
         """Add an entry behind the ones that wait. Returns its ``seq``, or
-        None when the journal is full or *body* is not a small JSON object."""
+        None when the journal is full or *body* is not a small JSON object.
+
+        With *durable*, the entry stays only once it is in the file: a
+        journal without a file, or a file that cannot be written, takes
+        nothing and returns None. Break-glass relies on that, since a write
+        it allows must not go unrecorded."""
         try:
             plain = json.loads(json.dumps(dict(body), allow_nan=False))
             if len(json.dumps(plain).encode("utf-8")) > MAX_BODY_BYTES:
@@ -138,6 +151,8 @@ class Journal:
         with self._lock:
             if len(self._entries) >= self._max_pending:
                 return None
+            if durable and self._path is None:
+                return None
             seq, prev = self._head()
             seq += 1
             at_ms = int(self._clock() * 1000)
@@ -146,6 +161,10 @@ class Journal:
                                   "prev": prev,
                                   "hash": entry_hash(seq, at_ms, kind, plain, prev)})
             self._save()
+            if durable and self._save_failed:
+                self._entries.pop()
+                self._save()
+                return None
             return seq
 
     def settle(self, seq: int) -> bool:
@@ -159,6 +178,18 @@ class Journal:
             self._base = (done["seq"], done["hash"])
             self._save()
             return True
+
+    def settle_through(self, seq: int) -> int:
+        """Take off every waiting entry up to and including *seq*, oldest
+        first. Returns how many left; 0 when *seq* names none that waits."""
+        with self._lock:
+            if not self._entries or not self._entries[0]["seq"] <= seq <= self._entries[-1]["seq"]:
+                return 0
+            taken = [entry for entry in self._entries if entry["seq"] <= seq]
+            self._entries = self._entries[len(taken):]
+            self._base = (taken[-1]["seq"], taken[-1]["hash"])
+            self._save()
+            return len(taken)
 
     # -- the file -----------------------------------------------------------
 

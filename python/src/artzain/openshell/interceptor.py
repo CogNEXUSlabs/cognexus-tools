@@ -57,7 +57,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Protocol, Tuple
 
 logger = logging.getLogger("artzain.openshell")
 
@@ -153,6 +153,26 @@ _SECRET_KEY = re.compile(r"(secret|token|credential|password|authorization)", re
 
 DecideFn = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 FetchFn = Callable[[str], Any]
+
+#: Put on a decision answer by the sidecar's own client, and by nothing else,
+#: when the engine gave no answer or a 5xx (:func:`mark_engine_down`). It is
+#: an object, so no JSON the engine sends can carry it: no answer can make a
+#: write count as break-glass.
+_ENGINE_DOWN = object()
+_ENGINE_DOWN_KEY = "__engine_down__"
+#: The refusal of a write ArtzAIn could not decide.
+_UNAVAILABLE = "decision unavailable"
+
+
+def mark_engine_down(answer: Dict[str, Any]) -> Dict[str, Any]:
+    """Mark *answer* as the engine's absence: no answer, or a 5xx."""
+    answer[_ENGINE_DOWN_KEY] = _ENGINE_DOWN
+    return answer
+
+
+def engine_down(answer: Any) -> bool:
+    """Whether *answer* is marked as the engine's absence."""
+    return isinstance(answer, Mapping) and answer.get(_ENGINE_DOWN_KEY) is _ENGINE_DOWN
 
 
 def method_name(method: str) -> str:
@@ -686,10 +706,21 @@ def _decision_id(raw: Any) -> str:
     return text if _DECISION_ID_RE.match(text) else ""
 
 
+class _Decided(NamedTuple):
+    #: The refusal, or None for an allow.
+    denied: Optional[Dict[str, Any]]
+    #: The engine's decision id, when it gave one.
+    decision_id: str
+    #: The engine gave no answer, or a 5xx (:func:`engine_down`).
+    engine_down: bool
+    #: What the engine was asked, when it was asked.
+    asked: Optional[Dict[str, Any]]
+
+
 def _decide(request: Mapping[str, Any], method: str, body: Mapping[str, Any], *,
             decide: DecideFn, fetch_policy: Optional[FetchFn],
-            ledger: Optional[OperationLedger]) -> Tuple[Optional[Dict[str, Any]], str]:
-    """``(deny, "")`` or ``(None, decision id)`` for one bound operation.
+            ledger: Optional[OperationLedger]) -> _Decided:
+    """The engine's decision on one bound operation.
 
     A refusal the engine sealed names its decision, so the operator who reads
     it in a terminal can find the receipt.
@@ -702,9 +733,9 @@ def _decide(request: Mapping[str, Any], method: str, body: Mapping[str, Any], *,
             fetched = fetch_policy(sandbox_id)
         except Exception as exc:  # noqa: BLE001 - fetch failure is a closed gate
             logger.warning("openshell effective-policy fetch failed: %s", type(exc).__name__)
-            return _deny("effective policy fetch failed", status_code=503), ""
+            return _Decided(_deny("effective policy fetch failed", status_code=503), "", False, None)
         if not isinstance(fetched, dict):
-            return _deny("effective policy fetch failed", status_code=503), ""
+            return _Decided(_deny("effective policy fetch failed", status_code=503), "", False, None)
 
     asked = _decision_request(request, method, body, ledger)
     # A write ArtzAIn sent to review cites that review when it runs again: an
@@ -717,28 +748,72 @@ def _decide(request: Mapping[str, Any], method: str, body: Mapping[str, Any], *,
         decision = dict(decide(asked))
     except Exception as exc:  # noqa: BLE001 - the gateway must not commit on a transport failure
         logger.warning("openshell decision call failed: %s", type(exc).__name__)
-        return _deny("decision unavailable", status_code=503), ""
+        return _Decided(_deny(_UNAVAILABLE, status_code=503), "", False, asked)
 
     status = int(decision.get("status_code") or decision.get("status") or 200)
     outcome = str(decision.get("outcome") or "")
     decision_id = _decision_id(decision.get("decision_id"))
     if status == 429:
-        return _deny(_rate_limit_reason(decision), status_code=429), ""
+        return _Decided(_deny(_rate_limit_reason(decision), status_code=429), "", False, asked)
     if status == 503 or not outcome:
-        return _deny("decision unavailable", status_code=503 if status == 503 else 403), ""
+        return _Decided(_deny(_UNAVAILABLE, status_code=503 if status == 503 else 403), "",
+                        engine_down(decision), asked)
     if outcome != "allow":
         reason = "decision review" if outcome == "review" else "decision deny"
         if outcome == "review" and decision_id and ledger is not None:
             ledger.remember_review(review_key, decision_id)
         if not decision_id:
-            return _deny(reason), ""
+            return _Decided(_deny(reason), "", False, asked)
         said = f"{reason} ({decision_id})"
         if cited and outcome != "review":
             said += f"; review {cited} has not released this write"
-        return _deny(said, annotations={"decision_id": decision_id}), ""
+        return _Decided(_deny(said, annotations={"decision_id": decision_id}), "", False, asked)
     if cited:
         ledger.forget_review(review_key)
-    return None, decision_id
+    return _Decided(None, decision_id, False, asked)
+
+
+# ---------------------------------------------------------------------------
+# Break-glass: what ArtzAIn could not answer, when the host opened a window
+# ---------------------------------------------------------------------------
+
+
+class BreakGlassWindow(Protocol):
+    """What :func:`evaluate` needs of :class:`artzain.openshell.breakglass.BreakGlass`."""
+
+    def window(self) -> Optional[Dict[str, Any]]: ...
+
+    def record_write(self, facts: Mapping[str, Any]) -> Optional[str]: ...
+
+
+def _breakglass_covers(breakglass: Optional[BreakGlassWindow], method: str,
+                       body: Mapping[str, Any]) -> bool:
+    """Whether an open window may let this write through: a bound write that
+    is not gateway-wide, with a window open now."""
+    if breakglass is None or method not in BOUND_VALIDATE:
+        return False
+    if method == "UpdateConfig" and _is_global(body):
+        return False
+    return breakglass.window() is not None
+
+
+def _breakglass_facts(request: Mapping[str, Any], method: str, body: Mapping[str, Any],
+                      asked: Mapping[str, Any]) -> Dict[str, Any]:
+    """The journal entry of a write allowed under break-glass: what ArtzAIn
+    would have decided, and who asked. The caller's subject id, kind and
+    provider, never a name (plan §9)."""
+    principal = request.get("principal") if isinstance(request.get("principal"), Mapping) else {}
+    who = {key: _text(principal.get(key)) for key in ("subject", "kind", "provider")
+           if _text(principal.get(key))}
+    return {
+        "method": method,
+        "action": asked["action"],
+        "target": asked["target"],
+        "payload_sha256": hashlib.sha256(str(asked["payload"]).encode("utf-8")).hexdigest(),
+        "digest": _operation_digest(body),
+        "principal": who,
+        "request_id": asked["request_id"],
+    }
 
 
 def _review_key(asked: Mapping[str, Any]) -> str:
@@ -785,21 +860,27 @@ def evaluate(request: Mapping[str, Any], *, decide: DecideFn,
              base_policy: Optional[Mapping[str, Any]] = None,
              fetch_policy: Optional[FetchFn] = None,
              ledger: Optional[OperationLedger] = None,
-             base_required: bool = False) -> Dict[str, Any]:
+             base_required: bool = False,
+             breakglass: Optional[BreakGlassWindow] = None) -> Dict[str, Any]:
     """Fail-closed interceptor decision. Only ``outcome=allow`` proceeds.
 
     *request* is ``{method, phase, body, gateway_id, agent_did, sandbox_id,
-    request_id, decision_id, prover}``; ``body`` is the operation (or, for
-    ``post_commit``, the committed response). ``post_commit`` always allows
-    and does not call ``decide``. ``review``, ``deny``, HTTP 503, HTTP 429 and
-    a decide failure are interceptor denies. The leaf, when there is one, is
-    sealed by ``decide`` before this returns.
+    request_id, decision_id, prover, principal}``; ``body`` is the operation
+    (or, for ``post_commit``, the committed response). ``post_commit`` always
+    allows and does not call ``decide``. ``review``, ``deny``, HTTP 503, HTTP
+    429 and a decide failure are interceptor denies. The leaf, when there is
+    one, is sealed by ``decide`` before this returns.
 
     With a *ledger*, a create or an update decided in ``modify_operation`` is
     confirmed in ``validate`` rather than decided twice.
 
     With *base_required* and no *base_policy*, a create that carries no
     policy is denied before any decision, in either pre-commit phase.
+
+    With a *breakglass* window open, a write the engine could not answer
+    (:func:`engine_down`) and that is not gateway-wide goes through: in
+    ``validate``, only once its journal entry is in the file. It carries no
+    decision stamp; its annotation ``break_glass`` names the window.
     """
     method = method_name(str(request.get("method") or ""))
     phase = str(request.get("phase") or PHASE_VALIDATE)
@@ -830,16 +911,22 @@ def evaluate(request: Mapping[str, Any], *, decide: DecideFn,
             # on it, so a decision here could not be confirmed in ``validate``
             # and the write would be decided twice.
             return _allow("decided in validate")
-        denied, decision_id = _decide(request, method, body, decide=decide,
-                                      fetch_policy=fetch_policy, ledger=ledger)
+        decided = _decide(request, method, body, decide=decide,
+                          fetch_policy=fetch_policy, ledger=ledger)
+        denied, decision_id = decided.denied, decided.decision_id
         if denied is not None:
-            return denied
+            if not (decided.engine_down and _breakglass_covers(breakglass, method, body)):
+                return denied
+            # Break-glass: the write goes on without a stamp, and ``validate``,
+            # which always follows, journals it once.
         patches: List[Dict[str, Any]] = []
         base_applied = False
         if method == "CreateSandbox" and base_policy:
             base_patches = _create_patches(body, base_policy)
             base_applied = bool(base_patches)
             patches.extend(base_patches)
+        if denied is not None:
+            return _allow("break-glass: journaled in validate", patches=patches)
         if decision_id:
             patches.append(_stamp_patch(body, decision_id))
             if ledger is not None:
@@ -864,13 +951,26 @@ def evaluate(request: Mapping[str, Any], *, decide: DecideFn,
 
     if _base_missing(method, body, base_policy, base_required):
         return _deny("base policy unavailable", status_code=503)
-    denied, decision_id = _decide(request, method, body, decide=decide,
-                                  fetch_policy=fetch_policy, ledger=ledger)
+    decided = _decide(request, method, body, decide=decide,
+                      fetch_policy=fetch_policy, ledger=ledger)
+    denied, decision_id = decided.denied, decided.decision_id
+    window_id = ""
     if denied is not None:
-        return denied
+        if not (decided.engine_down and decided.asked is not None
+                and _breakglass_covers(breakglass, method, body)):
+            return denied
+        assert breakglass is not None
+        window_id = breakglass.record_write(
+            _breakglass_facts(request, method, body, decided.asked)) or ""
+        if not window_id:
+            return _deny(f"{_UNAVAILABLE}; break-glass write not journaled", status_code=503)
     if method == "DeleteSandbox" and ledger is not None:
         _target, _uuid, name, workspace = _sandbox(request, method, body, ledger)
         ledger.forget_sandbox(workspace, name)
+    if window_id:
+        logger.warning("break-glass write allowed: %s (window %s)", method, window_id)
+        return _allow(f"break-glass write (window {window_id})",
+                      annotations={"break_glass": window_id})
     return _allow("decision allow",
                   annotations={"decision_id": decision_id} if decision_id else {})
 
