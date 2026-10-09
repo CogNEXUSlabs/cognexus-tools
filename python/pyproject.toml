@@ -10,7 +10,11 @@ name = "artzain"
 dynamic = ["version"]
 description = "OWASP-aligned LLM prompt defence, runtime destructive-action guard, agent kill switch, and audit logging"
 readme = "README.md"
-license = { file = "LICENSE" }
+# An SPDX expression. `license = { file = "LICENSE" }` copies the whole
+# license into the License core-metadata field, which scanners such as
+# deps.dev report as non-standard. The text itself ships via license-files.
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [
     { name = "CogNEXUS Labs", email = "hello@cognexuslabs.ai" },

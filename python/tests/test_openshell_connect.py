@@ -48,6 +48,8 @@ CONFIG = {"kind": "artzain.openshell.connect", "version": 1,
           "interceptor_timeout_ms": 1500, "decide_timeout_ms": 1200, "telemetry": False}
 DIGEST = connect.config_digest(CONFIG)
 #: What a sidecar whose first heartbeat and inventory the engine took says.
+#: What the sidecar says when no break-glass window is open and nothing waits.
+NO_WINDOW = {"enabled": True, "window": None, "pending": 0}
 REPORTED = {"reporting": True, "heartbeat": "ok", "inventory": "ok", "sandboxes": 2,
             "partial": False}
 
@@ -234,6 +236,13 @@ class _Gateway:
         return ((self.units[connect.SIDECAR_UNIT] == "active" or self.stray)
                 and not self.silent)
 
+    def break_glass(self, port, token=""):
+        """As the sidecar answers ``GET /artzain/break-glass``: only with its token."""
+        expected = _settings_value(self.paths.sidecar_env, "OPENSHELL_SIDECAR_TOKEN")
+        if self.units[connect.SIDECAR_UNIT] != "active" or not expected or token != expected:
+            return None
+        return dict(NO_WINDOW)
+
     def reports(self, port, token=""):
         if self.units[connect.SIDECAR_UNIT] != "active":
             return None
@@ -314,7 +323,8 @@ class _Gateway:
             environ={"HOME": str(self.home), "XDG_RUNTIME_DIR": "/run/user/1000",
                      "PATH": "/usr/bin"},
             root=str(self.root), runner=self.run, healthy=self.healthy,
-            reports=self.reports, stat=self.stat, get_engine=self.get_engine,
+            reports=self.reports, break_glass=self.break_glass, stat=self.stat,
+            get_engine=self.get_engine,
             wall=lambda: self.wall_now,
             post_json=self.post_json, which=lambda name: f"/usr/bin/{name}",
             sleep=lambda _s: None, clock=_Clock(), platform="linux",
@@ -1152,7 +1162,7 @@ def test_status_says_what_is_installed_and_holds_no_credential(gateway):
         "self_test_decision_id": DECISION, "credential_saved": True,
         "registration_in_gateway_toml": True, "drop_in": True, "sidecar_unit": True,
         "sidecar": "active", "sidecar_answers": True, "gateway": "active",
-        "record_error": None, "reports": REPORTED}
+        "record_error": None, "reports": REPORTED, "break_glass": NO_WINDOW}
     assert CREDENTIAL not in json.dumps(after)
 
 

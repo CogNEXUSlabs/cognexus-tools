@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.6.42
+
+### Added
+
+- **OpenShell break-glass: `artzain connect openshell break-glass`.** While
+  ArtzAIn cannot answer, every governed write fails closed. The gateway's
+  host user can now open a window of 1 to 240 minutes, with a reason
+  (`--minutes N --reason "..."`; `--close` ends it early). In it, a write
+  the engine gave no answer for, or a 5xx, goes through, journaled first:
+  a write that cannot be journaled is refused. A deny, a review, a rate
+  limit, a refused credential (a 4xx), a certificate that does not verify
+  and a gateway-wide write still refuse. Only the host opens a window: the
+  sidecar's loopback route (`/artzain/break-glass`), with its token. It ends
+  on its own, by the wall clock or the monotonic clock. The hash-chained
+  journal (`breakglass-journal.json` in the sidecar's state folder) goes to
+  the engine's gateway route in order once the engine can be reached, and
+  each entry becomes a flagged receipt; each window, a Review queue item.
+  `status` shows the open window.
+
+### Fixed
+
+- **The package metadata names the license as the SPDX expression
+  `Apache-2.0`.** It used to copy the whole license file into the
+  `License` field, so scanners such as deps.dev reported the license as
+  non-standard. The license text still ships as `LICENSE`.
+- **A caller the OpenShell sidecar refuses reads its 401.** The sidecar
+  answered before reading the request's body, and the caller could see the
+  connection reset instead. It now reads the body (up to 1 MB) first.
+
 ## 0.6.41
 
 ### Fixed

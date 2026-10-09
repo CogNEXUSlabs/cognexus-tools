@@ -1820,6 +1820,10 @@ def cmd_connect_openshell(args: argparse.Namespace) -> None:
             connect.remove(host, keep_credential=args.keep_credential)
         elif args.connect_command == "rotate-key":
             connect.rotate_key(host)
+        elif args.connect_command == "break-glass":
+            print(_json.dumps(connect.break_glass(host, minutes=args.minutes,
+                                                  reason=args.reason or "",
+                                                  close=args.close), indent=2))
         elif args.connect_command == "doctor":
             found = connect.doctor(host)
             if args.json:
@@ -2345,6 +2349,15 @@ def _add_connect_parser(sub: argparse._SubParsersAction) -> None:
     c_status.set_defaults(func=cmd_connect_openshell)
     c_rotate = c_os_sub.add_parser("rotate-key", help="Swap the gateway's credential for a new one.")
     c_rotate.set_defaults(func=cmd_connect_openshell)
+    c_glass = c_os_sub.add_parser(
+        "break-glass",
+        help="While ArtzAIn cannot answer, allow governed writes for a while, journaled "
+             "and receipted later. With no option, show the open window.")
+    c_glass.add_argument("--minutes", type=int, default=None,
+                         help="how long the window stays open: 1 to 240")
+    c_glass.add_argument("--reason", default="", help="why, in one line (required to open)")
+    c_glass.add_argument("--close", action="store_true", help="close the open window now")
+    c_glass.set_defaults(func=cmd_connect_openshell)
     c_doctor = c_os_sub.add_parser("doctor", help="Check what binds the gateway; exit 1 on a failure.")
     c_doctor.add_argument("--json", action="store_true", help="print the checks as JSON")
     c_doctor.set_defaults(func=cmd_connect_openshell)

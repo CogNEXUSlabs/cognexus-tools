@@ -46,6 +46,7 @@ Nothing here logs the credential or the token.
 from __future__ import annotations
 
 import contextlib
+import getpass
 import hashlib
 import ipaddress
 import json
@@ -57,6 +58,7 @@ import stat
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -120,6 +122,7 @@ class Host:
                  runner: Optional[Callable[..., subprocess.CompletedProcess]] = None,
                  healthy: Optional[Callable[[int], bool]] = None,
                  reports: Optional[Callable[[int, str], Optional[Dict[str, Any]]]] = None,
+                 break_glass: Optional[Callable[[int, str], Optional[Dict[str, Any]]]] = None,
                  post_json: Optional[Callable[..., Tuple[int, Any]]] = None,
                  get_engine: Optional[Callable[..., Tuple[int, Mapping[str, str]]]] = None,
                  which: Optional[Callable[[str], Optional[str]]] = None,
@@ -137,6 +140,7 @@ class Host:
         self._runner = runner or _run
         self._healthy = healthy or _healthy
         self._reports = reports or _reports
+        self._break_glass = break_glass or _break_glass_state
         self._post_json = post_json or _post_json
         self._get_engine = get_engine or _get_engine
         self._which = which
@@ -190,6 +194,12 @@ class Host:
         with the sidecar's *token*), or None when it does not say."""
         return self._reports(port, token)
 
+    def break_glass(self, port: int, token: str = "") -> Optional[Dict[str, Any]]:
+        """The sidecar's break-glass window and what waits (``GET
+        /artzain/break-glass``, with its *token*), or None when it does not
+        say."""
+        return self._break_glass(port, token)
+
     def post_json(self, url: str, *, headers: Mapping[str, str], body: Mapping[str, Any],
                   proxy: str = "", ca_bundle: str = "") -> Tuple[int, Any]:
         return self._post_json(url, headers=headers, body=body, proxy=proxy, ca_bundle=ca_bundle)
@@ -239,6 +249,30 @@ def _reports(port: int, token: str = "") -> Optional[Dict[str, Any]]:
     except Exception:  # noqa: BLE001 - it does not say
         return None
     return answer if isinstance(answer, dict) else None
+
+
+def _sidecar_post(port: int, path: str, body: Mapping[str, Any], token: str) -> Any:
+    """``POST`` JSON to a route of the sidecar on loopback, with its *token*.
+    Never through a proxy. The sidecar's refusal comes back as its answer;
+    no answer at all raises :class:`ConnectError`."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{int(port)}{path}", data=json.dumps(dict(body)).encode("utf-8"),
+        method="POST", headers={"Content-Type": "application/json",
+                                "Authorization": f"Bearer {token}"})
+    try:
+        with opener.open(request, timeout=5) as resp:
+            return json.loads(resp.read(65536) or b"null")
+    except urllib.error.HTTPError as exc:
+        try:
+            answer = json.loads(exc.read(65536) or b"null")
+        except ValueError:
+            answer = None
+        reason = answer.get("reason") if isinstance(answer, dict) else ""
+        raise ConnectError(f"the sidecar refused: {reason or 'HTTP %d' % exc.code}") from None
+    except OSError as exc:
+        raise ConnectError(f"the sidecar does not answer on 127.0.0.1:{int(port)} "
+                           f"({type(exc).__name__}): is it running?") from None
 
 
 def _get_engine(url: str, *, proxy: str = "", ca_bundle: str = "") -> Tuple[int, Mapping[str, str]]:
@@ -1428,7 +1462,70 @@ def status(host: Host) -> Dict[str, Any]:
         "record_error": record.get("error"),
         # What the sidecar says the engine took: its last heartbeat and inventory.
         "reports": host.reports(port, _sidecar_token(paths)),
+        "break_glass": host.break_glass(port, _sidecar_token(paths)),
     }
+
+
+# ---------------------------------------------------------------------------
+# break-glass
+# ---------------------------------------------------------------------------
+
+#: The longest window, as the sidecar holds it (``breakglass.MAX_MINUTES``).
+BREAK_GLASS_MAX_MINUTES = 240
+
+
+def _break_glass_state(port: int, token: str) -> Optional[Dict[str, Any]]:
+    """The sidecar's break-glass window and what waits, or None when it
+    does not say."""
+    if not token:
+        return None
+    try:
+        answer = _sidecar_get(port, "/artzain/break-glass", token)
+    except Exception:  # noqa: BLE001 - it does not say
+        return None
+    return answer if isinstance(answer, dict) else None
+
+
+def _break_glass_target(host: Host) -> Tuple[int, str]:
+    """The sidecar's loopback port and its token, as ``up`` saved them."""
+    paths = layout(host)
+    record = Record.load(paths.record).data
+    token = _sidecar_token(paths)
+    if not token:
+        raise ConnectError(f"{paths.sidecar_env} holds no OPENSHELL_SIDECAR_TOKEN: "
+                           "run `artzain connect openshell up` again")
+    return int(record.get("port") or DEFAULT_PORT), token
+
+
+def break_glass(host: Host, *, minutes: Optional[int] = None, reason: str = "",
+                close: bool = False) -> Dict[str, Any]:
+    """Open a break-glass window of *minutes* for *reason*, or *close* the
+    open one; with neither, say what is open.
+
+    While a window is open, a governed write ArtzAIn cannot answer (no
+    answer at all, or a 5xx) goes through, and the sidecar journals it. Its
+    journal goes to the engine when it can be reached, and each write
+    becomes a flagged receipt; the window goes to the Review Queue. Only
+    this host's user opens one: the sidecar takes it on loopback, with its
+    own token.
+    """
+    if close:
+        port, token = _break_glass_target(host)
+        return _sidecar_post(port, "/artzain/break-glass/close", {}, token)
+    if minutes is None:
+        port, token = _break_glass_target(host)
+        state = host.break_glass(port, token)
+        if state is None:
+            raise ConnectError("the sidecar did not say: is it running?")
+        return state
+    if not (isinstance(minutes, int) and 1 <= minutes <= BREAK_GLASS_MAX_MINUTES):
+        raise ConnectError(f"--minutes must be from 1 to {BREAK_GLASS_MAX_MINUTES}")
+    if not (reason or "").strip():
+        raise ConnectError("--reason is needed: why the window is open, in one line")
+    port, token = _break_glass_target(host)
+    return _sidecar_post(port, "/artzain/break-glass",
+                         {"minutes": minutes, "reason": reason.strip(),
+                          "opened_by": getpass.getuser()}, token)
 
 
 # ---------------------------------------------------------------------------
