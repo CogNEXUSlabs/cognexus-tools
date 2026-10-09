@@ -27,10 +27,13 @@
 # the version that got installed.
 #
 # To move the base image: `docker buildx imagetools inspect
-# python:3.12-slim-bookworm` prints the digest of the multi-platform index.
-# The Python here and in scripts/lock_openshell_sidecar_image.py (engine
-# repository) are the same one; a test holds them together.
-ARG PYTHON_IMAGE=python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3
+# public.ecr.aws/docker/library/python:3.12-slim-bookworm` prints the digest
+# of the multi-platform index (the ECR Public mirror of the Docker official
+# image: same manifest and digest as Docker Hub, whose anonymous pull limit
+# stops builds on shared CI runners). The Python here and in
+# scripts/lock_openshell_sidecar_image.py (engine repository) are the same
+# one; a test holds them together.
+ARG PYTHON_IMAGE=public.ecr.aws/docker/library/python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3
 
 FROM ${PYTHON_IMAGE} AS build
 ARG ARTZAIN_SOURCE=pypi
