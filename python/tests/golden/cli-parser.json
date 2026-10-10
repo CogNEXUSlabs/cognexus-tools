@@ -3474,6 +3474,78 @@
                }
               },
               {
+               "name": "upgrade",
+               "help": "Move to the newest artzain the signed compatibility manifest lists with the installed OpenShell, by running its connect script.",
+               "parser": {
+                "prog": "artzain connect openshell upgrade",
+                "usage": null,
+                "description": null,
+                "epilog": null,
+                "formatter_class": "HelpFormatter",
+                "add_help": true,
+                "allow_abbrev": true,
+                "defaults": {
+                 "func": "<cmd_connect_openshell>"
+                },
+                "groups": [
+                 [],
+                 [
+                  "help",
+                  "to",
+                  "check"
+                 ]
+                ],
+                "actions": [
+                 {
+                  "kind": "_HelpAction",
+                  "option_strings": [
+                   "-h",
+                   "--help"
+                  ],
+                  "dest": "help",
+                  "nargs": 0,
+                  "const": null,
+                  "default": "==SUPPRESS==",
+                  "type": null,
+                  "required": false,
+                  "help": "show this help message and exit",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--to"
+                  ],
+                  "dest": "to",
+                  "nargs": null,
+                  "const": null,
+                  "default": null,
+                  "type": null,
+                  "required": false,
+                  "help": "the artzain version to move to (it must be listed, and newer)",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreTrueAction",
+                  "option_strings": [
+                   "--check"
+                  ],
+                  "dest": "check",
+                  "nargs": 0,
+                  "const": true,
+                  "default": false,
+                  "type": null,
+                  "required": false,
+                  "help": "say what it would do, and change nothing",
+                  "metavar": null,
+                  "choices": null
+                 }
+                ]
+               }
+              },
+              {
                "name": "status",
                "help": "What is installed, and whether it is up.",
                "parser": {
@@ -3701,6 +3773,7 @@
              "choices": [
               "up",
               "remove",
+              "upgrade",
               "status",
               "rotate-key",
               "break-glass",

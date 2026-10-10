@@ -57,6 +57,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -67,6 +68,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from artzain._private_files import private_dir, replace_file, write_private
 from artzain.openshell import install, registration, transport
+from artzain.openshell import upgrade as signed
 
 #: What the configuration a token carries says it is, and the one version
 #: this release reads.
@@ -123,6 +125,7 @@ class Host:
     def __init__(self, *, environ: Optional[Mapping[str, str]] = None,
                  root: str = "/",
                  runner: Optional[Callable[..., subprocess.CompletedProcess]] = None,
+                 executor: Optional[Callable[..., int]] = None,
                  healthy: Optional[Callable[[int], bool]] = None,
                  reports: Optional[Callable[[int, str], Optional[Dict[str, Any]]]] = None,
                  break_glass: Optional[Callable[[int, str], Optional[Dict[str, Any]]]] = None,
@@ -141,6 +144,7 @@ class Host:
         self.environ.setdefault("NO_COLOR", "1")
         self.root = Path(root)
         self._runner = runner or _run
+        self._executor = executor or _execute
         self._healthy = healthy or _healthy
         self._reports = reports or _reports
         self._break_glass = break_glass or _break_glass_state
@@ -189,6 +193,11 @@ class Host:
     def run(self, *argv: str, timeout: float = 60.0) -> subprocess.CompletedProcess:
         return self._runner(list(argv), env=self.environ, timeout=timeout)
 
+    def execute(self, *argv: str, timeout: float = 3600.0) -> int:
+        """Run *argv* on this terminal, its output shown as it comes, and
+        return its exit status."""
+        return self._executor(list(argv), env=self.environ, timeout=timeout)
+
     def healthy(self, port: int) -> bool:
         return self._healthy(port)
 
@@ -225,6 +234,15 @@ def _run(argv: List[str], *, env: Mapping[str, str], timeout: float) -> subproce
         return subprocess.CompletedProcess(argv, 127, "", f"{argv[0]}: not found")
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(argv, 124, "", f"{argv[0]}: timed out")
+
+
+def _execute(argv: List[str], *, env: Mapping[str, str], timeout: float) -> int:
+    try:
+        return subprocess.run(argv, env=dict(env), timeout=timeout, check=False).returncode
+    except FileNotFoundError:
+        return 127
+    except subprocess.TimeoutExpired:
+        return 124
 
 
 def _sidecar_get(port: int, path: str, token: str = "") -> Any:
@@ -1524,6 +1542,92 @@ def status(host: Host) -> Dict[str, Any]:
         "reports": host.reports(port, _sidecar_token(paths)),
         "break_glass": host.break_glass(port, _sidecar_token(paths)),
     }
+
+
+# ---------------------------------------------------------------------------
+# upgrade
+# ---------------------------------------------------------------------------
+
+
+def upgrade(host: Host, *, to: Optional[str] = None, check: bool = False,
+            current: Optional[str] = None,
+            out: Callable[[str], None] = print) -> Dict[str, Any]:
+    """Move this connected gateway to a newer artzain: only to one the
+    signed compatibility manifest lists with the installed OpenShell release,
+    and by running that release's connect script, checked against the
+    SHA-256 the manifest names. *to* names the version (it must be listed,
+    and newer); *check* says what would happen and changes nothing.
+    Returns what it did."""
+    from artzain import __version__
+
+    current = current or __version__
+    paths = layout(host)
+    record = Record.load(paths.record)
+    if not record.data.get("connected"):
+        raise ConnectError("this host's gateway is not connected: run "
+                           "`artzain connect openshell up` first")
+    openshell = detect(host).openshell_version
+    work = Path(tempfile.mkdtemp(prefix="artzain-upgrade-"))
+    try:
+        try:
+            serial = signed.newest_serial(host, work)
+            cosign = signed.cosign(host, paths.state_dir, lambda m: _say(out, m))
+            manifest_path, bundle = work / signed.MANIFEST, work / signed.BUNDLE
+            base = f"{signed.RELEASES}compat-v{serial}/"
+            signed.fetch(host, base + signed.MANIFEST, manifest_path, what=signed.MANIFEST)
+            signed.fetch(host, base + signed.BUNDLE, bundle, what=signed.BUNDLE)
+            signed.verify(host, cosign, manifest_path, bundle)
+            manifest = signed.read(manifest_path, serial)
+        except signed.UpgradeError as exc:
+            raise ConnectError(str(exc)) from None
+        last = int(record.data.get("compat_serial") or 0)
+        if serial < last:
+            raise ConnectError(f"the newest signed manifest is serial {serial}, and this host "
+                               f"has read serial {last}: refusing an older one")
+        record.mark("compat", compat_serial=serial)
+        pairs = signed.listed(manifest, openshell)
+        if not pairs:
+            raise ConnectError(f"the signed manifest (serial {serial}) lists no artzain for "
+                               f"OpenShell {openshell}")
+        if to is not None:
+            chosen = [p for p in pairs if p["artzain"] == to]
+            if not chosen:
+                raise ConnectError(f"artzain {to} is not listed with OpenShell {openshell} "
+                                   f"(manifest serial {serial})")
+            if signed.key(to) <= signed.key(current):
+                raise ConnectError(f"artzain {to} is not newer than this artzain, {current}")
+            target = chosen[0]
+        else:
+            target = pairs[0]
+        summary: Dict[str, Any] = {"upgraded": False, "from": current, "to": target["artzain"],
+                                   "serial": serial, "openshell": openshell}
+        if signed.key(target["artzain"]) <= signed.key(current):
+            _say(out, f"artzain {current} is the newest listed with OpenShell {openshell} "
+                      f"(manifest serial {serial}): nothing to do")
+            return {**summary, "to": current}
+        if check:
+            _say(out, f"artzain {target['artzain']} is listed with OpenShell {openshell} "
+                      f"(manifest serial {serial}); run `artzain connect openshell upgrade` "
+                      "to move to it")
+            return {**summary, "check": True}
+        try:
+            connect_script = signed.script(host, work, target)
+        except signed.UpgradeError as exc:
+            raise ConnectError(str(exc)) from None
+        _say(out, f"moving to artzain {target['artzain']}, listed with OpenShell {openshell} "
+                  f"in the signed manifest (serial {serial}): running "
+                  f"{connect_script.name}, checked against its SHA-256")
+        engine = str(record.data.get("engine") or DEFAULT_ENGINE)
+        port = str(int(record.data.get("port") or DEFAULT_PORT))
+        status_code = host.execute("sh", str(connect_script), "--engine", engine, "--port", port)
+        if status_code != 0:
+            raise ConnectError(f"{connect_script.name} stopped (exit {status_code}): see what it "
+                               "said above; run `artzain connect openshell upgrade` again")
+        Record.load(paths.record).mark("upgraded", upgraded_from=current,
+                                       upgraded_to=target["artzain"])
+        return {**summary, "upgraded": True}
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
