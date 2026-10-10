@@ -309,10 +309,10 @@ gateway's host, as the user the gateway runs as, with the enroll token and
 configuration digest ArtzAIn issues once the gateway's connect is approved:
 
 ```bash
-curl -fsSLO https://github.com/CogNEXUSlabs/cognexus-tools/releases/download/python-v0.6.43/connect-0.6.43.sh &&
-echo '<the SHA-256 you were shown>  connect-0.6.43.sh' | sha256sum -c - &&
+curl -fsSLO https://github.com/CogNEXUSlabs/cognexus-tools/releases/download/python-v0.6.44/connect-0.6.44.sh &&
+echo '<the SHA-256 you were shown>  connect-0.6.44.sh' | sha256sum -c - &&
 export ARTZAIN_ENROLL_TOKEN='<the token you were given>' &&
-sh connect-0.6.43.sh --config-digest <the digest you were shown>
+sh connect-0.6.44.sh --config-digest <the digest you were shown>
 ```
 
 Keep the `&&`: a failed download or check then stops the run before the
@@ -331,7 +331,9 @@ release whose sidecar passed conformance against that OpenShell release.
 <!-- openshell-compat:begin -->
 | artzain | OpenShell | Verified |
 |---|---|---|
+| 0.6.44 | 0.1.3 | 2026-10-10 |
 | 0.6.43 | 0.1.3 | 2026-10-09 |
+| 0.6.44 | 0.1.2 | 2026-10-10 |
 | 0.6.43 | 0.1.2 | 2026-10-09 |
 | 0.6.37 | 0.1.2 | 2026-10-04 |
 <!-- openshell-compat:end -->
