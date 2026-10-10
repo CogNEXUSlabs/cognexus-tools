@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.6.45
+
+### Added
+
+- **`artzain connect openshell` binds a gateway that runs under Docker
+  Compose**, as NVIDIA's `deploy/docker` project runs it (OpenShell 0.1.3:
+  the gateway as root, its `gateway.toml` bind-mounted from the project's
+  folder). `up` finds it by its image and its configuration's mount, and
+  runs the sidecar as a second service of that project, from the ArtzAIn
+  sidecar image of the same artzain release: cosign v2.6.5 (pinned by
+  SHA-256) checks the image's signature against the identity of the
+  cognexus-tools `sidecar-image.yml` at that release's `sidecar-v` tag, and
+  the image is named by the digest it verified. The sidecar runs as uid
+  10001 on a read-only root filesystem, with no capabilities, on the
+  host's network (its routes on loopback only, as the native sidecar's).
+  The gateway reaches it through a Unix socket on a volume both mount, and
+  starts only once it is healthy. Nothing in the operator's compose files
+  changes: `up` writes a compose file of its own beside the sidecar's
+  settings, and adds it to `COMPOSE_FILE` in a marked block of the
+  project's `.env`, so `docker compose up -d` in the folder keeps the
+  gateway bound. Before the token is spent, `up` checks that the project's
+  files and `.env` bring the gateway up as it runs now (Compose's
+  configuration hash), and refuses a gateway that does not run as root.
+  `--sidecar-image name@sha256:...` (or a local image's `sha256:...`)
+  runs another image, not checked, and says so. `remove` gives
+  `gateway.toml` and `.env` back, recreates the gateway from the operator's
+  files alone, and removes the sidecar's container, its volumes and `up`'s
+  file. `status`, `doctor` (the containers, the socket in the sidecar's
+  container, and whether `docker compose up -d` in the folder keeps the
+  gateway bound) and `rotate-key` know the shape. On Compose the inventory
+  is the sandboxes the sidecar has seen created, and the heartbeat carries
+  no OpenShell version: the image has no `openshell` CLI or SDK to ask.
+
 ## 0.6.44
 
 ### Added

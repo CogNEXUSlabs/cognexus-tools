@@ -662,7 +662,17 @@ beside the gateway OpenShell's deb or rpm package runs, and ends with a
 self-test ArtzAIn must refuse, and its receipt link. On a host without
 OpenShell, `up` offers to install NVIDIA's deb or rpm of the pinned release,
 each package checked against its SHA-256 first (`--install-openshell`
-installs without asking). Then:
+installs without asking).
+
+**A gateway under Docker Compose** (0.6.45), as NVIDIA's `deploy/docker`
+project runs it, is bound by the same command. The sidecar runs as a service
+of the gateway's own project, from the sidecar image of this release, which
+`up` checks with cosign before it runs it, by the digest it verified. Your
+compose files are not edited: `up` adds a file of its own to `COMPOSE_FILE`
+in the project's `.env`, so `docker compose up -d` in the folder keeps the
+gateway bound, and `remove` puts the project back as it was.
+
+Then:
 
 ```bash
 artzain connect openshell status        # what is installed, and what the engine took
