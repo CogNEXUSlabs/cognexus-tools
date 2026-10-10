@@ -1822,6 +1822,8 @@ def cmd_connect_openshell(args: argparse.Namespace) -> None:
                        ask=input if sys.stdin is not None and sys.stdin.isatty() else None)
         elif args.connect_command == "remove":
             connect.remove(host, keep_credential=args.keep_credential)
+        elif args.connect_command == "upgrade":
+            connect.upgrade(host, to=args.to, check=args.check)
         elif args.connect_command == "rotate-key":
             connect.rotate_key(host)
         elif args.connect_command == "break-glass":
@@ -2352,6 +2354,15 @@ def _add_connect_parser(sub: argparse._SubParsersAction) -> None:
     c_remove.add_argument("--keep-credential", action="store_true",
                           help="do not revoke the gateway's credential in the engine")
     c_remove.set_defaults(func=cmd_connect_openshell)
+    c_upgrade = c_os_sub.add_parser(
+        "upgrade",
+        help="Move to the newest artzain the signed compatibility manifest lists with the "
+             "installed OpenShell, by running its connect script.")
+    c_upgrade.add_argument("--to", default=None,
+                           help="the artzain version to move to (it must be listed, and newer)")
+    c_upgrade.add_argument("--check", action="store_true",
+                           help="say what it would do, and change nothing")
+    c_upgrade.set_defaults(func=cmd_connect_openshell)
     c_status = c_os_sub.add_parser("status", help="What is installed, and whether it is up.")
     c_status.set_defaults(func=cmd_connect_openshell)
     c_rotate = c_os_sub.add_parser("rotate-key", help="Swap the gateway's credential for a new one.")

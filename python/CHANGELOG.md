@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.44
+
+### Added
+
+- **`artzain connect openshell upgrade`.** Moves a connected gateway to
+  the newest artzain the signed OpenShell compatibility manifest lists with
+  the gateway's installed OpenShell release, by running that release's
+  connect script (no new token). It reads the manifest from the newest
+  `compat-v<serial>` release of CogNEXUSlabs/cognexus-tools and verifies
+  its signature with cosign v2.6.5 against the identity of that
+  repository's `openshell-compat.yml` at a `compat-v` tag. cosign is
+  downloaded once, by a SHA-256 pinned in artzain, into the sidecar's
+  state folder, and checked again before each run. It refuses a manifest
+  whose serial is not its tag's, or is lower than the last one this host
+  read, and a connect script that is not the one the manifest names by its
+  SHA-256. `--check` says what it would do and changes nothing; `--to
+  <version>` names a listed, newer release. The new `up` runs the
+  self-test again: one denied decision, billed like any other.
+
 ## 0.6.43
 
 ### Added

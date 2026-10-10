@@ -667,6 +667,7 @@ installs without asking). Then:
 ```bash
 artzain connect openshell status        # what is installed, and what the engine took
 artzain connect openshell doctor        # ok / warn / FAIL per check; exit 1 on a FAIL
+artzain connect openshell upgrade       # the newest artzain the signed compatibility list allows
 artzain connect openshell rotate-key    # swap the gateway's credential
 artzain connect openshell break-glass --minutes 60 --reason "..."   # while ArtzAIn cannot answer
 artzain connect openshell remove        # put the gateway's files back, revoke the credential
