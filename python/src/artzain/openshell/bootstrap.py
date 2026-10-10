@@ -88,7 +88,7 @@ UV_VERSION="@UV_VERSION@"
 say() { printf 'artzain connect: %s\n' "$*" >&2; }
 fail() { say "$*"; exit 1; }
 
-[ "$(uname -s)" = Linux ] || fail "this connects the gateway OpenShell's deb or rpm package installs, on Linux"
+[ "$(uname -s)" = Linux ] || fail "this connects an OpenShell gateway on Linux: the deb or rpm package's, or one under Docker Compose"
 case "$(uname -m)" in
   x86_64|amd64) arch=x86_64; uv_sha256="@UV_SHA256_X86_64@" ;;
   aarch64|arm64) arch=aarch64; uv_sha256="@UV_SHA256_AARCH64@" ;;

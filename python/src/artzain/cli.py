@@ -1819,6 +1819,7 @@ def cmd_connect_openshell(args: argparse.Namespace) -> None:
                        engine=args.engine, proxy=args.proxy or "",
                        ca_bundle=args.ca_bundle or "", port=args.port,
                        install_openshell=args.install_openshell,
+                       sidecar_image=(args.sidecar_image or "").strip(),
                        ask=input if sys.stdin is not None and sys.stdin.isatty() else None)
         elif args.connect_command == "remove":
             connect.remove(host, keep_credential=args.keep_credential)
@@ -2309,17 +2310,19 @@ def _add_connect_parser(sub: argparse._SubParsersAction) -> None:
     connect_sub = p_connect.add_subparsers(dest="connect_runtime", required=True)
     c_openshell = connect_sub.add_parser(
         "openshell",
-        help="Bind this host's OpenShell gateway (deb or rpm, systemd user service).",
+        help="Bind this host's OpenShell gateway (deb or rpm, or Docker Compose).",
         description=(
             "Binds the OpenShell gateway on this host to ArtzAIn, and undoes it.\n\n"
             "  up      swap an enroll token for the gateway's credential, install the\n"
-            "          sidecar as a systemd user service, add the interceptor\n"
-            "          registration to gateway.toml, restart the gateway and check\n"
-            "          that a write ArtzAIn denies is refused. Run it again to\n"
-            "          finish a run that stopped.\n"
-            "  remove  put gateway.toml and gateway.env back as they were, remove\n"
-            "          the sidecar, restart the gateway unbound and revoke the\n"
-            "          credential.\n"
+            "          sidecar as a systemd user service (or, for a gateway under\n"
+            "          Docker Compose, as a service of its project, from the signed\n"
+            "          sidecar image), add the interceptor registration to\n"
+            "          gateway.toml, restart the gateway and check that a write\n"
+            "          ArtzAIn denies is refused. Run it again to finish a run that\n"
+            "          stopped.\n"
+            "  remove  put gateway.toml and gateway.env (or the project's .env) back\n"
+            "          as they were, remove the sidecar, restart the gateway unbound\n"
+            "          and revoke the credential.\n"
             "  status  what is installed, and whether it is up (JSON).\n"
             "  rotate-key  swap the gateway's credential for a new one; the sidecar\n"
             "          and the gateway restart, and the old credential is revoked.\n"
@@ -2346,6 +2349,11 @@ def _add_connect_parser(sub: argparse._SubParsersAction) -> None:
                       help="a PEM file of the authorities to trust for the engine")
     c_up.add_argument("--port", type=int, default=8088,
                       help="the sidecar's loopback HTTP port (default: %(default)s)")
+    c_up.add_argument("--sidecar-image", default="",
+                      help="for a gateway under Docker Compose: run the sidecar from this "
+                           "image, named by its digest (name@sha256:..., or a local image's "
+                           "sha256:...), instead of this release's signed image. Its "
+                           "signature is not checked")
     c_up.add_argument("--install-openshell", action="store_true",
                       help="on a host without OpenShell, install NVIDIA's deb or rpm of the "
                            "pinned release (checked against its SHA-256) without asking")

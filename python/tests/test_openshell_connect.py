@@ -189,6 +189,8 @@ class _Gateway:
             return _done()
         if name == "openshell" and args[:2] == ["gateway", "add"]:
             return _done()
+        if argv[:3] == ["docker", "ps", "--all"]:
+            return _done(0, "")  # Docker runs here, and no gateway under Compose
         if name == "openshell-gateway":
             if args == ["--version"]:
                 return _done(0, self.version + "\n")
@@ -1304,8 +1306,8 @@ def test_status_says_what_is_installed_and_holds_no_credential(gateway):
     assert after == {
         "gateway_id": GATEWAY, "steps": after["steps"], "connected": True,
         "self_test_decision_id": DECISION, "self_test_receipt": RECEIPT, "credential_saved": True,
-        "registration_in_gateway_toml": True, "drop_in": True, "sidecar_unit": True,
-        "sidecar": "active", "sidecar_answers": True, "gateway": "active",
+        "registration_in_gateway_toml": True, "shape": "systemd-user", "drop_in": True,
+        "sidecar_unit": True, "sidecar": "active", "sidecar_answers": True, "gateway": "active",
         "record_error": None, "reports": REPORTED, "break_glass": NO_WINDOW}
     assert CREDENTIAL not in json.dumps(after)
 
@@ -1931,7 +1933,7 @@ def test_the_command_takes_the_token_from_the_environment_only(monkeypatch):
               "--engine", "https://engine.example", "--proxy", "env", "--port", "8090"])
     assert seen == {"token": TOKEN, "digest": DIGEST, "engine": "https://engine.example",
                     "proxy": "env", "ca_bundle": "", "port": 8090,
-                    "install_openshell": False, "ask": None}
+                    "install_openshell": False, "sidecar_image": "", "ask": None}
     with pytest.raises(SystemExit):
         cli.main(["connect", "openshell", "up", "--token", TOKEN])
 

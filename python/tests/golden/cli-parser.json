@@ -3234,11 +3234,11 @@
         "commands": [
          {
           "name": "openshell",
-          "help": "Bind this host's OpenShell gateway (deb or rpm, systemd user service).",
+          "help": "Bind this host's OpenShell gateway (deb or rpm, or Docker Compose).",
           "parser": {
            "prog": "artzain connect openshell",
            "usage": null,
-           "description": "Binds the OpenShell gateway on this host to ArtzAIn, and undoes it.\n\n  up      swap an enroll token for the gateway's credential, install the\n          sidecar as a systemd user service, add the interceptor\n          registration to gateway.toml, restart the gateway and check\n          that a write ArtzAIn denies is refused. Run it again to\n          finish a run that stopped.\n  remove  put gateway.toml and gateway.env back as they were, remove\n          the sidecar, restart the gateway unbound and revoke the\n          credential.\n  status  what is installed, and whether it is up (JSON).\n  rotate-key  swap the gateway's credential for a new one; the sidecar\n          and the gateway restart, and the old credential is revoked.\n  doctor  check the services, the socket, the credential file, the\n          registration, the OpenShell release, the engine through the\n          proxy and the clock; exits 1 when a check fails.\n\nThe enroll token is read from ARTZAIN_ENROLL_TOKEN.\nOperator steps: the ArtzAIn operator manual, chapter 17.",
+           "description": "Binds the OpenShell gateway on this host to ArtzAIn, and undoes it.\n\n  up      swap an enroll token for the gateway's credential, install the\n          sidecar as a systemd user service (or, for a gateway under\n          Docker Compose, as a service of its project, from the signed\n          sidecar image), add the interceptor registration to\n          gateway.toml, restart the gateway and check that a write\n          ArtzAIn denies is refused. Run it again to finish a run that\n          stopped.\n  remove  put gateway.toml and gateway.env (or the project's .env) back\n          as they were, remove the sidecar, restart the gateway unbound\n          and revoke the credential.\n  status  what is installed, and whether it is up (JSON).\n  rotate-key  swap the gateway's credential for a new one; the sidecar\n          and the gateway restart, and the old credential is revoked.\n  doctor  check the services, the socket, the credential file, the\n          registration, the OpenShell release, the engine through the\n          proxy and the clock; exits 1 when a check fails.\n\nThe enroll token is read from ARTZAIN_ENROLL_TOKEN.\nOperator steps: the ArtzAIn operator manual, chapter 17.",
            "epilog": null,
            "formatter_class": "RawDescriptionHelpFormatter",
            "add_help": true,
@@ -3304,6 +3304,7 @@
                   "proxy",
                   "ca_bundle",
                   "port",
+                  "sidecar_image",
                   "install_openshell"
                  ]
                 ],
@@ -3396,6 +3397,21 @@
                   "type": "<int>",
                   "required": false,
                   "help": "the sidecar's loopback HTTP port (default: %(default)s)",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--sidecar-image"
+                  ],
+                  "dest": "sidecar_image",
+                  "nargs": null,
+                  "const": null,
+                  "default": "",
+                  "type": null,
+                  "required": false,
+                  "help": "for a gateway under Docker Compose: run the sidecar from this image, named by its digest (name@sha256:..., or a local image's sha256:...), instead of this release's signed image. Its signature is not checked",
                   "metavar": null,
                   "choices": null
                  },

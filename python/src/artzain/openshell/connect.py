@@ -1,9 +1,17 @@
 """``artzain connect openshell``: bind an OpenShell gateway on this host to ArtzAIn.
 
-This release handles one gateway shape: the deb or rpm package, which runs
-the gateway as a systemd *user* service (``openshell-gateway.service``,
-``~/.config/openshell/gateway.toml``). Homebrew, snap and Compose come later,
-and are refused with a message that says so.
+This release handles two gateway shapes:
+
+* the deb or rpm package, which runs the gateway as a systemd *user* service
+  (``openshell-gateway.service``, ``~/.config/openshell/gateway.toml``);
+* NVIDIA's Docker Compose project, which runs it as a Compose service with
+  ``gateway.toml`` bind-mounted from the project folder. The sidecar then
+  runs as a second service of that project, from the signed sidecar image
+  (:mod:`artzain.openshell.compose`).
+
+Homebrew and snap come later, and are refused with a message that says so.
+The steps below are the deb's; :mod:`artzain.openshell.compose` says how the
+Compose shape does each.
 
 ``up`` takes an enroll token (``ARTZAIN_ENROLL_TOKEN``) and the digest of the
 configuration the operator approved, and then:
@@ -62,12 +70,12 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from artzain._private_files import private_dir, replace_file, write_private
-from artzain.openshell import install, registration, transport
+from artzain.openshell import compose, install, registration, transport
 from artzain.openshell import upgrade as signed
 
 #: What the configuration a token carries says it is, and the one version
@@ -76,8 +84,9 @@ CONFIG_KIND = "artzain.openshell.connect"
 CONFIG_VERSION = 1
 _CONFIG_KEYS = frozenset({"kind", "version", "decision_url", "openshell_version",
                           "interceptor_timeout_ms", "decide_timeout_ms", "telemetry"})
-#: The shape this release can bind.
+#: The shapes this release can bind.
 SHAPE_SYSTEMD_USER = "systemd-user"
+SHAPE_COMPOSE = "compose"
 
 GATEWAY_UNIT = "openshell-gateway.service"
 SIDECAR_UNIT = "artzain-openshell-sidecar.service"
@@ -487,6 +496,15 @@ class Layout:
     def env_backup(self) -> Path:
         return self.artzain_dir / "gateway.env.before"
 
+    @property
+    def compose_file(self) -> Path:
+        """``up``'s compose file, for a gateway under Compose."""
+        return self.artzain_dir / compose.FILE
+
+    @property
+    def compose_env_backup(self) -> Path:
+        return self.artzain_dir / compose.ENV_BACKUP
+
 
 def layout(host: Host) -> Layout:
     config = host.config_home
@@ -509,11 +527,21 @@ def layout(host: Host) -> Layout:
     )
 
 
+def compose_layout(paths: Layout, project: compose.Project) -> Layout:
+    """Where things are for a gateway under Compose: its ``gateway.toml``
+    where the project mounts it from, the project's ``.env`` as the file
+    ``up`` adds a block to, and the socket where both containers see it."""
+    return replace(paths, gateway_toml=project.gateway_toml,
+                   gateway_env=project.directory / ".env", socket=Path(compose.SOCKET))
+
+
 @dataclass(frozen=True)
 class Shape:
     kind: str
     openshell_version: str
     paths: Layout
+    #: The gateway's Compose project, for the Compose shape.
+    project: Optional[compose.Project] = None
 
 
 def receipt_url(engine: Any, decision_id: Any) -> str:
@@ -546,6 +574,8 @@ def _openshell_installed(host: Host, *, install_openshell: bool,
     if (not missing or not host.platform.startswith("linux") or sys.version_info < (3, 11)
             or not host.which("systemctl")):
         return  # detect says what is wrong, if anything is
+    if host.which("docker") and compose.find(host, layout(host).compose_file) is not None:
+        return  # a gateway under Compose: nothing to install on this host
     try:
         plan = install.plan(host)
     except install.InstallError as exc:
@@ -565,20 +595,63 @@ def _openshell_installed(host: Host, *, install_openshell: bool,
         raise ConnectError(f"installing OpenShell {install.RELEASE}: {exc}") from None
 
 
+def _recorded_project(data: Mapping[str, Any]) -> Optional[compose.Project]:
+    """The Compose project a record names, or None."""
+    if data.get("shape") != SHAPE_COMPOSE:
+        return None
+    try:
+        return compose.recorded(data.get("compose") or {})
+    except ConnectError:
+        return None
+
+
+def _recorded_shape(paths: Layout) -> str:
+    try:
+        data = json.loads(paths.record.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    return str(data.get("shape") or "") if isinstance(data, dict) else ""
+
+
+def _compose_shape(host: Host, paths: Layout, project: compose.Project) -> Shape:
+    if not host.which("openshell"):
+        raise ConnectError("openshell is not on PATH: install NVIDIA's openshell CLI and "
+                           "register it with the gateway (openshell gateway add "
+                           "http://127.0.0.1:8080 --name openshell-docker)")
+    compose.check(project, paths.compose_file)
+    return Shape(SHAPE_COMPOSE, compose.version(host, project), compose_layout(paths, project),
+                 project)
+
+
 def detect(host: Host) -> Shape:
-    """The gateway on this host, when it is one this release can bind."""
+    """The gateway on this host, when it is one this release can bind: the
+    deb or rpm package's, or else one under Docker Compose."""
     if not host.platform.startswith("linux"):
-        raise ConnectError("this release binds the deb or rpm gateway on Linux only; "
-                           "Homebrew, snap and Compose come later")
+        raise ConnectError("this release binds the deb, rpm or Compose gateway on Linux only; "
+                           "Homebrew and snap come later")
     if sys.version_info < (3, 11):
         raise ConnectError("artzain connect needs Python 3.11 or later (it reads TOML)")
+    paths = layout(host)
+    packaged = (bool(host.which("systemctl")) and bool(host.which("openshell-gateway"))
+                and paths.gateway_unit.is_file())
+    recorded = _recorded_shape(paths)
+    if (not packaged or recorded == SHAPE_COMPOSE) and host.which("docker"):
+        project = compose.find(host, paths.compose_file)
+        if project is not None:
+            return _compose_shape(host, paths, project)
+    if recorded == SHAPE_COMPOSE:
+        raise ConnectError("this host's gateway was bound under Docker Compose, and no "
+                           "OpenShell gateway runs under Compose here now: start it (docker "
+                           "compose up -d in its folder), or run `artzain connect openshell "
+                           "remove`")
     for tool in ("systemctl", "openshell-gateway", "openshell"):
         if not host.which(tool):
             raise ConnectError(f"{tool} is not on PATH: install OpenShell's deb or rpm package")
     paths = layout(host)
     if not paths.gateway_unit.is_file():
-        raise ConnectError(f"no {GATEWAY_UNIT} user unit: this is not a deb or rpm gateway "
-                           "(Homebrew, snap and Compose come later)")
+        raise ConnectError(f"no {GATEWAY_UNIT} user unit, and no OpenShell gateway under "
+                           "Docker Compose: this is not a deb or rpm gateway, nor one under "
+                           "Compose (Homebrew and snap come later)")
     if paths.gateway_toml.exists() and not paths.gateway_toml.is_file():
         raise ConnectError(f"{paths.gateway_toml} is not a file")
     done = host.run("openshell-gateway", "--version", timeout=30)
@@ -769,9 +842,13 @@ def _jwt_settings(toml_text: str, host: Optional[Host] = None) -> Dict[str, str]
 
 def sidecar_environment(host: Host, paths: Layout, redeemed_gateway: str, credential: str,
                         config: ConnectConfig, *, registration_digest: str, port: int,
-                        proxy: str, ca_bundle: str, jwt: Mapping[str, str], token: str) -> str:
-    """The sidecar service's ``EnvironmentFile``. It holds the credential, and
-    *token*, which a caller of the sidecar's loopback routes must present."""
+                        proxy: str, ca_bundle: str, jwt: Mapping[str, str], token: str,
+                        container: bool = False) -> str:
+    """The sidecar service's ``EnvironmentFile``, or with *container* its
+    Compose container's ``env_file``, which names the paths as the container
+    sees them. It holds the credential, and *token*, which a caller of the
+    sidecar's loopback routes must present."""
+    state = Path(compose.STATE) if container else paths.state_dir
     values = {
         "COGNEXUS_API_KEY": credential,
         "ARTZAIN_DECISION_URL": config.decision_url,
@@ -783,17 +860,21 @@ def sidecar_environment(host: Host, paths: Layout, redeemed_gateway: str, creden
         # health probe is open): `status`, `doctor` and `up` read it here.
         "OPENSHELL_SIDECAR_TOKEN": token,
         "OPENSHELL_SIDECAR_DECIDE_TIMEOUT_MS": str(config.decide_timeout_ms),
-        "OPENSHELL_SIDECAR_STATE": (paths.state_dir / "state.json").as_posix(),
-        "OPENSHELL_SIDECAR_JOURNAL": (paths.state_dir / "journal.json").as_posix(),
-        "OPENSHELL_SIDECAR_BASE_POLICY": (paths.state_dir / "base-policy.json").as_posix(),
+        "OPENSHELL_SIDECAR_STATE": (state / "state.json").as_posix(),
+        "OPENSHELL_SIDECAR_JOURNAL": (state / "journal.json").as_posix(),
+        "OPENSHELL_SIDECAR_BASE_POLICY": (state / "base-policy.json").as_posix(),
         "OPENSHELL_REGISTRATION_DIGEST": registration_digest,
         # Where the registration is: each heartbeat says whether it still is.
-        "OPENSHELL_GATEWAY_TOML": paths.gateway_toml.as_posix(),
+        "OPENSHELL_GATEWAY_TOML": (compose.toml_inside(paths.gateway_toml) if container
+                                   else paths.gateway_toml.as_posix()),
         # Each inventory lists every workspace through the CLI the operator
-        # registered with the gateway, so it is never partial.
-        "OPENSHELL_SIDECAR_LIST_CLI": host.which("openshell") or "",
+        # registered with the gateway, so it is never partial. The sidecar's
+        # image has no CLI: its inventory is what it has seen created.
+        "OPENSHELL_SIDECAR_LIST_CLI": "" if container else (host.which("openshell") or ""),
     }
-    if not values["OPENSHELL_SIDECAR_LIST_CLI"].startswith("/"):
+    if container:
+        del values["OPENSHELL_SIDECAR_LIST_CLI"]
+    elif not values["OPENSHELL_SIDECAR_LIST_CLI"].startswith("/"):
         raise ConnectError("OPENSHELL_SIDECAR_LIST_CLI: the openshell CLI has no absolute path")
     if proxy:
         values["OPENSHELL_SIDECAR_PROXY"] = proxy
@@ -981,15 +1062,19 @@ def _setting(host: Host, value: str) -> subprocess.CompletedProcess:
                     "--value", value, "--yes", timeout=60)
 
 
-def _cli_reaches_the_gateway(host: Host) -> None:
+def _cli_reaches_the_gateway(host: Host, *, under_compose: bool = False) -> None:
     """Raise :class:`ConnectError` unless the ``openshell`` CLI can talk to
     the gateway: every step after the redeem needs it."""
     done = host.run("openshell", "settings", "get", "--global", timeout=60)
     if done.returncode != 0:
-        raise ConnectError("the openshell CLI cannot reach the gateway: start it "
-                           f"(systemctl --user start {GATEWAY_UNIT}) and register it "
-                           "(openshell gateway add https://127.0.0.1:17670 --local "
-                           "--name openshell), then run this again: " + _said(done)[-300:])
+        start, register = ((f"systemctl --user start {GATEWAY_UNIT}",
+                            "openshell gateway add https://127.0.0.1:17670 --local "
+                            "--name openshell") if not under_compose else
+                           ("docker compose up -d, in its folder",
+                            "openshell gateway add http://127.0.0.1:8080 --name openshell-docker"))
+        raise ConnectError(f"the openshell CLI cannot reach the gateway: start it ({start}) "
+                           f"and register it ({register}), then run this again: "
+                           + _said(done)[-300:])
 
 
 def self_test(host: Host) -> str:
@@ -1015,21 +1100,78 @@ def self_test(host: Host) -> str:
     return found.group(1)
 
 
+def _preflight(host: Host, project: Optional[compose.Project], trial: Path) -> None:
+    """The gateway's own ``config preflight`` on *trial*: the package's
+    binary, or under Compose a throwaway container of the gateway's image."""
+    if project is None:
+        _check(host.run("openshell-gateway", "config", "preflight", "--path",
+                        trial.as_posix(), timeout=60),
+               "openshell-gateway config preflight")
+    else:
+        _check(compose.preflight(host, project, trial),
+               "openshell-gateway config preflight (in the gateway's image)")
+
+
+def _restart_bound(host: Host, paths: Layout, project: Optional[compose.Project]) -> None:
+    """``up``'s step 6: the gateway restarted with its registration (under
+    Compose, recreated from the project's files and up's), and up to stay."""
+    if project is None:
+        _check(_systemctl(host, "restart", GATEWAY_UNIT, timeout=120),
+               f"restarting {GATEWAY_UNIT}")
+        if not _gateway_stays_up(host):
+            raise ConnectError(f"{GATEWAY_UNIT} did not stay up: see "
+                               f"`journalctl --user -u {GATEWAY_UNIT}`. "
+                               "`artzain connect openshell remove` puts everything back")
+        return
+    _check(compose.up(host, project, paths.compose_file, project.service),
+           f"docker compose up -d {project.service}")
+    if not compose.stays_up(host, project.name, project.service):
+        raise ConnectError(f"the gateway's container did not stay up: see `docker "
+                           f"compose -p {project.name} logs {project.service}`. "
+                           "`artzain connect openshell remove` puts everything back")
+    _compose_gateway_answers(host, project)
+
+
+#: How long a gateway container just started may take to answer the CLI.
+GATEWAY_ANSWER_SECONDS = 90.0
+
+
+def _compose_gateway_answers(host: Host, project: compose.Project) -> None:
+    """Wait until the openshell CLI reaches a gateway container just
+    (re)started. Docker publishes its port as soon as the container runs,
+    before the gateway behind it listens, and a call meanwhile is reset."""
+    def answers() -> bool:
+        return host.run("openshell", "settings", "get", "--global", timeout=60).returncode == 0
+
+    if not _wait(host, GATEWAY_ANSWER_SECONDS, answers):
+        raise ConnectError(f"the gateway's container is up, but the openshell CLI cannot reach "
+                           f"it: see `docker compose -p {project.name} logs {project.service}`")
+
+
 def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_ENGINE,
        proxy: str = "", ca_bundle: str = "", port: int = DEFAULT_PORT,
-       install_openshell: bool = False, ask: Optional[Callable[[str], str]] = None,
+       install_openshell: bool = False, sidecar_image: str = "",
+       ask: Optional[Callable[[str], str]] = None,
        out: Callable[[str], None] = print) -> Dict[str, Any]:
     """Bind this host's gateway. Returns the record. Raises
     :class:`ConnectError` at the first step that cannot be done; what was
     done before it stays recorded. On a host without OpenShell, installs it
-    first when *install_openshell* is set or *ask* is answered yes."""
+    first when *install_openshell* is set or *ask* is answered yes. Under
+    Compose, the sidecar runs from this release's image as cosign verifies
+    it, or from *sidecar_image* when that names one by its digest."""
     _openshell_installed(host, install_openshell=install_openshell, ask=ask, out=out)
     shape = detect(host)
-    paths = shape.paths
-    if "/.cache/uv/" in host.executable.replace("\\", "/"):
+    paths, project = shape.paths, shape.project
+    if project is None and sidecar_image:
+        raise ConnectError("--sidecar-image is for a gateway under Compose: this one is the deb "
+                           "or rpm package's, and its sidecar runs from this artzain")
+    if project is None and "/.cache/uv/" in host.executable.replace("\\", "/"):
         raise ConnectError("artzain is running from a temporary uv environment, which the "
                            "sidecar service cannot keep using: install it first, "
                            "`uv tool install 'artzain[openshell]'`, and run that artzain")
+    if project is not None and proxy == "env":
+        raise ConnectError("--proxy env: the sidecar's container does not run with this "
+                           "shell's proxy settings; name the proxy (--proxy http://host:port)")
     if not (1 <= int(port) <= 65535):
         raise ConnectError("--port must be 1..65535")
     record = Record.load(paths.record)
@@ -1039,13 +1181,25 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
         # Before the token is spent: a file the block cannot go into stops here,
         # and so does a CLI that cannot reach the gateway.
         check_gateway_toml(paths, toml_text)
-        _cli_reaches_the_gateway(host)
+        _cli_reaches_the_gateway(host, under_compose=project is not None)
+    signer: Optional[Tuple[str, str]] = None
+    image, release = "", ""
+    if project is None:
+        jwt = _jwt_settings(toml_text, host)
+    else:
+        # Also before the token: the project takes up's file, the gateway's
+        # key is where the sidecar can read it, and the image verifies.
+        _compose_can_bind(host, paths, project)
+        signer = compose.jwt(project, toml_text)
+        jwt = ({"OPENSHELL_JWT_PUBLIC_KEY": compose.JWT_KEY,
+                "OPENSHELL_JWT_GATEWAY_ID": signer[1]} if signer else {})
+        image, release = _sidecar_image(host, record, sidecar_image, out)
 
     # 1. The credential, once. It is saved before anything else can fail.
     settings_changed = False
     if record.done("redeemed"):
         _say(out, f"gateway {record.data['gateway_id']}: already redeemed; using the saved credential")
-        settings_changed = _bring_the_settings_up_to_date(paths, out)
+        settings_changed = project is None and _bring_the_settings_up_to_date(paths, out)
         config = parse_config(record.data.get("config"))
         gateway_id = record.data["gateway_id"]
     else:
@@ -1054,23 +1208,26 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
         # What this host puts into the sidecar's files, written once with
         # stand-ins for what the engine will send: a value systemd cannot
         # carry stops here, while the token is still unspent.
-        sidecar_unit(host, paths)
+        if project is None:
+            sidecar_unit(host, paths)
         sidecar_environment(host, paths, "gw_" + "0" * 26, CREDENTIAL_PREFIX + "0",
                             ConnectConfig("https://engine.invalid", "0.0.0"),
                             registration_digest="0" * 64, port=port, proxy=proxy,
-                            ca_bundle=ca_bundle, jwt=_jwt_settings(toml_text, host),
-                            token="0" * 43)
+                            ca_bundle=ca_bundle, jwt=jwt, token="0" * 43,
+                            container=project is not None)
         got = redeem(host, engine=engine, token=token, digest=digest, proxy=proxy,
                      ca_bundle=ca_bundle)
         config, gateway_id = got.config, got.gateway_id
-        jwt = _jwt_settings(toml_text, host)
         _replace(paths.sidecar_env, sidecar_environment(
             host, paths, gateway_id, got.credential, config,
             registration_digest=registration.digest(sidecar_registration(paths, config)),
             port=port, proxy=proxy, ca_bundle=ca_bundle, jwt=jwt,
-            token=secrets.token_urlsafe(32)).encode("utf-8"), private=True)
+            token=secrets.token_urlsafe(32), container=project is not None).encode("utf-8"),
+            private=True)
+        shape_facts = ({} if project is None else
+                       {"shape": SHAPE_COMPOSE, "compose": project.facts()})
         record.mark("redeemed", gateway_id=gateway_id, config=got.raw_config,
-                    engine=engine.rstrip("/"), port=int(port))
+                    engine=engine.rstrip("/"), port=int(port), **shape_facts)
         _say(out, f"gateway {gateway_id}: credential saved to {paths.sidecar_env}")
         if not jwt:
             _say(out, "note: neither gateway.toml nor the gateway's own files name a "
@@ -1086,8 +1243,9 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
         _check(_setting(host, "manual"), f"setting {SELF_TEST_KEY} to manual")
         record.mark("approval-manual")
 
-    # 3. The gateway's telemetry choice, in the file its unit reads.
-    if not record.done("gateway-env"):
+    # 3. The gateway's telemetry choice, in the file its unit reads. (Under
+    # Compose it is in up's compose file, step 4.)
+    if project is None and not record.done("gateway-env"):
         before = paths.gateway_env.read_bytes() if paths.gateway_env.exists() else b""
         created = not paths.gateway_env.exists()
         if strip_block(before) is None:
@@ -1101,8 +1259,12 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
     # another environment (the 0.6.41 connect script installs into one of
     # its own), and the settings step 1 added. One restart for both; the
     # gateway, which requires it, restarts with it.
-    unit = sidecar_unit(host, paths)
-    if not record.done("sidecar"):
+    unit = sidecar_unit(host, paths) if project is None else ""
+    if project is not None:
+        _compose_sidecar(host, paths, project, record, image=image, release=release,
+                         config=config, port=int(record.data.get("port", port)),
+                         jwt_key=signer[0] if signer else "", out=out)
+    elif not record.done("sidecar"):
         _replace(paths.sidecar_unit, unit.encode("utf-8"))
         private_dir(paths.state_dir)
         _check(_systemctl(host, "daemon-reload"), "systemctl --user daemon-reload")
@@ -1125,8 +1287,9 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
                 raise ConnectError(f"{GATEWAY_UNIT} did not stay up: see "
                                    f"`journalctl --user -u {GATEWAY_UNIT}`")
     if not _wait(host, 30, lambda: host.healthy(int(record.data.get("port", port)))):
-        raise ConnectError(f"the sidecar did not answer within 30 s: see "
-                           f"`journalctl --user -u {SIDECAR_UNIT}`")
+        raise ConnectError("the sidecar did not answer within 30 s: see "
+                           + (f"`journalctl --user -u {SIDECAR_UNIT}`" if project is None else
+                              f"`docker compose -p {project.name} logs {compose.SERVICE}`"))
 
     # 5. The registration, checked by the gateway's own preflight first.
     if not record.done("registration"):
@@ -1138,9 +1301,7 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
             trial = paths.artzain_dir / "gateway.toml.candidate"
             _replace(trial, candidate, private=True)
             try:
-                _check(host.run("openshell-gateway", "config", "preflight", "--path",
-                                trial.as_posix(), timeout=60),
-                       "openshell-gateway config preflight")
+                _preflight(host, project, trial)
             finally:
                 if trial.exists():
                     trial.unlink()
@@ -1148,16 +1309,15 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
             record.mark("toml-saved", toml_sha256=_sha(current), toml_created=created)
             _replace(paths.gateway_toml, candidate, private=created)
         record.mark("registration")
-        _replace(paths.dropin, gateway_dropin().encode("utf-8"))
-        _check(_systemctl(host, "daemon-reload"), "systemctl --user daemon-reload")
+        if project is None:
+            _replace(paths.dropin, gateway_dropin().encode("utf-8"))
+            _check(_systemctl(host, "daemon-reload"), "systemctl --user daemon-reload")
+        else:
+            _compose_env(paths, project, record)
 
     # 6. The gateway, restarted bound.
     if not record.done("gateway-restarted"):
-        _check(_systemctl(host, "restart", GATEWAY_UNIT, timeout=120), f"restarting {GATEWAY_UNIT}")
-        if not _gateway_stays_up(host):
-            raise ConnectError(f"{GATEWAY_UNIT} did not stay up: see "
-                               f"`journalctl --user -u {GATEWAY_UNIT}`. "
-                               "`artzain connect openshell remove` puts everything back")
+        _restart_bound(host, paths, project)
         record.mark("gateway-restarted")
 
     # 7. The self-test.
@@ -1182,6 +1342,108 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
 
 #: How long ``up`` waits for the sidecar to have tried both reports.
 REPORTS_WAIT_SECONDS = 30.0
+
+
+# ---------------------------------------------------------------------------
+# up, under Compose
+# ---------------------------------------------------------------------------
+
+
+def _compose_can_bind(host: Host, paths: Layout, project: compose.Project) -> None:
+    """Before the token is spent, on a project ``up`` has not bound yet: its
+    ``.env`` can take ``COMPOSE_FILE``, and ``docker compose`` from its files
+    and ``.env`` brings the gateway up as it runs now (``up`` recreates it
+    from them, plus its own file)."""
+    env = paths.gateway_env.read_bytes() if paths.gateway_env.is_file() else b""
+    if strip_block(env) is not None:
+        return
+    if compose.sets_compose_file(env.decode("utf-8", "replace")):
+        raise ConnectError(f"{paths.gateway_env} sets COMPOSE_FILE: up adds its own compose "
+                           "file there, in a block of its own. Name the project's files with "
+                           "-f instead, then run this again")
+    if host.environ.get("COMPOSE_FILE"):
+        raise ConnectError("COMPOSE_FILE is set in this shell: docker compose would read it "
+                           f"instead of {paths.gateway_env}, to which up adds its own compose "
+                           "file. Unset it, then run this again")
+    if not project.config_hash or compose.config_hash(host, project, None) != project.config_hash:
+        raise ConnectError(f"docker compose, from {', '.join(project.files)} and "
+                           f"{paths.gateway_env}, would not bring the gateway up as it runs now "
+                           "(it was brought up with other settings: variables set in a shell, "
+                           f"say). Put them in {paths.gateway_env}, run `docker compose up -d` "
+                           f"in {project.directory}, then run this again")
+
+
+def _sidecar_image(host: Host, record: Record, named: str,
+                   out: Callable[[str], None]) -> Tuple[str, str]:
+    """``(image, release)``: the sidecar image of this artzain release as
+    cosign verifies it, by digest (kept in the record, so it is checked once
+    per release), or the image the operator *named* by its digest, which is
+    not checked (release empty)."""
+    from artzain import __version__
+
+    if named:
+        if not compose.pinned(named):
+            raise ConnectError("--sidecar-image must name the image by its digest: "
+                               "name@sha256:<64 hex digits>, or a local image's id, "
+                               "sha256:<64 hex digits>")
+        _say(out, f"the sidecar runs from {named}, which you named: its signature is not "
+                  "checked")
+        return named, ""
+    kept = str(record.data.get("sidecar_image") or "")
+    if record.data.get("sidecar_image_release") == __version__ and compose.pinned(kept):
+        return kept, __version__
+    try:
+        cosign = signed.cosign(host, layout(host).state_dir, lambda m: _say(out, m))
+    except signed.UpgradeError as exc:
+        raise ConnectError(str(exc)) from None
+    _say(out, f"checking the signature of {compose.SIDECAR_IMAGE}:{__version__} with cosign")
+    image = compose.verify_image(host, cosign, __version__)
+    _say(out, f"the sidecar runs from {image}")
+    return image, __version__
+
+
+def _compose_sidecar(host: Host, paths: Layout, project: compose.Project, record: Record, *,
+                     image: str, release: str, config: ConnectConfig, port: int, jwt_key: str,
+                     out: Callable[[str], None]) -> None:
+    """Step 4 under Compose: up's compose file, and the sidecar's container
+    up from it. A file that is not the one this artzain writes (an image of
+    another release, say, after an upgrade) is rewritten, the sidecar is
+    recreated from it, and the gateway, if bound, restarts with it."""
+    text = compose.render(project, image=image, settings=paths.sidecar_env, port=port,
+                          telemetry=config.telemetry, jwt_key=jwt_key or None,
+                          ca_bundle=_settings(paths).get("OPENSHELL_SIDECAR_CA_BUNDLE", ""))
+    current = (paths.compose_file.read_text(encoding="utf-8")
+               if paths.compose_file.is_file() else None)
+    if record.done("sidecar") and current == text:
+        return
+    again = record.done("sidecar")
+    if again:
+        _say(out, f"bringing the sidecar's container up to date ({image})")
+    _replace(paths.compose_file, text.encode("utf-8"))
+    _check(compose.up(host, project, paths.compose_file, compose.SERVICE),
+           f"docker compose up -d {compose.SERVICE}")
+    record.mark("sidecar", sidecar_image=image, sidecar_image_release=release)
+    if again and record.done("gateway-restarted"):
+        _check(compose.up(host, project, paths.compose_file, project.service, recreate=True),
+               f"docker compose up -d {project.service}")
+        if not compose.stays_up(host, project.name, project.service):
+            raise ConnectError(f"the gateway's container did not stay up: see `docker compose "
+                               f"-p {project.name} logs {project.service}`")
+        _compose_gateway_answers(host, project)
+
+
+def _compose_env(paths: Layout, project: compose.Project, record: Record) -> None:
+    """Step 5 under Compose: the project's ``.env`` adds up's file to
+    ``COMPOSE_FILE``, so ``docker compose up -d`` in its folder keeps the
+    gateway bound. Kept first, as ``gateway.toml`` is."""
+    before = paths.gateway_env.read_bytes() if paths.gateway_env.exists() else b""
+    if strip_block(before) is not None:
+        return
+    created = not paths.gateway_env.exists()
+    _replace(paths.compose_env_backup, before, private=True)
+    record.mark("compose-env-saved", compose_env_sha256=_sha(before), compose_env_created=created)
+    _replace(paths.gateway_env, add_block(before, compose.compose_file_line(
+        project, paths.compose_file)), private=created)
 
 
 def _first_reports(host: Host, port: int, token: str) -> Optional[Dict[str, Any]]:
@@ -1296,8 +1558,41 @@ def remove(host: Host, *, keep_credential: bool = False,
     paths = layout(host)
     record = Record.load(paths.record)
     data = record.data
-    result: Dict[str, Any] = {}
+    if data.get("shape") == SHAPE_COMPOSE:
+        result = _unbind_compose(host, paths, data)
+    else:
+        result = _unbind_systemd(host, paths, data)
 
+    revoked = None
+    if data.get("gateway_id") and paths.sidecar_env.exists() and not keep_credential:
+        saved = _saved(paths)
+        revoked = revoke(host, engine_url=str(data.get("engine") or DEFAULT_ENGINE),
+                         gateway_id=data["gateway_id"], credential=saved["COGNEXUS_API_KEY"],
+                         proxy=saved.get("OPENSHELL_SIDECAR_PROXY", ""),
+                         ca_bundle=saved.get("OPENSHELL_SIDECAR_CA_BUNDLE", ""))
+        result["credential"] = "revoked" if revoked else "NOT revoked"
+    if revoked is False:
+        record.mark("revoke-pending")
+        _say(out, f"the engine could not revoke gateway {data['gateway_id']}'s credential; it "
+                  "is kept so that running `remove` again can revoke it")
+        return result
+
+    for path in (paths.sidecar_env, paths.toml_backup, paths.env_backup,
+                 paths.compose_env_backup):
+        if path.exists():
+            path.unlink()
+    if paths.state_dir.exists():
+        shutil.rmtree(paths.state_dir)
+    record.delete()
+    _say(out, "removed: " + ", ".join(f"{k} {v}" for k, v in result.items()) if result
+         else "nothing to remove")
+    return result
+
+
+def _unbind_systemd(host: Host, paths: Layout, data: Mapping[str, Any]) -> Dict[str, Any]:
+    """``remove``'s first half for the deb or rpm gateway: its files back,
+    the gateway restarted unbound, the sidecar's service gone."""
+    result: Dict[str, Any] = {}
     if paths.gateway_toml.exists():
         result["gateway.toml"] = _restore(paths.gateway_toml, paths.toml_backup,
                                           data.get("toml_sha256", ""),
@@ -1324,29 +1619,46 @@ def remove(host: Host, *, keep_credential: bool = False,
     if paths.gateway_env.exists():
         result["gateway.env"] = _restore(paths.gateway_env, paths.env_backup,
                                          data.get("env_sha256", ""), bool(data.get("env_created")))
+    return result
 
-    revoked = None
-    if data.get("gateway_id") and paths.sidecar_env.exists() and not keep_credential:
-        saved = _saved(paths)
-        revoked = revoke(host, engine_url=str(data.get("engine") or DEFAULT_ENGINE),
-                         gateway_id=data["gateway_id"], credential=saved["COGNEXUS_API_KEY"],
-                         proxy=saved.get("OPENSHELL_SIDECAR_PROXY", ""),
-                         ca_bundle=saved.get("OPENSHELL_SIDECAR_CA_BUNDLE", ""))
-        result["credential"] = "revoked" if revoked else "NOT revoked"
-    if revoked is False:
-        record.mark("revoke-pending")
-        _say(out, f"the engine could not revoke gateway {data['gateway_id']}'s credential; it "
-                  "is kept so that running `remove` again can revoke it")
-        return result
 
-    for path in (paths.sidecar_env, paths.toml_backup, paths.env_backup):
-        if path.exists():
-            path.unlink()
-    if paths.state_dir.exists():
-        shutil.rmtree(paths.state_dir)
-    record.delete()
-    _say(out, "removed: " + ", ".join(f"{k} {v}" for k, v in result.items()) if result
-         else "nothing to remove")
+def _unbind_compose(host: Host, paths: Layout, data: Mapping[str, Any]) -> Dict[str, Any]:
+    """``remove``'s first half under Compose: ``gateway.toml`` and ``.env``
+    back, the gateway recreated from the operator's files alone, then the
+    sidecar's container, its volumes and up's compose file gone."""
+    project = compose.recorded(data.get("compose") or {})
+    paths = compose_layout(paths, project)
+    result: Dict[str, Any] = {}
+    if paths.gateway_toml.exists():
+        result["gateway.toml"] = _restore(paths.gateway_toml, paths.toml_backup,
+                                          data.get("toml_sha256", ""),
+                                          bool(data.get("toml_created")))
+    if paths.gateway_env.exists():
+        result[".env"] = _restore(paths.gateway_env, paths.compose_env_backup,
+                                  data.get("compose_env_sha256", ""),
+                                  bool(data.get("compose_env_created")))
+    changed = ("restored", "kept-edits", "removed")
+    state = compose.status(host, project.name, project.service)
+    if state.startswith(("running", "restarting")) and (
+            result.get("gateway.toml") in changed or result.get(".env") in changed):
+        _check(compose.up(host, project, None, project.service),
+               f"docker compose up -d {project.service}")
+        if not compose.stays_up(host, project.name, project.service):
+            raise ConnectError(f"the gateway's container did not come back up unbound: see "
+                               f"`docker compose -p {project.name} logs {project.service}`")
+        result["gateway"] = "recreated unbound"
+    elif state != "missing" and (result.get("gateway.toml") in changed
+                                 or result.get(".env") in changed):
+        # Stopped: recreated unbound and left stopped, so that it no longer
+        # holds the socket's volume, and starts unbound.
+        _check(compose.up(host, project, None, project.service, start=False),
+               f"docker compose up --no-start {project.service}")
+        result["gateway"] = f"recreated unbound, and left {state}"
+    if compose.remove_sidecar(host, project.name):
+        result["sidecar"] = "removed"
+    if paths.compose_file.exists():
+        paths.compose_file.unlink()
+        result["compose file"] = "removed"
     return result
 
 
@@ -1413,11 +1725,20 @@ def _bring_the_settings_up_to_date(paths: Layout, out: Callable[[str], None]) ->
     return True
 
 
-def _sidecar_takes_the_key(host: Host, port: int, token: str) -> bool:
+def _sidecar_takes_the_key(host: Host, port: int, token: str, *,
+                           project: Optional[compose.Project] = None,
+                           compose_file: Optional[Path] = None) -> bool:
     """Restart the sidecar (the gateway, which requires it, restarts with it)
     and wait until it says whether the engine took its heartbeat. True when
-    it did."""
-    _check(_systemctl(host, "restart", SIDECAR_UNIT, timeout=120), f"restarting {SIDECAR_UNIT}")
+    it did. Under Compose the sidecar's container is recreated, to read its
+    settings again, and then the gateway's."""
+    if project is None:
+        _check(_systemctl(host, "restart", SIDECAR_UNIT, timeout=120),
+               f"restarting {SIDECAR_UNIT}")
+    else:
+        for service in (compose.SERVICE, project.service):
+            _check(compose.up(host, project, compose_file, service, recreate=True),
+                   f"docker compose up -d {service}")
     seen: Dict[str, Any] = {}
 
     def heard() -> bool:
@@ -1446,10 +1767,13 @@ def rotate_key(host: Host, *, out: Callable[[str], None] = print) -> Dict[str, A
     if not data.get("connected") or not data.get("gateway_id"):
         raise ConnectError("this host's gateway is not connected: run "
                            "`artzain connect openshell up`")
+    project = (compose.recorded(data.get("compose") or {})
+               if data.get("shape") == SHAPE_COMPOSE else None)
     saved = _saved(paths)
     before = paths.sidecar_env.read_bytes()
     _with_key(before.decode("utf-8"), CREDENTIAL_PREFIX + "0")  # one credential, or stop here
-    unit = sidecar_unit(host, paths)  # one systemd can run, or stop here
+    unit = sidecar_unit(host, paths) if project is None else ""  # one systemd can run
+    restart = {"project": project, "compose_file": paths.compose_file}
     old = saved["COGNEXUS_API_KEY"]
     gateway_id = str(data["gateway_id"])
     route = (str(data.get("engine") or DEFAULT_ENGINE).rstrip("/")
@@ -1484,13 +1808,14 @@ def rotate_key(host: Host, *, out: Callable[[str], None] = print) -> Dict[str, A
              private=True)
     # A sidecar connected before 0.6.37 runs as Type=simple, and the gateway
     # that restarts with it races its socket: its unit is brought up to date.
-    if not paths.sidecar_unit.is_file() or paths.sidecar_unit.read_text(encoding="utf-8") != unit:
+    if project is None and (not paths.sidecar_unit.is_file()
+                            or paths.sidecar_unit.read_text(encoding="utf-8") != unit):
         _replace(paths.sidecar_unit, unit.encode("utf-8"))
         _check(_systemctl(host, "daemon-reload"), "systemctl --user daemon-reload")
     token = saved.get("OPENSHELL_SIDECAR_TOKEN", "")
-    if not _sidecar_takes_the_key(host, port, token):
+    if not _sidecar_takes_the_key(host, port, token, **restart):
         _replace(paths.sidecar_env, before, private=True)
-        _sidecar_takes_the_key(host, port, token)
+        _sidecar_takes_the_key(host, port, token, **restart)
         call("/retire-others", old)
         raise ConnectError("the engine did not take the sidecar's heartbeat with the new "
                            "credential: the sidecar is back on the old credential, and the new "
@@ -1499,7 +1824,12 @@ def rotate_key(host: Host, *, out: Callable[[str], None] = print) -> Dict[str, A
     retired = status == 200
     record.mark("rotated", key_rotated_at=int(host.wall()))
     # The gateway requires the sidecar, so it restarted with it.
-    if not _gateway_stays_up(host):
+    if project is not None:
+        if not compose.stays_up(host, project.name, project.service):
+            raise ConnectError("the credential is rotated, but the gateway's container did not "
+                               f"come back up: see `docker compose -p {project.name} logs "
+                               f"{project.service}`")
+    elif not _gateway_stays_up(host):
         raise ConnectError(f"the credential is rotated, but {GATEWAY_UNIT} did not come back "
                            f"up: see `journalctl --user -u {GATEWAY_UNIT}`")
     _say(out, f"gateway {gateway_id}: the credential is rotated; the sidecar uses the new one"
@@ -1521,8 +1851,31 @@ def status(host: Host) -> Dict[str, Any]:
         record = Record.load(paths.record).data
     except ConnectError as exc:
         record = {"error": str(exc)}
+    project = _recorded_project(record)
+    if project is not None:
+        paths = compose_layout(paths, project)
     toml = paths.gateway_toml.read_bytes() if paths.gateway_toml.exists() else b""
     port = int(record.get("port") or DEFAULT_PORT)
+    if project is not None:
+        env = paths.gateway_env.read_bytes() if paths.gateway_env.is_file() else b""
+        shape: Dict[str, Any] = {
+            "shape": SHAPE_COMPOSE,
+            "compose_project": project.name,
+            "compose_file": paths.compose_file.exists(),
+            "compose_env": strip_block(env) is not None,
+            "sidecar": compose.status(host, project.name, compose.SERVICE),
+            "gateway": compose.status(host, project.name, project.service),
+        }
+    else:
+        shape = {
+            "shape": SHAPE_SYSTEMD_USER,
+            "drop_in": paths.dropin.exists(),
+            "sidecar_unit": paths.sidecar_unit.exists(),
+            "sidecar": (_systemctl(host, "is-active", SIDECAR_UNIT, timeout=10).stdout.strip()
+                        or "unknown"),
+            "gateway": (_systemctl(host, "is-active", GATEWAY_UNIT, timeout=10).stdout.strip()
+                        or "unknown"),
+        }
     return {
         "gateway_id": record.get("gateway_id"),
         "steps": record.get("steps", []),
@@ -1532,11 +1885,8 @@ def status(host: Host) -> Dict[str, Any]:
         or None,
         "credential_saved": paths.sidecar_env.exists(),
         "registration_in_gateway_toml": strip_block(toml) is not None,
-        "drop_in": paths.dropin.exists(),
-        "sidecar_unit": paths.sidecar_unit.exists(),
-        "sidecar": _systemctl(host, "is-active", SIDECAR_UNIT, timeout=10).stdout.strip() or "unknown",
+        **shape,
         "sidecar_answers": host.healthy(port),
-        "gateway": _systemctl(host, "is-active", GATEWAY_UNIT, timeout=10).stdout.strip() or "unknown",
         "record_error": record.get("error"),
         # What the sidecar says the engine took: its last heartbeat and inventory.
         "reports": host.reports(port, _sidecar_token(paths)),
@@ -1755,6 +2105,100 @@ def _engine_time(date: str) -> Optional[float]:
         return None
 
 
+def _doctor_systemd(host: Host, paths: Layout, found: Callable[[str, str, str], None]) -> None:
+    """doctor's checks of the deb's socket and drop-in."""
+    try:
+        socket_stat = host.stat(paths.socket)
+    except OSError:
+        found("socket", "fail", f"{paths.socket} is missing: the sidecar is not serving the "
+                                "gateway")
+    else:
+        problems = []
+        if not stat.S_ISSOCK(socket_stat.st_mode):
+            problems.append("it is not a socket")
+        mode = stat.S_IMODE(socket_stat.st_mode)
+        if mode & 0o077:
+            problems.append(f"it is {mode:04o}, so other users can call the interceptor")
+        if socket_stat.st_uid != host.uid:
+            problems.append("it belongs to another user")
+        try:
+            folder = stat.S_IMODE(host.stat(paths.socket.parent).st_mode)
+        except OSError:
+            problems.append("its folder cannot be read")
+        else:
+            if folder & 0o077:
+                problems.append(f"its folder is {folder:04o}")
+        found("socket", "fail" if problems else "ok",
+              f"{paths.socket}: " + ("; ".join(problems) if problems
+                                     else "the owner's alone, in a folder of the owner's alone"))
+
+    # The drop-in that makes the gateway wait for the sidecar.
+    found("drop_in", "ok" if paths.dropin.is_file() else "fail",
+          f"{paths.dropin} " + ("is in place" if paths.dropin.is_file() else
+                                "is missing: the gateway does not wait for the sidecar"))
+
+
+def _compose_release(host: Host, paths: Layout) -> str:
+    """The OpenShell release of the Compose gateway's image, or empty."""
+    try:
+        project = compose.find(host, paths.compose_file)
+        return compose.version(host, project) if project is not None else ""
+    except ConnectError:
+        return ""
+
+
+def _doctor_compose(host: Host, paths: Layout, project: compose.Project,
+                    running: Mapping[str, Dict[str, Any]],
+                    found: Callable[[str, str, str], None]) -> None:
+    """doctor's checks of the socket, and of the project, under Compose."""
+    sidecar = running.get(compose.SERVICE)
+    said = compose.socket(host, str(sidecar.get("Id"))) if sidecar else None
+    problems = []
+    if said is None:
+        problems.append("the sidecar's container did not say (is it running?)")
+    elif not said.get("socket"):
+        problems.append("it is missing: the sidecar is not serving the gateway")
+    else:
+        is_socket, mode, uid = said["socket"]
+        if not is_socket:
+            problems.append("it is not a socket")
+        if mode & 0o077:
+            problems.append(f"it is {mode:04o}, so other users can call the interceptor")
+        if uid != compose.SIDECAR_UID:
+            problems.append("it does not belong to the sidecar's user")
+        folder = said.get("folder")
+        if not folder or folder[1] & 0o077:
+            problems.append(f"its folder is {folder[1]:04o}" if folder
+                            else "its folder cannot be read")
+    if not compose.mounts_socket(running.get(project.service)):
+        problems.append("the gateway's container does not mount it")
+    found("socket", "fail" if problems else "ok",
+          f"{compose.SOCKET} (volume {compose.SOCKET_VOLUME}): "
+          + ("; ".join(problems) if problems else
+             "the sidecar's alone, and the gateway's container mounts it"))
+
+    # docker compose up -d in the folder, as the operator runs it, keeps the
+    # gateway bound: .env names up's file, and the gateway would come up as
+    # it runs now.
+    env = paths.gateway_env.read_bytes() if paths.gateway_env.is_file() else b""
+    gateway = running.get(project.service) or {}
+    label = ((gateway.get("Config") or {}).get("Labels") or {}).get(
+        "com.docker.compose.config-hash", "")
+    if strip_block(env) is None or not paths.compose_file.is_file():
+        found("compose", "fail", f"{paths.gateway_env} does not add {paths.compose_file} to "
+                                 f"COMPOSE_FILE: the next `docker compose up -d` in "
+                                 f"{project.directory} recreates the gateway without the "
+                                 "sidecar's socket. Run `artzain connect openshell remove`, "
+                                 "then `up` with a new token")
+    elif not label or compose.operator_hash(host, project) != label:
+        found("compose", "fail", f"`docker compose up -d` in {project.directory} would "
+                                 "recreate the gateway otherwise than it runs now: run "
+                                 "`artzain connect openshell up` again")
+    else:
+        found("compose", "ok", f"`docker compose up -d` in {project.directory} keeps the "
+                               "gateway bound")
+
+
 def doctor(host: Host) -> Dict[str, Any]:
     """Check what binds this host's gateway: the record, both services, the
     credential file, the interceptor socket, the drop-in, the registration,
@@ -1788,15 +2232,36 @@ def doctor(host: Host) -> Dict[str, Any]:
     except ConnectError:
         config = None
     port = int(data.get("port") or DEFAULT_PORT)
+    project = None
+    if data.get("shape") == SHAPE_COMPOSE:
+        try:
+            project = compose.recorded(data.get("compose") or {})
+        except ConnectError as exc:
+            found("compose", "fail", str(exc))
+        else:
+            paths = compose_layout(paths, project)
+    running: Dict[str, Dict[str, Any]] = {}
 
     # The two services.
-    state = _systemctl(host, "is-active", GATEWAY_UNIT, timeout=10).stdout.strip() or "unknown"
-    found("gateway", "ok" if state == "active" else "fail", f"{GATEWAY_UNIT} is {state}")
-    state = _systemctl(host, "is-active", SIDECAR_UNIT, timeout=10).stdout.strip() or "unknown"
     answers = host.healthy(port)
-    found("sidecar", "ok" if state == "active" and answers else "fail",
-          f"{SIDECAR_UNIT} is {state}, and "
-          + (f"answers on 127.0.0.1:{port}" if answers else f"nothing answers on 127.0.0.1:{port}"))
+    if project is None:
+        state = _systemctl(host, "is-active", GATEWAY_UNIT, timeout=10).stdout.strip() or "unknown"
+        found("gateway", "ok" if state == "active" else "fail", f"{GATEWAY_UNIT} is {state}")
+        state = _systemctl(host, "is-active", SIDECAR_UNIT, timeout=10).stdout.strip() or "unknown"
+        found("sidecar", "ok" if state == "active" and answers else "fail",
+              f"{SIDECAR_UNIT} is {state}, and "
+              + (f"answers on 127.0.0.1:{port}" if answers
+                 else f"nothing answers on 127.0.0.1:{port}"))
+    else:
+        running = compose.containers(host, project.name)
+        state = compose.status(host, project.name, project.service)
+        found("gateway", "ok" if state.startswith("running") else "fail",
+              f"the gateway's container ({project.service} of project {project.name}) is {state}")
+        state = compose.status(host, project.name, compose.SERVICE)
+        found("sidecar", "ok" if state == "running (healthy)" and answers else "fail",
+              f"the sidecar's container ({compose.SERVICE}) is {state}, and "
+              + (f"answers on 127.0.0.1:{port}" if answers
+                 else f"nothing answers on 127.0.0.1:{port}"))
 
     # The credential file.
     saved: Dict[str, str] = {}
@@ -1819,35 +2284,10 @@ def doctor(host: Host) -> Dict[str, Any]:
                                       "owner's alone")
 
     # The socket the gateway calls the interceptor on.
-    try:
-        socket_stat = host.stat(paths.socket)
-    except OSError:
-        found("socket", "fail", f"{paths.socket} is missing: the sidecar is not serving the "
-                                "gateway")
+    if project is not None:
+        _doctor_compose(host, paths, project, running, found)
     else:
-        problems = []
-        if not stat.S_ISSOCK(socket_stat.st_mode):
-            problems.append("it is not a socket")
-        mode = stat.S_IMODE(socket_stat.st_mode)
-        if mode & 0o077:
-            problems.append(f"it is {mode:04o}, so other users can call the interceptor")
-        if socket_stat.st_uid != host.uid:
-            problems.append("it belongs to another user")
-        try:
-            folder = stat.S_IMODE(host.stat(paths.socket.parent).st_mode)
-        except OSError:
-            problems.append("its folder cannot be read")
-        else:
-            if folder & 0o077:
-                problems.append(f"its folder is {folder:04o}")
-        found("socket", "fail" if problems else "ok",
-              f"{paths.socket}: " + ("; ".join(problems) if problems
-                                     else "the owner's alone, in a folder of the owner's alone"))
-
-    # The drop-in that makes the gateway wait for the sidecar.
-    found("drop_in", "ok" if paths.dropin.is_file() else "fail",
-          f"{paths.dropin} " + ("is in place" if paths.dropin.is_file() else
-                                "is missing: the gateway does not wait for the sidecar"))
+        _doctor_systemd(host, paths, found)
 
     # The registration: what gateway.toml holds, and what the sidecar was
     # installed with.
@@ -1872,9 +2312,13 @@ def doctor(host: Host) -> Dict[str, Any]:
                                         "was installed")
 
     # The OpenShell release against the approved one.
-    done = host.run("openshell-gateway", "--version", timeout=30)
-    version = _VERSION.search((done.stdout or "") + " " + (done.stderr or ""))
-    if done.returncode != 0 or not version:
+    if project is None:
+        done = host.run("openshell-gateway", "--version", timeout=30)
+        version = (_VERSION.search((done.stdout or "") + " " + (done.stderr or ""))
+                   if done.returncode == 0 else None)
+    else:
+        version = _VERSION.fullmatch(_compose_release(host, paths))
+    if not version:
         found("versions", "fail", "openshell-gateway --version did not say its version")
     elif config is None:
         found("versions", "warn", f"the gateway is OpenShell {version.group(0)}; the record "
@@ -1939,6 +2383,10 @@ def doctor(host: Host) -> Dict[str, Any]:
         elif waiting:
             found("reports", "warn", f"the {' and the '.join(waiting)} not yet taken by the "
                                      "engine")
+        elif reports.get("partial") and project is not None and not reports.get("listing_error"):
+            found("reports", "warn", "the last inventory is the sandboxes the sidecar has seen "
+                                     "created: its image has no openshell CLI to list every "
+                                     "sandbox with")
         elif reports.get("partial"):
             error = _word(reports.get("listing_error") or "")
             found("reports", "warn", "the last inventory was not every sandbox"
