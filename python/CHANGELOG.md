@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.6.47
+
+### Added
+
+- **`artzain connect openshell` binds NVIDIA's OpenShell snap**, in both of
+  the snap's gateway modes. In 0.1.3, and in 0.1.4's `system` mode, the
+  gateway is a root service of the snap (`openshell.gateway`, then
+  `openshell.system-gateway`) with its files in `/var/snap/openshell/common`:
+  the sidecar runs as a system service, as the operator, and `up` writes
+  what is root's (its unit, the gateway's drop-ins, `gateway.toml`) through
+  `sudo`. In 0.1.4's `user` mode, a fresh install's default, the gateway is a
+  snap user service with its files under `~/snap/openshell/common`, and the
+  sidecar is a user service. The snap's AppArmor profile lets the gateway
+  connect only inside the snap's own folders, so the sidecar's socket is
+  there (`/var/snap/openshell/common/artzain`, or
+  `/run/user/<uid>/snap.openshell/artzain`). `up` checks the new
+  `gateway.toml` with the gateway's own preflight run inside the snap, puts
+  the telemetry choice in the gateway's drop-in (the snap's gateway reads no
+  `gateway.env`), writes a drop-in for each name the system gateway's app has
+  had (so a refresh from 0.1.3 to 0.1.4 keeps it bound), and holds the
+  snap's refreshes (`snap refresh --hold`), which `remove` lifts when `up`
+  put the hold. The sidecar's unit does not set `NoNewPrivileges`: it lists
+  sandboxes with the snap's CLI, which snap-confine (setuid) starts.
+  `doctor` checks that the snap still runs its gateway in the mode `up`
+  bound (another mode reads another `gateway.toml`, and runs unbound), that
+  its refreshes are held, and whether it was refreshed since.
+
 ## 0.6.46
 
 ### Changed

@@ -1,17 +1,21 @@
 """``artzain connect openshell``: bind an OpenShell gateway on this host to ArtzAIn.
 
-This release handles two gateway shapes:
+This release handles three gateway shapes:
 
 * the deb or rpm package, which runs the gateway as a systemd *user* service
   (``openshell-gateway.service``, ``~/.config/openshell/gateway.toml``);
+* NVIDIA's OpenShell snap, whose gateway runs as a root service of the snap
+  (0.1.3, and 0.1.4's ``system`` mode) or as a snap user service (0.1.4's
+  ``user`` mode). The sidecar runs as a systemd service beside it, and ``up``
+  holds the snap's refreshes (:mod:`artzain.openshell.snap`);
 * NVIDIA's Docker Compose project, which runs it as a Compose service with
   ``gateway.toml`` bind-mounted from the project folder. The sidecar then
   runs as a second service of that project, from the signed sidecar image
   (:mod:`artzain.openshell.compose`).
 
-Homebrew and snap come later, and are refused with a message that says so.
-The steps below are the deb's; :mod:`artzain.openshell.compose` says how the
-Compose shape does each.
+Homebrew comes later, and is refused with a message that says so. The steps
+below are the deb's; :mod:`artzain.openshell.snap` and
+:mod:`artzain.openshell.compose` say how the other shapes do each.
 
 ``up`` takes an enroll token (``ARTZAIN_ENROLL_TOKEN``) and the digest of the
 configuration the operator approved, and then:
@@ -75,7 +79,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from artzain._private_files import private_dir, replace_file, write_private
-from artzain.openshell import compose, install, registration, transport
+from artzain.openshell import compose, install, registration, snap, transport
 from artzain.openshell import upgrade as signed
 
 #: What the configuration a token carries says it is, and the one version
@@ -87,6 +91,7 @@ _CONFIG_KEYS = frozenset({"kind", "version", "decision_url", "openshell_version"
 #: The shapes this release can bind.
 SHAPE_SYSTEMD_USER = "systemd-user"
 SHAPE_COMPOSE = "compose"
+SHAPE_SNAP = "snap"
 
 GATEWAY_UNIT = "openshell-gateway.service"
 SIDECAR_UNIT = "artzain-openshell-sidecar.service"
@@ -147,7 +152,8 @@ class Host:
                  wall: Callable[[], float] = time.time,
                  platform: Optional[str] = None,
                  executable: Optional[str] = None,
-                 uid: Optional[int] = None) -> None:
+                 uid: Optional[int] = None,
+                 gid: Optional[int] = None) -> None:
         self.environ = dict(os.environ if environ is None else environ)
         # The openshell CLI colours its output unless told not to.
         self.environ.setdefault("NO_COLOR", "1")
@@ -167,6 +173,7 @@ class Host:
         self.platform = platform or sys.platform
         self.executable = executable or sys.executable
         self.uid = uid if uid is not None else (os.getuid() if hasattr(os, "getuid") else 0)
+        self.gid = gid if gid is not None else (os.getgid() if hasattr(os, "getgid") else 0)
 
     # paths
     @property
@@ -487,6 +494,29 @@ class Layout:
     record: Path
     state_dir: Path
     socket: Path
+    #: The gateway's systemd unit.
+    gateway_service: str = GATEWAY_UNIT
+    #: The units run under the system manager, and the gateway's files and
+    #: units are root's: ``up`` writes them with ``sudo`` (the snap's system
+    #: gateway).
+    system: bool = False
+    #: Drop-ins beyond ``dropin``: one for each name the gateway's unit has had.
+    more_dropins: Tuple[Path, ...] = ()
+    #: Where ``gateway.toml`` as it would be goes, for the gateway's preflight.
+    trial: Optional[Path] = None
+
+    @property
+    def dropins(self) -> Tuple[Path, ...]:
+        return (self.dropin, *self.more_dropins)
+
+    @property
+    def candidate(self) -> Path:
+        return self.trial or self.artzain_dir / "gateway.toml.candidate"
+
+    @property
+    def root_files(self) -> Tuple[Path, ...]:
+        """The files ``up`` writes as root."""
+        return (self.gateway_toml, self.sidecar_unit, *self.dropins) if self.system else ()
 
     @property
     def toml_backup(self) -> Path:
@@ -535,6 +565,19 @@ def compose_layout(paths: Layout, project: compose.Project) -> Layout:
                    gateway_env=project.directory / ".env", socket=Path(compose.SOCKET))
 
 
+def snap_layout(host: Host, paths: Layout, gateway: snap.Gateway) -> Layout:
+    """Where things are for the snap's gateway: its ``gateway.toml`` and
+    units where the snap's mode keeps them, and the socket where the snap's
+    AppArmor profile lets the gateway connect."""
+    dropins = snap.dropins(host, gateway)
+    return replace(paths, gateway_toml=snap.gateway_toml(host, gateway),
+                   gateway_unit=snap.units(host, gateway) / gateway.unit,
+                   dropin=dropins[0], more_dropins=dropins[1:],
+                   sidecar_unit=snap.sidecar_unit_path(host, gateway),
+                   socket=snap.socket(host, gateway), gateway_service=gateway.unit,
+                   system=gateway.system, trial=snap.candidate(host, gateway))
+
+
 @dataclass(frozen=True)
 class Shape:
     kind: str
@@ -542,6 +585,8 @@ class Shape:
     paths: Layout
     #: The gateway's Compose project, for the Compose shape.
     project: Optional[compose.Project] = None
+    #: The snap's gateway, for the snap shape.
+    snap: Optional[snap.Gateway] = None
 
 
 def receipt_url(engine: Any, decision_id: Any) -> str:
@@ -576,6 +621,8 @@ def _openshell_installed(host: Host, *, install_openshell: bool,
         return  # detect says what is wrong, if anything is
     if host.which("docker") and compose.find(host, layout(host).compose_file) is not None:
         return  # a gateway under Compose: nothing to install on this host
+    if _snap_installed(host):
+        return  # the OpenShell snap: nothing to install beside it
     try:
         plan = install.plan(host)
     except install.InstallError as exc:
@@ -593,6 +640,38 @@ def _openshell_installed(host: Host, *, install_openshell: bool,
         install.install(host, plan, say=lambda message: _say(out, message))
     except install.InstallError as exc:
         raise ConnectError(f"installing OpenShell {install.RELEASE}: {exc}") from None
+
+
+def _snap_installed(host: Host) -> bool:
+    return bool(host.which("snap")) and host.run(
+        "snap", "list", snap.SNAP, timeout=30).returncode == 0
+
+
+def _recorded_snap(host: Host, data: Mapping[str, Any]) -> Optional[snap.Gateway]:
+    """The snap gateway a record names (the one the snap runs now, when it
+    runs one in the same mode), or None."""
+    if data.get("shape") != SHAPE_SNAP:
+        return None
+    try:
+        current = snap.find(host)
+    except ConnectError:
+        current = None
+    try:
+        return snap.recorded(data.get("snap") or {}, current)
+    except ConnectError:
+        return None
+
+
+def _snap_of(host: Host, data: Mapping[str, Any]) -> Optional[snap.Gateway]:
+    """The snap gateway a record names, for a record of the snap shape; None
+    for another shape. Raises when the record's snap facts cannot be read."""
+    if data.get("shape") != SHAPE_SNAP:
+        return None
+    try:
+        current = snap.find(host)
+    except ConnectError:
+        current = None
+    return snap.recorded(data.get("snap") or {}, current)
 
 
 def _recorded_project(data: Mapping[str, Any]) -> Optional[compose.Project]:
@@ -623,18 +702,38 @@ def _compose_shape(host: Host, paths: Layout, project: compose.Project) -> Shape
                  project)
 
 
+def _snap_shape(host: Host, paths: Layout, gateway: snap.Gateway) -> Shape:
+    if host.uid == 0:
+        raise ConnectError("run this as the user who operates the gateway, not as root: "
+                           "`up` uses sudo for what is root's")
+    for tool in ("systemctl", "openshell", *(("sudo",) if gateway.system else ())):
+        if not host.which(tool):
+            raise ConnectError(f"{tool} is not on PATH" + (
+                ": the snap's CLI is /snap/bin/openshell" if tool == "openshell" else ""))
+    return Shape(SHAPE_SNAP, gateway.version, snap_layout(host, paths, gateway), snap=gateway)
+
+
 def detect(host: Host) -> Shape:
     """The gateway on this host, when it is one this release can bind: the
-    deb or rpm package's, or else one under Docker Compose."""
+    deb or rpm package's, else the OpenShell snap's, else one under Docker
+    Compose. A host already bound keeps the shape its record names."""
     if not host.platform.startswith("linux"):
-        raise ConnectError("this release binds the deb, rpm or Compose gateway on Linux only; "
-                           "Homebrew and snap come later")
+        raise ConnectError("this release binds the deb, rpm, snap or Compose gateway on Linux "
+                           "only; Homebrew comes later")
     if sys.version_info < (3, 11):
         raise ConnectError("artzain connect needs Python 3.11 or later (it reads TOML)")
     paths = layout(host)
     packaged = (bool(host.which("systemctl")) and bool(host.which("openshell-gateway"))
                 and paths.gateway_unit.is_file())
     recorded = _recorded_shape(paths)
+    if recorded == SHAPE_SNAP or (not packaged and recorded != SHAPE_COMPOSE):
+        gateway = snap.find(host)
+        if gateway is not None:
+            return _snap_shape(host, paths, gateway)
+    if recorded == SHAPE_SNAP:
+        raise ConnectError("this host's gateway was bound as the OpenShell snap's, and the "
+                           "snap is not installed now: install it again, or run `artzain "
+                           "connect openshell remove`")
     if (not packaged or recorded == SHAPE_COMPOSE) and host.which("docker"):
         project = compose.find(host, paths.compose_file)
         if project is not None:
@@ -649,9 +748,9 @@ def detect(host: Host) -> Shape:
             raise ConnectError(f"{tool} is not on PATH: install OpenShell's deb or rpm package")
     paths = layout(host)
     if not paths.gateway_unit.is_file():
-        raise ConnectError(f"no {GATEWAY_UNIT} user unit, and no OpenShell gateway under "
-                           "Docker Compose: this is not a deb or rpm gateway, nor one under "
-                           "Compose (Homebrew and snap come later)")
+        raise ConnectError(f"no {GATEWAY_UNIT} user unit, no OpenShell snap, and no "
+                           "OpenShell gateway under Docker Compose: this is not a deb, rpm, "
+                           "snap or Compose gateway (Homebrew comes later)")
     if paths.gateway_toml.exists() and not paths.gateway_toml.is_file():
         raise ConnectError(f"{paths.gateway_toml} is not a file")
     done = host.run("openshell-gateway", "--version", timeout=30)
@@ -729,7 +828,8 @@ def strip_block(current: bytes) -> Optional[bytes]:
     return (head + tail).encode("utf-8")
 
 
-def _restore(path: Path, backup: Path, before_sha: str, created: bool) -> str:
+def _restore(path: Path, backup: Path, before_sha: str, created: bool, *,
+             host: Optional[Host] = None, paths: Optional[Layout] = None) -> str:
     """Put *path* back as it was before ``up``. Returns what happened:
 
     * ``restored``: nothing but the block changed since, so the saved copy
@@ -741,18 +841,30 @@ def _restore(path: Path, backup: Path, before_sha: str, created: bool) -> str:
     """
     if not path.exists():
         return "missing"
-    stripped = strip_block(path.read_bytes())
+    root = host is not None and paths is not None and path in paths.root_files
+
+    def write(data: bytes) -> None:
+        if root:
+            _put(host, paths, path, data)
+        else:
+            _replace(path, data)
+
+    current = _read(host, paths, path) if root else path.read_bytes()
+    stripped = strip_block(current or b"")
     if stripped is None:
         return "no-block"
     saved = backup.read_bytes() if backup.is_file() else None
     if saved is not None and _sha(saved) == before_sha and stripped == strip_block(
             add_block(saved, "")):
         if created and not saved:
-            path.unlink()
+            if root:
+                _drop(host, paths, path)
+            else:
+                path.unlink()
             return "removed"
-        _replace(path, saved)
+        write(saved)
         return "restored"
-    _replace(path, stripped)
+    write(stripped)
     return "kept-edits"
 
 
@@ -926,6 +1038,41 @@ def sidecar_unit(host: Host, paths: Layout) -> str:
     )
 
 
+def _snap_jwt(host: Host, gateway: snap.Gateway,
+              toml_text: str) -> Tuple[Dict[str, str], Optional[Path]]:
+    """The settings that let the sidecar check the snap gateway's signed
+    calls, and the key's own path (which the system sidecar's unit copies):
+    the key ``gateway.toml`` names, or else the bundle the snap generates."""
+    named = _jwt_settings(toml_text)
+    if named:
+        key, gateway_id = Path(named["OPENSHELL_JWT_PUBLIC_KEY"]), named["OPENSHELL_JWT_GATEWAY_ID"]
+        if gateway.system:
+            # The path is the snap's, as the gateway sees it: the same on the host.
+            key = host.system(key.as_posix())
+    else:
+        key, gateway_id = snap.jwt_key(host, gateway), snap.JWT_GATEWAY_ID
+        there = (host.run("sudo", "test", "-s", key.as_posix(), timeout=30).returncode == 0
+                 if gateway.system else key.is_file())
+        if not there:
+            return {}, None
+    sidecar_key = snap.sidecar_jwt(host, gateway, key)
+    if _UNSAFE.search(sidecar_key.as_posix()) or _UNSAFE.search(gateway_id):
+        return {}, None
+    return ({"OPENSHELL_JWT_PUBLIC_KEY": sidecar_key.as_posix(),
+             "OPENSHELL_JWT_GATEWAY_ID": gateway_id}, key)
+
+
+def _unit(host: Host, paths: Layout, gateway: Optional[snap.Gateway],
+          key: Optional[Path] = None) -> str:
+    """The sidecar's unit for this shape."""
+    if gateway is None:
+        return sidecar_unit(host, paths)
+    python = host.executable
+    if not python.startswith("/"):
+        raise ConnectError("the Python running artzain has a path a systemd unit cannot name")
+    return snap.sidecar_unit(host, gateway, python=python, settings=paths.sidecar_env, key=key)
+
+
 def gateway_dropin() -> str:
     return (
         "# Written by `artzain connect openshell up`; `artzain connect openshell remove`\n"
@@ -1017,6 +1164,55 @@ def _systemctl(host: Host, *args: str, timeout: float = 60.0) -> subprocess.Comp
     return host.run("systemctl", "--user", *args, timeout=timeout)
 
 
+def _ctl(host: Host, paths: Optional[Layout], *args: str,
+         timeout: float = 60.0) -> subprocess.CompletedProcess:
+    """``systemctl`` on the manager *paths*' units run under: the user's, or
+    the system's (through ``sudo``, but for what only reads)."""
+    if paths is None or not paths.system:
+        return _systemctl(host, *args, timeout=timeout)
+    if args and args[0] in ("is-active", "show"):
+        return host.run("systemctl", *args, timeout=timeout)
+    return host.run("sudo", "systemctl", *args, timeout=timeout)
+
+
+def _reload(host: Host, paths: Optional[Layout]) -> None:
+    system = paths is not None and paths.system
+    _check(_ctl(host, paths, "daemon-reload"),
+           "systemctl daemon-reload" if system else "systemctl --user daemon-reload")
+
+
+def _journal(paths: Optional[Layout], unit: str) -> str:
+    """The command that shows *unit*'s log."""
+    return (f"`journalctl -u {unit}`" if paths is not None and paths.system
+            else f"`journalctl --user -u {unit}`")
+
+
+def _put(host: Host, paths: Layout, path: Path, data: bytes, *, private: bool = False) -> None:
+    """Write *path* whole: as root, through ``sudo``, when it is one of the
+    files of root's that *paths* names."""
+    if path in paths.root_files:
+        snap.put(host, path, data, mode=path.stat().st_mode & 0o777 if path.exists() else 0o644)
+    else:
+        _replace(path, data, private=private)
+
+
+def _drop(host: Host, paths: Layout, path: Path) -> bool:
+    """Remove *path*; True when it was there."""
+    if path in paths.root_files:
+        return snap.delete(host, path)
+    if not path.exists():
+        return False
+    path.unlink()
+    return True
+
+
+def _read(host: Host, paths: Layout, path: Path) -> Optional[bytes]:
+    """*path*'s bytes, or None when there is no such file."""
+    if path in paths.root_files:
+        return snap.read(host, path)
+    return path.read_bytes() if path.is_file() else None
+
+
 def _check(done: subprocess.CompletedProcess, what: str) -> None:
     if done.returncode != 0:
         detail = (done.stderr or done.stdout or "").strip().splitlines()[-1:] or [""]
@@ -1033,11 +1229,13 @@ def _wait(host: Host, seconds: float, test: Callable[[], bool]) -> bool:
         host.sleep(0.5)
 
 
-def _gateway_stays_up(host: Host) -> bool:
+def _gateway_stays_up(host: Host, paths: Optional[Layout] = None) -> bool:
     """Active, and still active a few seconds later: a gateway that cannot
     reach its interceptor exits at start and is restarted every 5 s."""
+    unit = paths.gateway_service if paths is not None else GATEWAY_UNIT
+
     def active() -> bool:
-        return _systemctl(host, "is-active", GATEWAY_UNIT, timeout=10).stdout.strip() == "active"
+        return _ctl(host, paths, "is-active", unit, timeout=10).stdout.strip() == "active"
 
     if not _wait(host, 30, active):
         return False
@@ -1064,12 +1262,25 @@ def _setting(host: Host, value: str) -> subprocess.CompletedProcess:
                     "--value", value, "--yes", timeout=60)
 
 
-def _cli_reaches_the_gateway(host: Host, *, under_compose: bool = False) -> None:
+#: How the snap's gateway is started, and its CLI registered with it, by mode.
+_SNAP_REGISTER = {
+    snap.MODE_SYSTEM: ("sudo snap start openshell", "copy its client certificate to you as "
+                       "NVIDIA's snap instructions say (from /var/snap/openshell/common/tls), "
+                       "then openshell gateway add https://127.0.0.1:17670 --local --name "
+                       "openshell"),
+    snap.MODE_USER: ("systemctl --user start snap.openshell.user-gateway.service",
+                     "openshell gateway add https://127.0.0.1:17670 --local --name openshell"),
+}
+
+
+def _cli_reaches_the_gateway(host: Host, *, under_compose: bool = False,
+                             snap_mode: str = "") -> None:
     """Raise :class:`ConnectError` unless the ``openshell`` CLI can talk to
     the gateway: every step after the redeem needs it."""
     done = host.run("openshell", "settings", "get", "--global", timeout=60)
     if done.returncode != 0:
-        start, register = ((f"systemctl --user start {GATEWAY_UNIT}",
+        start, register = (_SNAP_REGISTER[snap_mode] if snap_mode else
+                           (f"systemctl --user start {GATEWAY_UNIT}",
                             "openshell gateway add https://127.0.0.1:17670 --local "
                             "--name openshell") if not under_compose else
                            ("docker compose up -d, in its folder",
@@ -1102,10 +1313,15 @@ def self_test(host: Host) -> str:
     return found.group(1)
 
 
-def _preflight(host: Host, project: Optional[compose.Project], trial: Path) -> None:
+def _preflight(host: Host, project: Optional[compose.Project], trial: Path,
+               gateway: Optional[snap.Gateway] = None) -> None:
     """The gateway's own ``config preflight`` on *trial*: the package's
-    binary, or under Compose a throwaway container of the gateway's image."""
-    if project is None:
+    binary, the snap's own run inside the snap, or under Compose a
+    throwaway container of the gateway's image."""
+    if gateway is not None:
+        _check(snap.preflight(host, gateway, trial),
+               "openshell-gateway config preflight (inside the snap)")
+    elif project is None:
         _check(host.run("openshell-gateway", "config", "preflight", "--path",
                         trial.as_posix(), timeout=60),
                "openshell-gateway config preflight")
@@ -1118,11 +1334,13 @@ def _restart_bound(host: Host, paths: Layout, project: Optional[compose.Project]
     """``up``'s step 6: the gateway restarted with its registration (under
     Compose, recreated from the project's files and up's), and up to stay."""
     if project is None:
-        _check(_systemctl(host, "restart", GATEWAY_UNIT, timeout=120),
-               f"restarting {GATEWAY_UNIT}")
-        if not _gateway_stays_up(host):
-            raise ConnectError(f"{GATEWAY_UNIT} did not stay up: see "
-                               f"`journalctl --user -u {GATEWAY_UNIT}`. "
+        unit = paths.gateway_service
+        if paths.system:
+            # Five failed starts in a row leave the unit failed until reset.
+            _ctl(host, paths, "reset-failed", unit, timeout=30)
+        _check(_ctl(host, paths, "restart", unit, timeout=120), f"restarting {unit}")
+        if not _gateway_stays_up(host, paths):
+            raise ConnectError(f"{unit} did not stay up: see {_journal(paths, unit)}. "
                                "`artzain connect openshell remove` puts everything back")
         return
     _check(compose.up(host, project, paths.compose_file, project.service),
@@ -1163,10 +1381,10 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
     it, or from *sidecar_image* when that names one by its digest."""
     _openshell_installed(host, install_openshell=install_openshell, ask=ask, out=out)
     shape = detect(host)
-    paths, project = shape.paths, shape.project
+    paths, project, gateway = shape.paths, shape.project, shape.snap
     if project is None and sidecar_image:
-        raise ConnectError("--sidecar-image is for a gateway under Compose: this one is the deb "
-                           "or rpm package's, and its sidecar runs from this artzain")
+        raise ConnectError("--sidecar-image is for a gateway under Compose: this one is not, "
+                           "and its sidecar runs from this artzain")
     if project is None and "/.cache/uv/" in host.executable.replace("\\", "/"):
         raise ConnectError("artzain is running from a temporary uv environment, which the "
                            "sidecar service cannot keep using: install it first, "
@@ -1183,10 +1401,14 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
         # Before the token is spent: a file the block cannot go into stops here,
         # and so does a CLI that cannot reach the gateway.
         check_gateway_toml(paths, toml_text)
-        _cli_reaches_the_gateway(host, under_compose=project is not None)
+        _cli_reaches_the_gateway(host, under_compose=project is not None,
+                                 snap_mode=gateway.mode if gateway else "")
     signer: Optional[Tuple[str, str]] = None
     image, release, endpoint = "", "", ""
-    if project is None:
+    key: Optional[Path] = None
+    if gateway is not None:
+        jwt, key = _snap_jwt(host, gateway, toml_text)
+    elif project is None:
         jwt = _jwt_settings(toml_text, host)
     else:
         # Also before the token: the project takes up's file, the gateway's
@@ -1213,7 +1435,7 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
         # stand-ins for what the engine will send: a value systemd cannot
         # carry stops here, while the token is still unspent.
         if project is None:
-            sidecar_unit(host, paths)
+            _unit(host, paths, gateway, key)
         sidecar_environment(host, paths, "gw_" + "0" * 26, CREDENTIAL_PREFIX + "0",
                             ConnectConfig("https://engine.invalid", "0.0.0"),
                             registration_digest="0" * 64, port=port, proxy=proxy,
@@ -1229,8 +1451,8 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
             token=secrets.token_urlsafe(32), container=project is not None,
             gateway_endpoint=endpoint).encode("utf-8"),
             private=True)
-        shape_facts = ({} if project is None else
-                       {"shape": SHAPE_COMPOSE, "compose": project.facts()})
+        shape_facts = ({"shape": SHAPE_COMPOSE, "compose": project.facts()} if project else
+                       {"shape": SHAPE_SNAP, "snap": gateway.facts()} if gateway else {})
         record.mark("redeemed", gateway_id=gateway_id, config=got.raw_config,
                     engine=engine.rstrip("/"), port=int(port), **shape_facts)
         _say(out, f"gateway {gateway_id}: credential saved to {paths.sidecar_env}")
@@ -1247,10 +1469,17 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
     if not record.done("approval-manual"):
         _check(_setting(host, "manual"), f"setting {SELF_TEST_KEY} to manual")
         record.mark("approval-manual")
+    if gateway is not None and not record.done("refresh-held"):
+        # The snap stays this OpenShell release until the operator moves it.
+        if not gateway.held:
+            _check(snap.hold(host), f"holding the {snap.SNAP} snap's refreshes "
+                                    f"(sudo snap refresh --hold {snap.SNAP})")
+        record.mark("refresh-held", refresh_held_by_up=not gateway.held)
 
     # 3. The gateway's telemetry choice, in the file its unit reads. (Under
-    # Compose it is in up's compose file, step 4.)
-    if project is None and not record.done("gateway-env"):
+    # Compose it is in up's compose file, step 4; for the snap, in the
+    # gateway's drop-in, step 5.)
+    if project is None and gateway is None and not record.done("gateway-env"):
         before = paths.gateway_env.read_bytes() if paths.gateway_env.exists() else b""
         created = not paths.gateway_env.exists()
         if strip_block(before) is None:
@@ -1264,62 +1493,22 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
     # another environment (the 0.6.41 connect script installs into one of
     # its own), and the settings step 1 added. One restart for both; the
     # gateway, which requires it, restarts with it.
-    unit = sidecar_unit(host, paths) if project is None else ""
     if project is not None:
         _compose_sidecar(host, paths, project, record, image=image, release=release,
                          config=config, port=int(record.data.get("port", port)),
                          jwt_key=signer[0] if signer else "", settings_changed=settings_changed,
                          out=out)
-    elif not record.done("sidecar"):
-        _replace(paths.sidecar_unit, unit.encode("utf-8"))
-        private_dir(paths.state_dir)
-        _check(_systemctl(host, "daemon-reload"), "systemctl --user daemon-reload")
-        _check(_systemctl(host, "enable", "--now", SIDECAR_UNIT), f"starting {SIDECAR_UNIT}")
-        record.mark("sidecar")
     else:
-        stale = (not paths.sidecar_unit.is_file()
-                 or paths.sidecar_unit.read_text(encoding="utf-8") != unit)
-        if stale:
-            _replace(paths.sidecar_unit, unit.encode("utf-8"))
-            _check(_systemctl(host, "daemon-reload"), "systemctl --user daemon-reload")
-        if stale or settings_changed:
-            _say(out, f"restarting {SIDECAR_UNIT} to take "
-                      + " and ".join(what for what, now in (("its new unit", stale),
-                                                            ("its new settings", settings_changed))
-                                     if now))
-            _check(_systemctl(host, "restart", SIDECAR_UNIT, timeout=120),
-                   f"restarting {SIDECAR_UNIT}")
-            if not _gateway_stays_up(host):
-                raise ConnectError(f"{GATEWAY_UNIT} did not stay up: see "
-                                   f"`journalctl --user -u {GATEWAY_UNIT}`")
+        _sidecar_service(host, paths, record, _unit(host, paths, gateway, key),
+                         settings_changed=settings_changed, out=out)
     if not _wait(host, 30, lambda: host.healthy(int(record.data.get("port", port)))):
         raise ConnectError("the sidecar did not answer within 30 s: see "
-                           + (f"`journalctl --user -u {SIDECAR_UNIT}`" if project is None else
+                           + (_journal(paths, SIDECAR_UNIT) if project is None else
                               f"`docker compose -p {project.name} logs {compose.SERVICE}`"))
 
     # 5. The registration, checked by the gateway's own preflight first.
     if not record.done("registration"):
-        created = not paths.gateway_toml.exists()
-        current = b"" if created else paths.gateway_toml.read_bytes()
-        if strip_block(current) is None:
-            text = registration_text(paths, config, current.decode("utf-8"))
-            candidate = add_block(current, text)
-            trial = paths.artzain_dir / "gateway.toml.candidate"
-            _replace(trial, candidate, private=True)
-            try:
-                _preflight(host, project, trial)
-            finally:
-                if trial.exists():
-                    trial.unlink()
-            _replace(paths.toml_backup, current, private=True)
-            record.mark("toml-saved", toml_sha256=_sha(current), toml_created=created)
-            _replace(paths.gateway_toml, candidate, private=created)
-        record.mark("registration")
-        if project is None:
-            _replace(paths.dropin, gateway_dropin().encode("utf-8"))
-            _check(_systemctl(host, "daemon-reload"), "systemctl --user daemon-reload")
-        else:
-            _compose_env(paths, project, record)
+        _register(host, paths, project, gateway, record, config)
 
     # 6. The gateway, restarted bound.
     if not record.done("gateway-restarted"):
@@ -1348,6 +1537,67 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
 
 #: How long ``up`` waits for the sidecar to have tried both reports.
 REPORTS_WAIT_SECONDS = 30.0
+
+
+def _sidecar_service(host: Host, paths: Layout, record: Record, unit: str, *,
+                     settings_changed: bool, out: Callable[[str], None]) -> None:
+    """``up``'s step 4 for a systemd gateway (the package's or the snap's):
+    the sidecar's unit, enabled and started; or, when it already runs, its
+    unit and settings brought up to date, with one restart for both (the
+    gateway, which requires it, restarts with it)."""
+    if not record.done("sidecar"):
+        _put(host, paths, paths.sidecar_unit, unit.encode("utf-8"))
+        private_dir(paths.state_dir)
+        _reload(host, paths)
+        _check(_ctl(host, paths, "enable", "--now", SIDECAR_UNIT), f"starting {SIDECAR_UNIT}")
+        record.mark("sidecar")
+        return
+    now = _read(host, paths, paths.sidecar_unit)
+    stale = now is None or now.decode("utf-8") != unit
+    if stale:
+        _put(host, paths, paths.sidecar_unit, unit.encode("utf-8"))
+        _reload(host, paths)
+    if stale or settings_changed:
+        _say(out, f"restarting {SIDECAR_UNIT} to take "
+                  + " and ".join(what for what, changed in (("its new unit", stale),
+                                                            ("its new settings", settings_changed))
+                                 if changed))
+        _check(_ctl(host, paths, "restart", SIDECAR_UNIT, timeout=120),
+               f"restarting {SIDECAR_UNIT}")
+        if not _gateway_stays_up(host, paths):
+            raise ConnectError(f"{paths.gateway_service} did not stay up: see "
+                               f"{_journal(paths, paths.gateway_service)}")
+
+
+def _register(host: Host, paths: Layout, project: Optional[compose.Project],
+              gateway: Optional[snap.Gateway], record: Record, config: ConnectConfig) -> None:
+    """``up``'s step 5: the registration added to ``gateway.toml`` once the
+    gateway's own preflight passed on the result, and the gateway's unit made
+    to require the sidecar (under Compose, ``.env`` made to name up's file)."""
+    current = _read(host, paths, paths.gateway_toml)
+    created = current is None
+    current = current or b""
+    if strip_block(current) is None:
+        text = registration_text(paths, config, current.decode("utf-8"))
+        candidate = add_block(current, text)
+        trial = paths.candidate
+        _replace(trial, candidate, private=True)
+        try:
+            _preflight(host, project, trial, gateway)
+        finally:
+            if trial.exists():
+                trial.unlink()
+        _replace(paths.toml_backup, current, private=True)
+        record.mark("toml-saved", toml_sha256=_sha(current), toml_created=created)
+        _put(host, paths, paths.gateway_toml, candidate, private=created and not paths.system)
+    record.mark("registration")
+    if project is not None:
+        _compose_env(paths, project, record)
+        return
+    text = snap.dropin(config.telemetry) if gateway is not None else gateway_dropin()
+    for dropin in paths.dropins:
+        _put(host, paths, dropin, text.encode("utf-8"))
+    _reload(host, paths)
 
 
 # ---------------------------------------------------------------------------
@@ -1590,7 +1840,9 @@ def remove(host: Host, *, keep_credential: bool = False,
     if data.get("shape") == SHAPE_COMPOSE:
         result = _unbind_compose(host, paths, data)
     else:
-        result = _unbind_systemd(host, paths, data)
+        gateway = _snap_of(host, data)
+        result = _unbind_systemd(host, snap_layout(host, paths, gateway) if gateway else paths,
+                                 data, gateway)
 
     revoked = None
     if data.get("gateway_id") and paths.sidecar_env.exists() and not keep_credential:
@@ -1618,36 +1870,54 @@ def remove(host: Host, *, keep_credential: bool = False,
     return result
 
 
-def _unbind_systemd(host: Host, paths: Layout, data: Mapping[str, Any]) -> Dict[str, Any]:
-    """``remove``'s first half for the deb or rpm gateway: its files back,
-    the gateway restarted unbound, the sidecar's service gone."""
+def _unbind_systemd(host: Host, paths: Layout, data: Mapping[str, Any],
+                    gateway: Optional[snap.Gateway] = None) -> Dict[str, Any]:
+    """``remove``'s first half for the deb or rpm gateway, or the snap's: its
+    files back, the gateway restarted unbound, the sidecar's service gone,
+    and the snap's refreshes no longer held when ``up`` held them."""
     result: Dict[str, Any] = {}
+    unit = paths.gateway_service
     if paths.gateway_toml.exists():
         result["gateway.toml"] = _restore(paths.gateway_toml, paths.toml_backup,
                                           data.get("toml_sha256", ""),
-                                          bool(data.get("toml_created")))
-    if paths.dropin.exists():
-        paths.dropin.unlink()
-        result["drop-in"] = "removed"
-    _systemctl(host, "daemon-reload")
-    if _systemctl(host, "is-active", GATEWAY_UNIT, timeout=10).stdout.strip() in (
+                                          bool(data.get("toml_created")), host=host, paths=paths)
+    for dropin in paths.dropins:
+        if _drop(host, paths, dropin):
+            result["drop-in"] = "removed"
+    _ctl(host, paths, "daemon-reload")
+    if _ctl(host, paths, "is-active", unit, timeout=10).stdout.strip() in (
             "active", "activating", "failed") and result.get("gateway.toml") in (
             "restored", "kept-edits", "removed"):
-        _check(_systemctl(host, "restart", GATEWAY_UNIT, timeout=120), f"restarting {GATEWAY_UNIT}")
-        if not _gateway_stays_up(host):
-            raise ConnectError(f"{GATEWAY_UNIT} did not come back up unbound: see "
-                               f"`journalctl --user -u {GATEWAY_UNIT}`")
+        if paths.system:
+            _ctl(host, paths, "reset-failed", unit, timeout=30)
+        _check(_ctl(host, paths, "restart", unit, timeout=120), f"restarting {unit}")
+        if not _gateway_stays_up(host, paths):
+            raise ConnectError(f"{unit} did not come back up unbound: see "
+                               f"{_journal(paths, unit)}")
         result["gateway"] = "restarted unbound"
 
-    _systemctl(host, "disable", "--now", SIDECAR_UNIT)
-    if paths.sidecar_unit.exists():
-        paths.sidecar_unit.unlink()
+    _ctl(host, paths, "disable", "--now", SIDECAR_UNIT)
+    if _drop(host, paths, paths.sidecar_unit):
         result["sidecar"] = "removed"
-    _systemctl(host, "daemon-reload")
+    _ctl(host, paths, "daemon-reload")
 
-    if paths.gateway_env.exists():
-        result["gateway.env"] = _restore(paths.gateway_env, paths.env_backup,
-                                         data.get("env_sha256", ""), bool(data.get("env_created")))
+    if gateway is None:
+        if paths.gateway_env.exists():
+            result["gateway.env"] = _restore(paths.gateway_env, paths.env_backup,
+                                             data.get("env_sha256", ""),
+                                             bool(data.get("env_created")))
+        return result
+    where = paths.socket.parent
+    if where.exists():
+        if paths.system:  # a folder of the operator's, in the snap's folder of root's
+            host.run("sudo", "rm", "-rf", "--", where.as_posix(), timeout=30)
+        else:
+            shutil.rmtree(where, ignore_errors=True)
+        result["socket folder"] = "removed"
+    if data.get("refresh_held_by_up"):
+        lifted = snap.unhold(host).returncode == 0
+        result["refresh hold"] = ("lifted" if lifted else
+                                  f"NOT lifted: run `sudo snap refresh --unhold {snap.SNAP}`")
     return result
 
 
@@ -1756,13 +2026,14 @@ def _bring_the_settings_up_to_date(paths: Layout, out: Callable[[str], None]) ->
 
 def _sidecar_takes_the_key(host: Host, port: int, token: str, *,
                            project: Optional[compose.Project] = None,
-                           compose_file: Optional[Path] = None) -> bool:
+                           compose_file: Optional[Path] = None,
+                           paths: Optional[Layout] = None) -> bool:
     """Restart the sidecar (the gateway, which requires it, restarts with it)
     and wait until it says whether the engine took its heartbeat. True when
     it did. Under Compose the sidecar's container is recreated, to read its
     settings again, and then the gateway's."""
     if project is None:
-        _check(_systemctl(host, "restart", SIDECAR_UNIT, timeout=120),
+        _check(_ctl(host, paths, "restart", SIDECAR_UNIT, timeout=120),
                f"restarting {SIDECAR_UNIT}")
     else:
         for service in (compose.SERVICE, project.service):
@@ -1798,11 +2069,17 @@ def rotate_key(host: Host, *, out: Callable[[str], None] = print) -> Dict[str, A
                            "`artzain connect openshell up`")
     project = (compose.recorded(data.get("compose") or {})
                if data.get("shape") == SHAPE_COMPOSE else None)
+    gateway = _snap_of(host, data)
+    key: Optional[Path] = None
+    if gateway is not None:
+        paths = snap_layout(host, paths, gateway)
+        _jwt, key = _snap_jwt(host, gateway,
+                              (_read(host, paths, paths.gateway_toml) or b"").decode("utf-8"))
     saved = _saved(paths)
     before = paths.sidecar_env.read_bytes()
     _with_key(before.decode("utf-8"), CREDENTIAL_PREFIX + "0")  # one credential, or stop here
-    unit = sidecar_unit(host, paths) if project is None else ""  # one systemd can run
-    restart = {"project": project, "compose_file": paths.compose_file}
+    unit = _unit(host, paths, gateway, key) if project is None else ""  # one systemd can run
+    restart = {"project": project, "compose_file": paths.compose_file, "paths": paths}
     old = saved["COGNEXUS_API_KEY"]
     gateway_id = str(data["gateway_id"])
     route = (str(data.get("engine") or DEFAULT_ENGINE).rstrip("/")
@@ -1837,10 +2114,9 @@ def rotate_key(host: Host, *, out: Callable[[str], None] = print) -> Dict[str, A
              private=True)
     # A sidecar connected before 0.6.37 runs as Type=simple, and the gateway
     # that restarts with it races its socket: its unit is brought up to date.
-    if project is None and (not paths.sidecar_unit.is_file()
-                            or paths.sidecar_unit.read_text(encoding="utf-8") != unit):
-        _replace(paths.sidecar_unit, unit.encode("utf-8"))
-        _check(_systemctl(host, "daemon-reload"), "systemctl --user daemon-reload")
+    if project is None and (_read(host, paths, paths.sidecar_unit) or b"") != unit.encode("utf-8"):
+        _put(host, paths, paths.sidecar_unit, unit.encode("utf-8"))
+        _reload(host, paths)
     token = saved.get("OPENSHELL_SIDECAR_TOKEN", "")
     if not _sidecar_takes_the_key(host, port, token, **restart):
         _replace(paths.sidecar_env, before, private=True)
@@ -1858,9 +2134,9 @@ def rotate_key(host: Host, *, out: Callable[[str], None] = print) -> Dict[str, A
             raise ConnectError("the credential is rotated, but the gateway's container did not "
                                f"come back up: see `docker compose -p {project.name} logs "
                                f"{project.service}`")
-    elif not _gateway_stays_up(host):
-        raise ConnectError(f"the credential is rotated, but {GATEWAY_UNIT} did not come back "
-                           f"up: see `journalctl --user -u {GATEWAY_UNIT}`")
+    elif not _gateway_stays_up(host, paths):
+        raise ConnectError(f"the credential is rotated, but {paths.gateway_service} did not "
+                           f"come back up: see {_journal(paths, paths.gateway_service)}")
     _say(out, f"gateway {gateway_id}: the credential is rotated; the sidecar uses the new one"
               + (", and the old one is revoked" if retired else
                  f". The engine did not revoke the old one (HTTP {status}): run "
@@ -1881,9 +2157,12 @@ def status(host: Host) -> Dict[str, Any]:
     except ConnectError as exc:
         record = {"error": str(exc)}
     project = _recorded_project(record)
+    gateway = _recorded_snap(host, record)
     if project is not None:
         paths = compose_layout(paths, project)
-    toml = paths.gateway_toml.read_bytes() if paths.gateway_toml.exists() else b""
+    elif gateway is not None:
+        paths = snap_layout(host, paths, gateway)
+    toml = _read(host, paths, paths.gateway_toml) or b""
     port = int(record.get("port") or DEFAULT_PORT)
     if project is not None:
         env = paths.gateway_env.read_bytes() if paths.gateway_env.is_file() else b""
@@ -1894,6 +2173,23 @@ def status(host: Host) -> Dict[str, Any]:
             "compose_env": strip_block(env) is not None,
             "sidecar": compose.status(host, project.name, compose.SERVICE),
             "gateway": compose.status(host, project.name, project.service),
+        }
+    elif gateway is not None:
+        try:
+            current: Optional[snap.Gateway] = snap.find(host)
+        except ConnectError:
+            current = None
+        shape = {
+            "shape": SHAPE_SNAP,
+            "snap_mode": gateway.mode,
+            "snap_revision": current.revision if current else None,
+            "refresh_held": current.held if current else None,
+            "drop_in": all(dropin.exists() for dropin in paths.dropins),
+            "sidecar_unit": paths.sidecar_unit.exists(),
+            "sidecar": (_ctl(host, paths, "is-active", SIDECAR_UNIT, timeout=10).stdout.strip()
+                        or "unknown"),
+            "gateway": (_ctl(host, paths, "is-active", gateway.unit, timeout=10).stdout.strip()
+                        or "unknown"),
         }
     else:
         shape = {
@@ -2135,7 +2431,8 @@ def _engine_time(date: str) -> Optional[float]:
 
 
 def _doctor_systemd(host: Host, paths: Layout, found: Callable[[str, str, str], None]) -> None:
-    """doctor's checks of the deb's socket and drop-in."""
+    """doctor's checks of the socket and drop-in of the deb's gateway, or the
+    snap's."""
     try:
         socket_stat = host.stat(paths.socket)
     except OSError:
@@ -2162,9 +2459,96 @@ def _doctor_systemd(host: Host, paths: Layout, found: Callable[[str, str, str], 
                                      else "the owner's alone, in a folder of the owner's alone"))
 
     # The drop-in that makes the gateway wait for the sidecar.
-    found("drop_in", "ok" if paths.dropin.is_file() else "fail",
-          f"{paths.dropin} " + ("is in place" if paths.dropin.is_file() else
-                                "is missing: the gateway does not wait for the sidecar"))
+    missing = [dropin for dropin in paths.dropins if not dropin.is_file()]
+    found("drop_in", "fail" if missing else "ok",
+          f"{missing[0]} is missing: the gateway does not wait for the sidecar" if missing else
+          " and ".join(str(dropin) for dropin in paths.dropins)
+          + (" is" if len(paths.dropins) == 1 else " are") + " in place")
+
+
+def _doctor_snap(host: Host, data: Mapping[str, Any], gateway: snap.Gateway,
+                 found: Callable[[str, str, str], None]) -> Optional[snap.Gateway]:
+    """doctor's checks of the snap: its gateway in the mode ``up`` bound,
+    its refreshes held, its revision. Returns the snap's gateway now."""
+    try:
+        current = snap.find(host)
+    except ConnectError as exc:
+        found("snap", "fail", str(exc))
+        return None
+    facts = data.get("snap") or {}
+    if current is None:
+        found("snap", "fail", f"the {snap.SNAP} snap is not installed")
+    elif current.mode != gateway.mode:
+        found("snap", "fail", f"the snap runs its {current.mode} gateway, and `up` bound its "
+                              f"{gateway.mode} one: the gateway runs without ArtzAIn's "
+                              f"registration. Run `sudo snap set {snap.SNAP} gateway-mode="
+                              f"{gateway.mode}`, or `remove` and then `up` with a new token")
+    elif not current.held:
+        found("snap", "warn", f"the snap's refreshes are not held: a refresh can move OpenShell "
+                              f"off the approved release (`sudo snap refresh --hold {snap.SNAP}`)")
+    elif facts.get("revision") and current.revision != facts.get("revision"):
+        found("snap", "warn", f"the snap was refreshed since `up`, from revision "
+                              f"{facts.get('revision')} to {current.revision} (OpenShell "
+                              f"{current.version})")
+    else:
+        found("snap", "ok", f"the snap runs its {current.mode} gateway (`{current.app}`, "
+                            f"revision {current.revision}), and its refreshes are held")
+    return current
+
+
+def _doctor_services(host: Host, paths: Layout, project: Optional[compose.Project], port: int,
+                     found: Callable[[str, str, str], None]) -> Dict[str, Dict[str, Any]]:
+    """doctor's checks of the gateway and the sidecar, both up. Returns the
+    project's containers, under Compose."""
+    answers = host.healthy(port)
+    if project is None:
+        unit = paths.gateway_service
+        state = _ctl(host, paths, "is-active", unit, timeout=10).stdout.strip() or "unknown"
+        found("gateway", "ok" if state == "active" else "fail", f"{unit} is {state}")
+        state = (_ctl(host, paths, "is-active", SIDECAR_UNIT, timeout=10).stdout.strip()
+                 or "unknown")
+        found("sidecar", "ok" if state == "active" and answers else "fail",
+              f"{SIDECAR_UNIT} is {state}, and "
+              + (f"answers on 127.0.0.1:{port}" if answers
+                 else f"nothing answers on 127.0.0.1:{port}"))
+        return {}
+    running = compose.containers(host, project.name)
+    state = compose.status(host, project.name, project.service)
+    found("gateway", "ok" if state.startswith("running") else "fail",
+          f"the gateway's container ({project.service} of project {project.name}) is {state}")
+    state = compose.status(host, project.name, compose.SERVICE)
+    found("sidecar", "ok" if state == "running (healthy)" and answers else "fail",
+          f"the sidecar's container ({compose.SERVICE}) is {state}, and "
+          + (f"answers on 127.0.0.1:{port}" if answers
+             else f"nothing answers on 127.0.0.1:{port}"))
+    return running
+
+
+def _doctor_versions(host: Host, paths: Layout, project: Optional[compose.Project],
+                     release: Optional[str], config: Optional[ConnectConfig],
+                     found: Callable[[str, str, str], None]) -> None:
+    """doctor's check of the gateway's OpenShell release against the approved
+    one. *release* is the snap's, for the snap shape."""
+    if release is not None:
+        version = _VERSION.search(release)
+    elif project is None:
+        done = host.run("openshell-gateway", "--version", timeout=30)
+        version = (_VERSION.search((done.stdout or "") + " " + (done.stderr or ""))
+                   if done.returncode == 0 else None)
+    else:
+        version = _VERSION.fullmatch(_compose_release(host, paths))
+    if not version:
+        found("versions", "fail", "the snap did not say its OpenShell release"
+              if release is not None else "openshell-gateway --version did not say its version")
+    elif config is None:
+        found("versions", "warn", f"the gateway is OpenShell {version.group(0)}; the record "
+                                  "holds no approved release to compare with")
+    elif not _same_line(version.group(0), config.openshell_version):
+        found("versions", "fail", f"the gateway is OpenShell {version.group(0)}, and the "
+                                  f"configuration was approved for {config.openshell_version}")
+    else:
+        found("versions", "ok", f"the gateway is OpenShell {version.group(0)}, as approved "
+                                f"({config.openshell_version})")
 
 
 def _compose_release(host: Host, paths: Layout) -> str:
@@ -2261,7 +2645,7 @@ def doctor(host: Host) -> Dict[str, Any]:
     except ConnectError:
         config = None
     port = int(data.get("port") or DEFAULT_PORT)
-    project = None
+    project, gateway, release = None, None, None
     if data.get("shape") == SHAPE_COMPOSE:
         try:
             project = compose.recorded(data.get("compose") or {})
@@ -2269,28 +2653,18 @@ def doctor(host: Host) -> Dict[str, Any]:
             found("compose", "fail", str(exc))
         else:
             paths = compose_layout(paths, project)
-    running: Dict[str, Dict[str, Any]] = {}
+    elif data.get("shape") == SHAPE_SNAP:
+        try:
+            gateway = _snap_of(host, data)
+        except ConnectError as exc:
+            found("snap", "fail", str(exc))
+        else:
+            paths = snap_layout(host, paths, gateway)
+            now = _doctor_snap(host, data, gateway, found)
+            release = now.version if now is not None else ""
 
     # The two services.
-    answers = host.healthy(port)
-    if project is None:
-        state = _systemctl(host, "is-active", GATEWAY_UNIT, timeout=10).stdout.strip() or "unknown"
-        found("gateway", "ok" if state == "active" else "fail", f"{GATEWAY_UNIT} is {state}")
-        state = _systemctl(host, "is-active", SIDECAR_UNIT, timeout=10).stdout.strip() or "unknown"
-        found("sidecar", "ok" if state == "active" and answers else "fail",
-              f"{SIDECAR_UNIT} is {state}, and "
-              + (f"answers on 127.0.0.1:{port}" if answers
-                 else f"nothing answers on 127.0.0.1:{port}"))
-    else:
-        running = compose.containers(host, project.name)
-        state = compose.status(host, project.name, project.service)
-        found("gateway", "ok" if state.startswith("running") else "fail",
-              f"the gateway's container ({project.service} of project {project.name}) is {state}")
-        state = compose.status(host, project.name, compose.SERVICE)
-        found("sidecar", "ok" if state == "running (healthy)" and answers else "fail",
-              f"the sidecar's container ({compose.SERVICE}) is {state}, and "
-              + (f"answers on 127.0.0.1:{port}" if answers
-                 else f"nothing answers on 127.0.0.1:{port}"))
+    running = _doctor_services(host, paths, project, port, found)
 
     # The credential file.
     saved: Dict[str, str] = {}
@@ -2320,7 +2694,7 @@ def doctor(host: Host) -> Dict[str, Any]:
 
     # The registration: what gateway.toml holds, and what the sidecar was
     # installed with.
-    current = paths.gateway_toml.read_bytes() if paths.gateway_toml.is_file() else b""
+    current = _read(host, paths, paths.gateway_toml) or b""
     body = _block_body(current)
     if config is None:
         found("registration", "fail", "the record holds no approved configuration to check "
@@ -2341,30 +2715,16 @@ def doctor(host: Host) -> Dict[str, Any]:
                                         "was installed")
 
     # The OpenShell release against the approved one.
-    if project is None:
-        done = host.run("openshell-gateway", "--version", timeout=30)
-        version = (_VERSION.search((done.stdout or "") + " " + (done.stderr or ""))
-                   if done.returncode == 0 else None)
-    else:
-        version = _VERSION.fullmatch(_compose_release(host, paths))
-    if not version:
-        found("versions", "fail", "openshell-gateway --version did not say its version")
-    elif config is None:
-        found("versions", "warn", f"the gateway is OpenShell {version.group(0)}; the record "
-                                  "holds no approved release to compare with")
-    elif not _same_line(version.group(0), config.openshell_version):
-        found("versions", "fail", f"the gateway is OpenShell {version.group(0)}, and the "
-                                  f"configuration was approved for {config.openshell_version}")
-    else:
-        found("versions", "ok", f"the gateway is OpenShell {version.group(0)}, as approved "
-                                f"({config.openshell_version})")
+    _doctor_versions(host, paths, project, release, config, found)
 
     # The CLI that the sidecar lists sandboxes with.
     done = host.run("openshell", "settings", "get", "--global", timeout=60)
+    register = (_SNAP_REGISTER[gateway.mode][1] if gateway is not None else
+                "openshell gateway add https://127.0.0.1:17670 --local --name openshell")
     found("cli", "ok" if done.returncode == 0 else "fail",
           "the openshell CLI reaches the gateway" if done.returncode == 0 else
-          "the openshell CLI cannot reach the gateway: register it (openshell gateway add "
-          "https://127.0.0.1:17670 --local --name openshell): " + _said(done)[-200:])
+          f"the openshell CLI cannot reach the gateway: register it ({register}): "
+          + _said(done)[-200:])
 
     # The engine, the way the sidecar reaches it, and the clock against it.
     url = saved.get("ARTZAIN_DECISION_URL") or (config.decision_url if config else "")

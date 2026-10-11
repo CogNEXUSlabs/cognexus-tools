@@ -56,7 +56,7 @@ def test_the_package_has_the_modules_this_test_knows():
     assert {path.name for path in _modules()} == {
         "__init__.py", "_wire.py", "base_policy.py", "bootstrap.py", "breakglass.py", "compose.py",
         "connect.py", "install.py", "interceptor.py", "upgrade.py",
-        "journal.py", "registration.py", "servicer.py", "sidecar.py", "state.py",
+        "journal.py", "registration.py", "servicer.py", "sidecar.py", "snap.py", "state.py",
         "templates.py", "transport.py"}
 
 

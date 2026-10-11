@@ -672,6 +672,14 @@ compose files are not edited: `up` adds a file of its own to `COMPOSE_FILE`
 in the project's `.env`, so `docker compose up -d` in the folder keeps the
 gateway bound, and `remove` puts the project back as it was.
 
+**The OpenShell snap's gateway** (0.6.47) is bound by the same command, in
+either of the snap's modes: its root service (0.1.3, and 0.1.4's `system`
+mode), where `up` writes what is root's with `sudo` and runs the sidecar as a
+system service as you, or its user service (0.1.4's `user` mode). The
+sidecar's socket is in the snap's own folder, where the snap lets its gateway
+connect. `up` holds the snap's refreshes, so OpenShell stays the approved
+release until you refresh it yourself; `remove` lifts that hold.
+
 Then:
 
 ```bash

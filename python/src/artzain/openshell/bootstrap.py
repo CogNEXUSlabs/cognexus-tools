@@ -10,7 +10,8 @@ SHA-256 the dashboard shows, and runs it as the user the gateway runs as::
 What the script does, in order:
 
 1. Refuses anything but Linux on x86_64 or aarch64, and root: it binds the
-   gateway OpenShell's deb or rpm package runs as a systemd user service.
+   gateway OpenShell's deb or rpm package runs as a systemd user service, the
+   snap's, or one under Docker Compose, as the user who operates it.
 2. Downloads uv :data:`UV_VERSION` (the static musl build) from its GitHub
    release, over HTTPS only, and runs it only if its SHA-256 is the one
    written into the script.
@@ -88,7 +89,7 @@ UV_VERSION="@UV_VERSION@"
 say() { printf 'artzain connect: %s\n' "$*" >&2; }
 fail() { say "$*"; exit 1; }
 
-[ "$(uname -s)" = Linux ] || fail "this connects an OpenShell gateway on Linux: the deb or rpm package's, or one under Docker Compose"
+[ "$(uname -s)" = Linux ] || fail "this connects an OpenShell gateway on Linux: the deb or rpm package's, the snap's, or one under Docker Compose"
 case "$(uname -m)" in
   x86_64|amd64) arch=x86_64; uv_sha256="@UV_SHA256_X86_64@" ;;
   aarch64|arm64) arch=aarch64; uv_sha256="@UV_SHA256_AARCH64@" ;;
