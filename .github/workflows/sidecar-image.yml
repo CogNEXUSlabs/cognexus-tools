@@ -84,6 +84,11 @@ jobs:
           test -f "images/openshell-sidecar/wheels/artzain-${VERSION}-py3-none-any.whl"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      # The openshell CLI the image carries, each build by the SHA-256
+      # openshell.lock names; the image's build checks them again.
+      - name: Fetch the openshell CLI the lock names
+        run: python images/openshell-sidecar/fetch_openshell.py
+
       - name: Build the image from that wheel
         env:
           VERSION: ${{ steps.wheel.outputs.version }}
@@ -152,6 +157,10 @@ jobs:
           tar -xzf "$RUNNER_TEMP/syft.tgz" -C "$RUNNER_TEMP" syft
           sudo install -m 0755 "$RUNNER_TEMP/syft" /usr/local/bin/syft
           syft version
+
+      # As in the rehearsal: the CLI builds openshell.lock names, checked.
+      - name: Fetch the openshell CLI the lock names
+        run: python3 images/openshell-sidecar/fetch_openshell.py
 
       - name: Set up QEMU (arm64 emulation)
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0

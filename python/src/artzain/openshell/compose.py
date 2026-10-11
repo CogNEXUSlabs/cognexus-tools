@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Mapping, Optional, Tuple
@@ -62,6 +63,10 @@ JWT_KEY = "/etc/artzain/gateway-jwt.pem"
 CANDIDATE = "/tmp/artzain-candidate.toml"
 #: The sidecar image's user, which owns the socket (mode 0600).
 SIDECAR_UID = 10001
+#: The openshell CLI the sidecar's image carries (NVIDIA's static build, by
+#: SHA-256, images/openshell-sidecar/openshell.lock on the mirror): the
+#: sidecar lists every sandbox with it, and asks the gateway its release.
+CLI = "/usr/local/bin/openshell"
 
 #: up's compose file, kept beside the sidecar's settings, and where the
 #: project's .env is kept while it is bound.
@@ -267,6 +272,26 @@ def check(project: Project, ours: Path) -> None:
 def toml_inside(gateway_toml: Path) -> str:
     """*gateway_toml* where the sidecar's container reads it."""
     return f"{GATEWAY_FOLDER}/{gateway_toml.name}"
+
+
+def gateway_endpoint(host: Any) -> str:
+    """Where this host's openshell CLI reaches the gateway, as ``openshell
+    status -o json`` says: the sidecar runs on the host's network, so its
+    own CLI connects there. Raises unless that is an http(s) URL."""
+    done = host.run("openshell", "status", "-o", "json", timeout=60)
+    try:
+        said = json.loads(done.stdout or "") if done.returncode == 0 else None
+    except ValueError:
+        said = None
+    url = said.get("server") if isinstance(said, dict) else None
+    parts = urllib.parse.urlsplit(url) if isinstance(url, str) else None
+    if (parts is None or parts.scheme not in ("http", "https") or not parts.netloc
+            or _UNSAFE_VALUE.search(url) or " " in url):
+        raise _refused("the openshell CLI did not say its gateway's endpoint (openshell status "
+                       "-o json): the sidecar's own CLI connects there to list the sandboxes. "
+                       "Register the CLI with the gateway (openshell gateway add "
+                       "http://127.0.0.1:8080 --name openshell-docker), then run this again")
+    return url
 
 
 def version(host: Any, project: Project) -> str:

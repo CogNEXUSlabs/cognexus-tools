@@ -8,13 +8,13 @@ for CI and guard-sync until those jobs move here.
 
 | Package | Install | Latest | What it is |
 |---|---|---|---|
-| **`artzain`** | `pip install artzain` | [![PyPI version](https://img.shields.io/pypi/v/artzain)](https://pypi.org/project/artzain/) | Python SDK — local guards, `decide()`, CLI (`login`, `quickstart`, `init`, `audit`, `policy`, `registry`) |
-| **`@cognexuslabs/artzain`** | `npm i @cognexuslabs/artzain` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/artzain)](https://www.npmjs.com/package/@cognexuslabs/artzain) | TypeScript SDK — remote-only Node client (`decide`, events, identity) |
+| **`artzain`** | `pip install artzain` | [![PyPI version](https://img.shields.io/pypi/v/artzain)](https://pypi.org/project/artzain/) [![PyPI downloads](https://img.shields.io/pypi/dm/artzain)](https://pypi.org/project/artzain/) | Python SDK — local guards, `decide()`, CLI (`login`, `quickstart`, `init`, `audit`, `policy`, `registry`) |
+| **`@cognexuslabs/artzain`** | `npm i @cognexuslabs/artzain` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/artzain)](https://www.npmjs.com/package/@cognexuslabs/artzain) [![npm downloads](https://img.shields.io/npm/dm/@cognexuslabs/artzain)](https://www.npmjs.com/package/@cognexuslabs/artzain) | TypeScript SDK — remote-only Node client (`decide`, events, identity) |
 | **`@cognexuslabs/openclaw-artzain`** | `npm i @cognexuslabs/openclaw-artzain` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/openclaw-artzain)](https://www.npmjs.com/package/@cognexuslabs/openclaw-artzain) | OpenClaw `before_tool_call` plugin (deny / review / errors block; not `/approve`) |
 | **`@cognexuslabs/n8n-nodes-artzain`** | `npm i @cognexuslabs/n8n-nodes-artzain` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/n8n-nodes-artzain)](https://www.npmjs.com/package/@cognexuslabs/n8n-nodes-artzain) | n8n Decision + Envelope nodes (fail closed on HTTP 503; `review` does not Wait) |
 | **`@cognexuslabs/grokbot-artzain`** | `npm install -g @cognexuslabs/grokbot-artzain` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/grokbot-artzain)](https://www.npmjs.com/package/@cognexuslabs/grokbot-artzain) | Grok Bot cooperative Decision skill, opt-in announce, and pull enroll (no host intercept) |
 
-All five are Apache-2.0. `artzain` also ships the OpenShell sidecar, as
+All five are Apache-2.0 [![License](https://img.shields.io/pypi/l/artzain)](https://pypi.org/project/artzain/). `artzain` also ships the OpenShell sidecar, as
 the `[openshell]` extra, as a signed image on GHCR, and with a one-command
 connect script on each release ([OpenShell](#openshell-artzainopenshell)).
 
@@ -43,6 +43,56 @@ tools/        # standalone scripts: the decide latency benchmark
 Engine dual-home paths (private repo): `pypi-package/`, `sdk/typescript/`,
 `sdk/openclaw/`, `sdk/n8n/`, `sdk/grokbot/`. Seed with `scripts/seed_cognexus_tools.sh` from
 the engine tree.
+
+## Privacy and telemetry
+
+With no API key, the Python SDK sends nothing. `post_sdk_event` returns
+immediately.
+
+With a key, the first event in a process is preceded by one `sdk_session`
+(`source` `pypi_sdk`). Its payload is `package`, `version`, `python`, and
+`platform`. Every event is `POST /api/events` with `event_type`, `source`,
+`payload`, `level`, and `title`. A payload may also carry `tokens_in` and
+`tokens_out`, and a redacted `user_prompt` when this process has noted one
+and the event is not already carrying the screened text as its preview.
+Posts are queued on a background thread, at most 1000 waiting. A full queue
+drops the new row.
+
+Prompt-defense clean scans are posted whenever a key is set, unless
+`COGNEXUS_PROMPT_DEFENSE_CLOUD_PASSES=0`. A `prompt_defense` payload carries
+`defense_record_version`, `request_id`, `outcome`, `reason`, `surface`,
+`component_source`, `policy`, `latency_ms`, `model_id`, `input_sha256`,
+`preview` (96 characters), `kind`, `action`, `threat`, `injection_type`,
+`confidence`, `patterns`, `pattern_count`, and `user_id`. The preview masks
+SSN, card, IBAN, NINO, and `key=value` secrets. Other text is previewed as
+written. A `policy_enforcement` payload adds `violation_count`, `rule_ids`,
+and `rules_checked`, and names the policy `ClientPolicy-DocumentDerived`.
+A `prompt_static_audit` payload carries `outcome`, `reason`, `grade`,
+`score`, `coverage`, `missing`, `context`, and `prompt_hash`. Kill-switch
+and destructive-guard events (`agent_kill_switch`,
+`destructive_action_guard`) carry `defense_record_version`, `request_id`,
+`outcome`, `reason`, `surface` `agent_action`, `component_source`, `policy`
+(`Agent-Kill-Switch` or `Destructive-Action-Guard`), `input_sha256`,
+`preview`, `run_id`, `user_id`, `agent_id`, `severity`, and `rule_ids`.
+
+The event table and the clean-scan switch are also in the Python package
+README (`python/README.md` here, `pypi-package/README.md` in the engine
+tree), under "Dashboard event logs".
+
+The TypeScript SDK posts only when the caller invokes `postSdkEvent`:
+`event_type`, `title`, `level`, and `payload`, with `X-Api-Key`. Nothing is
+sent automatically.
+
+Grok Bot and OpenClaw announce only when `announce` is exactly true. The
+post is names only: the instance, agent ids, and skill slugs, capped at 50
+agents, 100 skills, 200 characters a name, and 120 characters for the
+instance. Enroll is on by default. It posts the same names to
+`POST /api/v1/registry/enroll`. Turn it off with `GROKBOT_ENROLL=false` or
+`--no-enroll`, or with `enroll: false` in OpenClaw.
+
+`COGNEXUS_SDK_BROWSER_HEADERS` defaults to `"0"` since 0.6.11. `"1"` makes
+CLI auth calls and the GUI proxy send browser-like headers. Event posts and
+`decide` calls do not. The switch is scheduled for removal.
 
 ## Python (`artzain`)
 
@@ -369,7 +419,7 @@ or one that needs the PII screen, takes the engine longer than this one.
 
 ## Development
 
-Python (3.10–3.12):
+Python (3.10 to 3.14):
 
 ```bash
 cd python

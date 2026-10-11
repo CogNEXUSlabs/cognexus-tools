@@ -57,10 +57,14 @@ IMAGE_DIGEST = "sha256:" + "6d" * 32
 SIGNED_IMAGE = f"{compose.SIDECAR_IMAGE}@{IMAGE_DIGEST}"
 GATEWAY_IMAGE_ID = "sha256:" + "ea" * 32
 COSIGN_BYTES = b"a cosign binary"
-#: What the sidecar of a Compose gateway says: it has no CLI to list with,
-#: so its inventory is what it has seen created.
+#: What the sidecar of a Compose gateway says: it lists every sandbox with
+#: its image's openshell CLI.
 REPORTED = {"reporting": True, "heartbeat": "ok", "inventory": "ok", "sandboxes": 1,
-            "partial": True}
+            "partial": False}
+#: What the host's openshell CLI says of the gateway it is registered with.
+CLI_STATUS = {"authentication": {"mode": "gateway", "status": "not_required"},
+              "gateway": "http://127.0.0.1:8080", "server": "http://127.0.0.1:8080",
+              "status": "connected", "version": "0.1.3"}
 
 COMPOSE_YML = """\
 services:
@@ -161,6 +165,7 @@ class _Docker:
         self.wall_now = 1_800_000_000.0
         self.starting_calls = 0        # CLI calls a recreated gateway leaves unanswered
         self.unanswered = 0
+        self.cli_status = dict(CLI_STATUS)  # what `openshell status -o json` says (None: fails)
         self.gateway_files = (self.compose_yml.as_posix(),)
         self._start("init", (self.compose_yml.as_posix(),), status="exited")
         self._start("gateway", self.gateway_files)
@@ -364,6 +369,10 @@ class _Docker:
         if name == "openshell" and args[:2] == ["settings", "get"]:
             return _done(0, f"Settings Rev: {self.revision}\n" + "".join(
                 f"  {k} = {v}\n" for k, v in self.settings.items()))
+        if name == "openshell" and args == ["status", "-o", "json"]:
+            if self.cli_status is None:
+                return _done(1, "", "Error: no gateway configured")
+            return _done(0, json.dumps(self.cli_status))
         raise AssertionError(f"unexpected command {argv}")
 
     def _not_listening(self):
@@ -557,6 +566,42 @@ def test_a_gateway_that_does_not_run_as_root_is_refused_before_the_token_is_spen
     assert not _redeemed(docker)
 
 
+@pytest.mark.parametrize("status", [
+    None, {"status": "connected"}, dict(CLI_STATUS, server="unix:///run/gw.sock", gateway="gw"),
+    dict(CLI_STATUS, server="grpc://127.0.0.1:8080", gateway="grpc://127.0.0.1:8080"),
+    dict(CLI_STATUS, server='http://127.0.0.1:8080/"$(id)"', gateway='http://127.0.0.1:8080/"$(id)"'),
+], ids=["fails", "no endpoint", "a socket", "not http", "unsafe"])
+def test_a_host_cli_that_names_no_gateway_endpoint_is_refused_before_the_token_is_spent(
+        docker, status):
+    """The sidecar's own CLI connects where the host's is registered: an
+    endpoint it cannot take stops up before anything is spent."""
+    docker.cli_status = status
+    with pytest.raises(connect.ConnectError, match="endpoint"):
+        _up(docker)
+    assert not _redeemed(docker)
+
+
+def test_up_again_gives_a_sidecar_connected_by_0_6_45_its_cli(docker):
+    """0.6.45 wrote no CLI and no endpoint into the sidecar's settings: up,
+    run again (as `upgrade` runs it), adds them and recreates the sidecar,
+    and the gateway with it, without a new token."""
+    _up(docker)
+    env = docker.paths.sidecar_env
+    lines = [line for line in env.read_text(encoding="utf-8").splitlines(keepends=True)
+             if not line.startswith(("OPENSHELL_SIDECAR_LIST_CLI=", "OPENSHELL_GATEWAY_ENDPOINT="))]
+    env.write_text("".join(lines), encoding="utf-8")
+    sidecar_before = docker.containers[compose.SERVICE]["Id"]
+    gateway_before = docker.containers["gateway"]["Id"]
+    _, said = _up(docker, token="")
+    assert _settings_value(env, "OPENSHELL_SIDECAR_LIST_CLI") == "/usr/local/bin/openshell"
+    assert _settings_value(env, "OPENSHELL_GATEWAY_ENDPOINT") == "http://127.0.0.1:8080"
+    assert docker.containers[compose.SERVICE]["Id"] != sidecar_before
+    assert "OPENSHELL_GATEWAY_ENDPOINT" in docker.sidecar_env_seen[-1]
+    assert docker.containers["gateway"]["Id"] != gateway_before and docker.bound
+    assert len(_redeemed(docker)) == 1
+    assert any("openshell CLI" in line for line in said)
+
+
 def test_a_gateway_toml_the_sidecar_cannot_read_is_refused_before_the_token_is_spent(docker):
     docker.toml.chmod(0o600)
     with pytest.raises(connect.ConnectError, match="not readable by other users"):
@@ -727,8 +772,11 @@ def test_the_sidecar_settings_name_paths_inside_its_container(docker):
     assert value("OPENSHELL_JWT_PUBLIC_KEY") == "/etc/artzain/gateway-jwt.pem"
     assert value("OPENSHELL_JWT_GATEWAY_ID") == "openshell-docker"
     assert len(value("OPENSHELL_SIDECAR_TOKEN")) >= 40
-    # The image carries no openshell CLI to list with.
-    assert "OPENSHELL_SIDECAR_LIST_CLI" not in env.read_text(encoding="utf-8")
+    # The image's openshell CLI lists every sandbox, and asks the gateway its
+    # release, at the endpoint the host's CLI is registered with (the sidecar
+    # is on the host's network).
+    assert value("OPENSHELL_SIDECAR_LIST_CLI") == "/usr/local/bin/openshell"
+    assert value("OPENSHELL_GATEWAY_ENDPOINT") == "http://127.0.0.1:8080"
     # The container started with these settings.
     assert docker.sidecar_env_seen[-1] == env.read_text(encoding="utf-8")
 
@@ -987,12 +1035,18 @@ def test_doctor_finds_nothing_wrong_on_a_bound_compose_gateway(docker):
     results = {c["check"]: c["result"] for c in found["checks"]}
     assert found["ok"], found
     for check in ("record", "gateway", "sidecar", "credential", "socket", "compose",
-                  "registration", "versions", "cli", "engine", "clock"):
+                  "registration", "versions", "cli", "engine", "clock", "reports"):
         assert results[check] == "ok", (check, found)
-    # The image has no CLI to list with: the inventory is what it saw.
-    reports = next(c for c in found["checks"] if c["check"] == "reports")
-    assert reports["result"] == "warn" and "seen" in reports["says"]
     assert "drop_in" not in results
+
+
+def test_doctor_says_a_sidecar_connected_by_0_6_45_lists_nothing_until_up_runs_again(docker):
+    _up(docker)
+    # A sidecar whose settings name no CLI: its inventory is what it saw.
+    docker.reported = dict(REPORTED, partial=True)
+    reports = next(c for c in connect.doctor(docker.host())["checks"] if c["check"] == "reports")
+    assert reports["result"] == "warn" and "seen" in reports["says"]
+    assert "artzain connect openshell up" in reports["says"]
 
 
 def test_doctor_fails_when_docker_compose_in_the_folder_would_unbind_the_gateway(docker):

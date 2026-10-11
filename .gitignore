@@ -7,8 +7,10 @@ __pycache__/
 htmlcov/
 dist/
 build/
-# A wheel built to rehearse an image (images/<name>/wheels/).
+# A wheel built to rehearse an image (images/<name>/wheels/), and the
+# openshell CLI builds fetch_openshell.py fetches (images/<name>/openshell/).
 images/*/wheels/*.whl
+images/*/openshell/*.tar.gz
 .venv/
 venv/
 

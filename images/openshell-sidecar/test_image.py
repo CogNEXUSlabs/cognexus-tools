@@ -12,6 +12,8 @@ writable mount, and checks that:
 
 * the image runs as uid 10001, not root, and declares no port;
 * it holds the `artzain` version it was built for, and no `pip`;
+* it carries the openshell CLI of the release openshell.lock names, which
+  fails, and does not hang, with no gateway to reach;
 * the sidecar comes up healthy without a network and without writing
   outside its mount;
 * the only TCP listener is on loopback, and the gateway's Unix socket is
@@ -48,6 +50,16 @@ def check(name: str, ok: bool, detail: object = "") -> None:
 
 def docker(*args: str, timeout: int = 120) -> subprocess.CompletedProcess:
     return subprocess.run(["docker", *args], capture_output=True, text=True, timeout=timeout)
+
+
+def openshell_release() -> str:
+    """The OpenShell release openshell.lock, beside this file, names."""
+    import re
+    from pathlib import Path
+
+    text = Path(__file__).resolve().with_name("openshell.lock").read_text(encoding="utf-8")
+    found = re.search(r"^# release: (\d+\.\d+\.\d+)$", text, re.M)
+    return found[1] if found else "(none)"
 
 
 def run_once(image: str, entrypoint: str, *args: str) -> subprocess.CompletedProcess:
@@ -161,6 +173,16 @@ def test(image: str, version: str) -> None:
     for python in ("python", "/usr/local/bin/python3"):
         pip = run_once(image, python, "-m", "pip", "--version")
         check(f"{python} has no pip", pip.returncode != 0, pip.stdout.strip())
+    release = openshell_release()
+    cli = run_once(image, "/usr/local/bin/openshell", "--version")
+    check(f"it carries the openshell CLI of OpenShell {release}, as openshell.lock names it",
+          cli.stdout.strip() == f"openshell {release}", cli.stdout.strip() or cli.stderr.strip())
+    # With no gateway to reach it fails, and says so: the sidecar then sends
+    # an inventory marked partial, with the listing's error.
+    alone = run_once(image, "/usr/local/bin/openshell", "sandbox", "list", "--all-workspaces",
+                     "-o", "json")
+    check("the CLI fails, and does not hang, with no gateway to reach", alone.returncode != 0,
+          alone.stdout.strip())
 
     name = "artzain-sidecar-image-test-" + uuid.uuid4().hex[:12]
     started = docker(
