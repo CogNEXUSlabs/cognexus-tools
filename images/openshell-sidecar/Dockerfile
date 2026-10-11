@@ -6,7 +6,12 @@
 #   * the `artzain` wheel as PyPI serves it, named by its SHA-256
 #     (artzain.lock);
 #   * what `artzain[openshell]` needs from other projects, each wheel named by
-#     its SHA-256 (requirements.lock).
+#     its SHA-256 (requirements.lock);
+#   * the openshell CLI, NVIDIA's static build for the platform, named by its
+#     SHA-256 (openshell.lock). The sidecar lists every sandbox with it, and
+#     asks the gateway its release, beside a gateway under Docker Compose.
+#     fetch_openshell.py puts both platforms' builds in openshell/ before a
+#     build, and the build checks them against the lock again.
 # Nothing is compiled, and nothing is fetched that a lock does not name.
 #
 # How it runs:
@@ -38,8 +43,10 @@ ARG PYTHON_IMAGE=public.ecr.aws/docker/library/python:3.12-slim-bookworm@sha256:
 FROM ${PYTHON_IMAGE} AS build
 ARG ARTZAIN_SOURCE=pypi
 ARG ARTZAIN_VERSION
-COPY requirements.lock artzain.lock /lock/
+ARG TARGETARCH
+COPY requirements.lock artzain.lock openshell.lock /lock/
 COPY wheels/ /wheels/
+COPY openshell/ /openshell/
 RUN set -eu; \
     test -n "${ARTZAIN_VERSION}" || { echo "ARTZAIN_VERSION is required" >&2; exit 1; }; \
     python -m venv /opt/artzain; \
@@ -56,6 +63,18 @@ RUN set -eu; \
     $pip check; \
     /opt/artzain/bin/python -m compileall -q /opt/artzain/lib; \
     /opt/artzain/bin/python -m pip uninstall --yes --quiet pip
+RUN set -eu; \
+    cd /openshell; \
+    grep -v '^#' /lock/openshell.lock | sha256sum -c -; \
+    case "${TARGETARCH}" in \
+      amd64) arch=x86_64 ;; \
+      arm64) arch=aarch64 ;; \
+      *) echo "openshell.lock has no openshell CLI for ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    tar -xzf "openshell-${arch}-unknown-linux-musl.tar.gz" -C /usr/local/bin openshell; \
+    release="$(sed -n 's/^# release: //p' /lock/openshell.lock)"; \
+    test "$(/usr/local/bin/openshell --version)" = "openshell ${release}" || { \
+      echo "the openshell CLI is not OpenShell ${release}" >&2; exit 1; }
 
 FROM ${PYTHON_IMAGE}
 ARG ARTZAIN_VERSION
@@ -73,6 +92,7 @@ RUN set -eu; \
         --shell /usr/sbin/nologin artzain; \
     install -d -o 10001 -g 10001 -m 0700 /run/artzain /var/lib/artzain
 COPY --from=build /opt/artzain /opt/artzain
+COPY --from=build /usr/local/bin/openshell /usr/local/bin/openshell
 ENV PATH="/opt/artzain/bin:${PATH}" \
     HOME=/nonexistent \
     PYTHONDONTWRITEBYTECODE=1 \

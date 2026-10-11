@@ -1127,10 +1127,12 @@ _gateway_version_lock = threading.Lock()
 
 
 def _gateway_openshell_version() -> str:
-    """What ``openshell-gateway --version`` says, when the gateway's binary is
-    on this host's PATH (the deb or rpm gateway that ``artzain connect
-    openshell`` binds), or empty. An answer, or the lack of one, is kept for
-    :data:`GATEWAY_VERSION_SECONDS`."""
+    """The gateway's own release, or empty: what ``openshell-gateway
+    --version`` says when the gateway's binary is on this host's PATH (the
+    deb or rpm gateway), or else what the gateway tells the CLI the sidecar
+    lists with (``openshell status -o json``), as beside a gateway under
+    Docker Compose, whose binary is in another container. An answer, or the
+    lack of one, is kept for :data:`GATEWAY_VERSION_SECONDS`."""
     now = time.monotonic()
     with _gateway_version_lock:
         at = _gateway_version["at"]
@@ -1138,18 +1140,29 @@ def _gateway_openshell_version() -> str:
             return _gateway_version["value"]
         value = ""
         binary = shutil.which("openshell-gateway")
-        if binary:
-            try:
-                # It needs neither the credential nor the token to say it.
-                env = {name: value for name, value in os.environ.items()
-                       if name not in _NOT_FOR_THE_CLI}
+        cli = list_cli()
+        try:
+            # Neither needs the credential nor the token to say it.
+            env = {name: value for name, value in os.environ.items()
+                   if name not in _NOT_FOR_THE_CLI}
+            if binary:
                 done = subprocess.run([binary, "--version"], capture_output=True, text=True,
                                       timeout=10, check=False, env=env)
                 found = _VERSION_IN.search(f"{done.stdout or ''} {done.stderr or ''}")
                 if done.returncode == 0 and found:
                     value = found.group(0)
-            except (OSError, subprocess.SubprocessError):
-                pass
+            elif cli:
+                env["NO_COLOR"] = "1"
+                done = subprocess.run([cli, "status", "-o", "json"], capture_output=True,
+                                      text=True, timeout=15, check=False, env=env)
+                said = json.loads(done.stdout) if done.returncode == 0 else None
+                said = said if isinstance(said, dict) else {}
+                version = said.get("version")
+                if (said.get("status") == "connected" and isinstance(version, str)
+                        and _VERSION_IN.fullmatch(version)):
+                    value = version
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
         _gateway_version.update(at=now, value=value)
         return value
 

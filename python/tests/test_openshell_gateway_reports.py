@@ -1007,3 +1007,61 @@ def test_without_the_path_the_heartbeat_says_nothing_of_gateway_toml(wire, monke
     reporter = _reporter(wire)
     reporter.step()
     assert "registration_found" not in wire.sent("heartbeat")[0][1]
+
+
+@pytest.fixture
+def image_cli(gateway_binary, monkeypatch):
+    """The sidecar's image: no gateway binary, and the openshell CLI it lists
+    sandboxes with (``OPENSHELL_SIDECAR_LIST_CLI``), which asks the gateway
+    its release (``openshell status -o json``)."""
+    gateway_binary["path"] = None
+    monkeypatch.setenv("OPENSHELL_SIDECAR_LIST_CLI", "/usr/local/bin/openshell")
+    gateway_binary["stdout"] = json.dumps({
+        "authentication": {"mode": "gateway", "status": "not_required"},
+        "gateway": "http://127.0.0.1:8080", "server": "http://127.0.0.1:8080",
+        "status": "connected", "version": "0.1.3"})
+    return gateway_binary
+
+
+def test_without_the_gateways_binary_the_cli_asks_the_gateway_its_release(image_cli, monkeypatch):
+    """Beside a gateway under Docker Compose the gateway's binary is in
+    another container: the CLI's status is the gateway's own release (an
+    older CLI reports a newer gateway's), not the SDK's."""
+    monkeypatch.setenv("COGNEXUS_API_KEY", "cnxg_" + "k" * 43)
+    monkeypatch.setenv("OPENSHELL_SIDECAR_TOKEN", "sidecar-secret")
+    assert sidecar._openshell_version() == "0.1.3"
+    [(argv, kwargs)] = image_cli["runs"]
+    assert argv == ["/usr/local/bin/openshell", "status", "-o", "json"]
+    assert kwargs.get("timeout") and not kwargs.get("shell")
+    env = kwargs.get("env")
+    assert "COGNEXUS_API_KEY" not in env and "OPENSHELL_SIDECAR_TOKEN" not in env
+    assert env.get("NO_COLOR") == "1"
+
+
+@pytest.mark.parametrize("how", ["exit 1", "not json", "no version", "a version that is not one",
+                                 "not connected", "timeout"])
+def test_a_cli_that_does_not_say_falls_back_to_the_sdk(image_cli, how):
+    said = json.loads(image_cli["stdout"])
+    if how == "exit 1":
+        image_cli["code"] = 1
+    elif how == "not json":
+        image_cli["stdout"] = "Version: 0.1.3\n"
+    elif how == "no version":
+        said.pop("version")
+    elif how == "a version that is not one":
+        said["version"] = "0.1.3; rm -rf /"
+    elif how == "not connected":
+        said["status"] = "unreachable"
+    else:
+        image_cli["raises"] = sidecar.subprocess.TimeoutExpired("openshell", 10)
+    if how in ("no version", "a version that is not one", "not connected"):
+        image_cli["stdout"] = json.dumps(said)
+    assert sidecar._openshell_version() == "0.1.2"
+
+
+def test_the_gateways_binary_is_asked_first(gateway_binary, monkeypatch):
+    """On a deb or rpm host the binary is there, and it is the one asked."""
+    monkeypatch.setenv("OPENSHELL_SIDECAR_LIST_CLI", "/usr/bin/openshell")
+    assert sidecar._openshell_version() == "0.1.3"
+    [(argv, _kwargs)] = gateway_binary["runs"]
+    assert argv == ["/usr/bin/openshell-gateway", "--version"]

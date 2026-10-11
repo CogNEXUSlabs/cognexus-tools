@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.46
+
+### Changed
+
+- **A gateway under Docker Compose is listed whole, and reports its
+  OpenShell release.** The sidecar image now carries NVIDIA's static
+  `openshell` CLI (0.1.3, each platform's build named by its SHA-256 in the
+  image's `openshell.lock`). On Compose, `up` names it in the sidecar's
+  settings (`OPENSHELL_SIDECAR_LIST_CLI`), with the gateway's endpoint as
+  this host's CLI is registered with it (`OPENSHELL_GATEWAY_ENDPOINT`; the
+  sidecar is on the host's network). Each inventory then lists every
+  sandbox, in every workspace, instead of the sandboxes the sidecar has seen
+  created. With no gateway binary on its host, the sidecar asks the gateway
+  its release through that CLI (`openshell status -o json`), so the
+  heartbeat carries it and OpenShell's advisories reach a Compose gateway.
+  `up` refuses, before the token is spent, a host CLI that names no
+  endpoint. Running `up` again on a gateway a 0.6.45 `up` connected (as
+  `upgrade` does) adds the two settings, and recreates the sidecar, from
+  the new image, and the gateway with it.
+
 ## 0.6.45
 
 ### Added

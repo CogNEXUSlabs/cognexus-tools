@@ -843,7 +843,7 @@ def _jwt_settings(toml_text: str, host: Optional[Host] = None) -> Dict[str, str]
 def sidecar_environment(host: Host, paths: Layout, redeemed_gateway: str, credential: str,
                         config: ConnectConfig, *, registration_digest: str, port: int,
                         proxy: str, ca_bundle: str, jwt: Mapping[str, str], token: str,
-                        container: bool = False) -> str:
+                        container: bool = False, gateway_endpoint: str = "") -> str:
     """The sidecar service's ``EnvironmentFile``, or with *container* its
     Compose container's ``env_file``, which names the paths as the container
     sees them. It holds the credential, and *token*, which a caller of the
@@ -868,12 +868,14 @@ def sidecar_environment(host: Host, paths: Layout, redeemed_gateway: str, creden
         "OPENSHELL_GATEWAY_TOML": (compose.toml_inside(paths.gateway_toml) if container
                                    else paths.gateway_toml.as_posix()),
         # Each inventory lists every workspace through the CLI the operator
-        # registered with the gateway, so it is never partial. The sidecar's
-        # image has no CLI: its inventory is what it has seen created.
-        "OPENSHELL_SIDECAR_LIST_CLI": "" if container else (host.which("openshell") or ""),
+        # registered with the gateway, so it is never partial; in a
+        # container, the image's own CLI.
+        "OPENSHELL_SIDECAR_LIST_CLI": compose.CLI if container else (host.which("openshell") or ""),
     }
     if container:
-        del values["OPENSHELL_SIDECAR_LIST_CLI"]
+        # The image's CLI connects where the host's is registered: the
+        # sidecar is on the host's network.
+        values["OPENSHELL_GATEWAY_ENDPOINT"] = gateway_endpoint
     elif not values["OPENSHELL_SIDECAR_LIST_CLI"].startswith("/"):
         raise ConnectError("OPENSHELL_SIDECAR_LIST_CLI: the openshell CLI has no absolute path")
     if proxy:
@@ -1183,7 +1185,7 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
         check_gateway_toml(paths, toml_text)
         _cli_reaches_the_gateway(host, under_compose=project is not None)
     signer: Optional[Tuple[str, str]] = None
-    image, release = "", ""
+    image, release, endpoint = "", "", ""
     if project is None:
         jwt = _jwt_settings(toml_text, host)
     else:
@@ -1193,13 +1195,15 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
         signer = compose.jwt(project, toml_text)
         jwt = ({"OPENSHELL_JWT_PUBLIC_KEY": compose.JWT_KEY,
                 "OPENSHELL_JWT_GATEWAY_ID": signer[1]} if signer else {})
+        endpoint = compose.gateway_endpoint(host)
         image, release = _sidecar_image(host, record, sidecar_image, out)
 
     # 1. The credential, once. It is saved before anything else can fail.
     settings_changed = False
     if record.done("redeemed"):
         _say(out, f"gateway {record.data['gateway_id']}: already redeemed; using the saved credential")
-        settings_changed = project is None and _bring_the_settings_up_to_date(paths, out)
+        settings_changed = (_bring_the_settings_up_to_date(paths, out) if project is None
+                            else _compose_settings_up_to_date(paths, endpoint, out))
         config = parse_config(record.data.get("config"))
         gateway_id = record.data["gateway_id"]
     else:
@@ -1214,7 +1218,7 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
                             ConnectConfig("https://engine.invalid", "0.0.0"),
                             registration_digest="0" * 64, port=port, proxy=proxy,
                             ca_bundle=ca_bundle, jwt=jwt, token="0" * 43,
-                            container=project is not None)
+                            container=project is not None, gateway_endpoint=endpoint)
         got = redeem(host, engine=engine, token=token, digest=digest, proxy=proxy,
                      ca_bundle=ca_bundle)
         config, gateway_id = got.config, got.gateway_id
@@ -1222,7 +1226,8 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
             host, paths, gateway_id, got.credential, config,
             registration_digest=registration.digest(sidecar_registration(paths, config)),
             port=port, proxy=proxy, ca_bundle=ca_bundle, jwt=jwt,
-            token=secrets.token_urlsafe(32), container=project is not None).encode("utf-8"),
+            token=secrets.token_urlsafe(32), container=project is not None,
+            gateway_endpoint=endpoint).encode("utf-8"),
             private=True)
         shape_facts = ({} if project is None else
                        {"shape": SHAPE_COMPOSE, "compose": project.facts()})
@@ -1263,7 +1268,8 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
     if project is not None:
         _compose_sidecar(host, paths, project, record, image=image, release=release,
                          config=config, port=int(record.data.get("port", port)),
-                         jwt_key=signer[0] if signer else "", out=out)
+                         jwt_key=signer[0] if signer else "", settings_changed=settings_changed,
+                         out=out)
     elif not record.done("sidecar"):
         _replace(paths.sidecar_unit, unit.encode("utf-8"))
         private_dir(paths.state_dir)
@@ -1404,23 +1410,24 @@ def _sidecar_image(host: Host, record: Record, named: str,
 
 def _compose_sidecar(host: Host, paths: Layout, project: compose.Project, record: Record, *,
                      image: str, release: str, config: ConnectConfig, port: int, jwt_key: str,
-                     out: Callable[[str], None]) -> None:
+                     settings_changed: bool, out: Callable[[str], None]) -> None:
     """Step 4 under Compose: up's compose file, and the sidecar's container
     up from it. A file that is not the one this artzain writes (an image of
-    another release, say, after an upgrade) is rewritten, the sidecar is
-    recreated from it, and the gateway, if bound, restarts with it."""
+    another release, say, after an upgrade), or settings that changed, and
+    the sidecar is recreated, and the gateway, if bound, restarts with it."""
     text = compose.render(project, image=image, settings=paths.sidecar_env, port=port,
                           telemetry=config.telemetry, jwt_key=jwt_key or None,
                           ca_bundle=_settings(paths).get("OPENSHELL_SIDECAR_CA_BUNDLE", ""))
     current = (paths.compose_file.read_text(encoding="utf-8")
                if paths.compose_file.is_file() else None)
-    if record.done("sidecar") and current == text:
+    if record.done("sidecar") and current == text and not settings_changed:
         return
     again = record.done("sidecar")
     if again:
         _say(out, f"bringing the sidecar's container up to date ({image})")
     _replace(paths.compose_file, text.encode("utf-8"))
-    _check(compose.up(host, project, paths.compose_file, compose.SERVICE),
+    _check(compose.up(host, project, paths.compose_file, compose.SERVICE,
+                      recreate=again and settings_changed),
            f"docker compose up -d {compose.SERVICE}")
     record.mark("sidecar", sidecar_image=image, sidecar_image_release=release)
     if again and record.done("gateway-restarted"):
@@ -1430,6 +1437,28 @@ def _compose_sidecar(host: Host, paths: Layout, project: compose.Project, record
             raise ConnectError(f"the gateway's container did not stay up: see `docker compose "
                                f"-p {project.name} logs {project.service}`")
         _compose_gateway_answers(host, project)
+
+
+def _compose_settings_up_to_date(paths: Layout, endpoint: str,
+                                 out: Callable[[str], None]) -> bool:
+    """A gateway under Compose connected by artzain 0.6.45: its sidecar's
+    settings name neither the image's openshell CLI nor the gateway's
+    endpoint, so its inventory is only what it has seen created, and its
+    heartbeat carries no OpenShell release. Add them. True when something
+    was added, and the sidecar must be recreated to read it."""
+    saved = _saved(paths)
+    missing: Dict[str, str] = {}
+    if not saved.get("OPENSHELL_SIDECAR_LIST_CLI"):
+        missing["OPENSHELL_SIDECAR_LIST_CLI"] = compose.CLI
+    if not saved.get("OPENSHELL_GATEWAY_ENDPOINT"):
+        missing["OPENSHELL_GATEWAY_ENDPOINT"] = endpoint
+    if not missing:
+        return False
+    text = paths.sidecar_env.read_text(encoding="utf-8")
+    _replace(paths.sidecar_env, _with_settings(text, missing).encode("utf-8"), private=True)
+    _say(out, "the sidecar's settings now name its image's openshell CLI and the gateway's "
+              "endpoint: it lists every sandbox, and reports the gateway's OpenShell release")
+    return True
 
 
 def _compose_env(paths: Layout, project: compose.Project, record: Record) -> None:
@@ -2385,8 +2414,9 @@ def doctor(host: Host) -> Dict[str, Any]:
                                      "engine")
         elif reports.get("partial") and project is not None and not reports.get("listing_error"):
             found("reports", "warn", "the last inventory is the sandboxes the sidecar has seen "
-                                     "created: its image has no openshell CLI to list every "
-                                     "sandbox with")
+                                     "created: its settings name no openshell CLI to list them "
+                                     "with. Run `artzain connect openshell up` again (no new "
+                                     "token): it adds the image's")
         elif reports.get("partial"):
             error = _word(reports.get("listing_error") or "")
             found("reports", "warn", "the last inventory was not every sandbox"
