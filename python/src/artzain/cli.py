@@ -2310,16 +2310,17 @@ def _add_connect_parser(sub: argparse._SubParsersAction) -> None:
     connect_sub = p_connect.add_subparsers(dest="connect_runtime", required=True)
     c_openshell = connect_sub.add_parser(
         "openshell",
-        help="Bind this host's OpenShell gateway (deb or rpm, or Docker Compose).",
+        help="Bind this host's OpenShell gateway (deb or rpm, snap, or Docker Compose).",
         description=(
             "Binds the OpenShell gateway on this host to ArtzAIn, and undoes it.\n\n"
             "  up      swap an enroll token for the gateway's credential, install the\n"
-            "          sidecar as a systemd user service (or, for a gateway under\n"
-            "          Docker Compose, as a service of its project, from the signed\n"
-            "          sidecar image), add the interceptor registration to\n"
-            "          gateway.toml, restart the gateway and check that a write\n"
-            "          ArtzAIn denies is refused. Run it again to finish a run that\n"
-            "          stopped.\n"
+            "          sidecar as a systemd user service (beside the snap's system\n"
+            "          gateway, a system service; for a gateway under Docker Compose,\n"
+            "          a service of its project, from the signed sidecar image), add\n"
+            "          the interceptor registration to gateway.toml, restart the\n"
+            "          gateway and check that a write ArtzAIn denies is refused. On\n"
+            "          the snap, it also holds the snap's refreshes. Run it again to\n"
+            "          finish a run that stopped.\n"
             "  remove  put gateway.toml and gateway.env (or the project's .env) back\n"
             "          as they were, remove the sidecar, restart the gateway unbound\n"
             "          and revoke the credential.\n"

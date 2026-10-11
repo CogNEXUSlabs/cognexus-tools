@@ -191,6 +191,8 @@ class _Gateway:
             return _done()
         if argv[:3] == ["docker", "ps", "--all"]:
             return _done(0, "")  # Docker runs here, and no gateway under Compose
+        if argv[:3] == ["snap", "list", "openshell"]:
+            return _done(1, "", "error: no matching snaps installed\n")  # snapd, no OpenShell snap
         if name == "openshell-gateway":
             if args == ["--version"]:
                 return _done(0, self.version + "\n")
@@ -888,7 +890,7 @@ def test_the_self_test_reads_its_own_setting_not_the_next_one(gateway):
     ({"platform": "darwin"}, "Linux only"),
     ({"which": lambda name: None if name == "openshell" else f"/usr/bin/{name}"},
      "openshell is not on PATH"),
-    ({"root": "/nonexistent-root"}, "not a deb or rpm gateway"),
+    ({"root": "/nonexistent-root"}, "not a deb, rpm, snap or Compose gateway"),
 ])
 def test_a_host_this_release_cannot_bind_is_refused_before_anything(gateway, change, says):
     with pytest.raises(connect.ConnectError, match=says):

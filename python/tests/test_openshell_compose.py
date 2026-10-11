@@ -339,6 +339,8 @@ class _Docker:
         name, args = argv[0], argv[1:]
         if name == "docker":
             return self._docker(args)
+        if argv[:3] == ["snap", "list", "openshell"]:
+            return _done(1, "", "error: no matching snaps installed\n")  # snapd, no OpenShell snap
         if argv == ["uname", "-m"]:
             return _done(0, "x86_64\n")
         if name == "curl":

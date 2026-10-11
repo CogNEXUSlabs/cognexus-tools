@@ -371,9 +371,10 @@ token is exported or anything runs.
 The script checks its own pinned uv by SHA-256, installs artzain and what
 it needs into an environment of its own, every wheel checked against the
 SHA-256 the script carries, and runs `artzain connect openshell up`, which installs the sidecar as a systemd user service beside
-the gateway that OpenShell's deb or rpm package runs. `artzain connect
-openshell status`, `doctor`, `rotate-key` and `remove` run from where the
-script says. Linux on x86_64 or aarch64 only, for now.
+the gateway that OpenShell's deb or rpm package runs (or beside the OpenShell
+snap's gateway, or as a service of a gateway's Docker Compose project).
+`artzain connect openshell status`, `doctor`, `rotate-key` and `remove` run
+from where the script says. Linux on x86_64 or aarch64 only, for now.
 
 **Works with NVIDIA OpenShell**, release by release: each row is an `artzain`
 release whose sidecar passed conformance against that OpenShell release.
