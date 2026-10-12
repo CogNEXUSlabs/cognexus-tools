@@ -887,7 +887,10 @@ def test_the_self_test_reads_its_own_setting_not_the_next_one(gateway):
 
 @needs_tomllib
 @pytest.mark.parametrize("change, says", [
-    ({"platform": "darwin"}, "Linux only"),
+    ({"platform": "freebsd13"}, "on Linux, and Homebrew's on macOS"),
+    # A Mac is Homebrew's shape: one without NVIDIA's formula is refused.
+    ({"platform": "darwin", "which": lambda name: None if name == "brew" else f"/usr/bin/{name}"},
+     "no OpenShell gateway from NVIDIA's Homebrew formula"),
     ({"which": lambda name: None if name == "openshell" else f"/usr/bin/{name}"},
      "openshell is not on PATH"),
     ({"root": "/nonexistent-root"}, "not a deb, rpm, snap or Compose gateway"),

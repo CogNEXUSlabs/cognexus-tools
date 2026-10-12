@@ -1,6 +1,6 @@
 """``artzain connect openshell``: bind an OpenShell gateway on this host to ArtzAIn.
 
-This release handles three gateway shapes:
+This release handles four gateway shapes:
 
 * the deb or rpm package, which runs the gateway as a systemd *user* service
   (``openshell-gateway.service``, ``~/.config/openshell/gateway.toml``);
@@ -11,11 +11,14 @@ This release handles three gateway shapes:
 * NVIDIA's Docker Compose project, which runs it as a Compose service with
   ``gateway.toml`` bind-mounted from the project folder. The sidecar then
   runs as a second service of that project, from the signed sidecar image
-  (:mod:`artzain.openshell.compose`).
+  (:mod:`artzain.openshell.compose`);
+* NVIDIA's Homebrew formula on a Mac with Apple silicon, whose gateway
+  ``brew services`` runs as a launchd agent. The sidecar runs as a launchd
+  agent beside it (:mod:`artzain.openshell.brew`).
 
-Homebrew comes later, and is refused with a message that says so. The steps
-below are the deb's; :mod:`artzain.openshell.snap` and
-:mod:`artzain.openshell.compose` say how the other shapes do each.
+The steps below are the deb's; :mod:`artzain.openshell.snap`,
+:mod:`artzain.openshell.compose` and :mod:`artzain.openshell.brew` say how the
+other shapes do each.
 
 ``up`` takes an enroll token (``ARTZAIN_ENROLL_TOKEN``) and the digest of the
 configuration the operator approved, and then:
@@ -79,7 +82,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from artzain._private_files import private_dir, replace_file, write_private
-from artzain.openshell import compose, install, registration, snap, transport
+from artzain.openshell import brew, compose, install, registration, snap, transport
 from artzain.openshell import upgrade as signed
 
 #: What the configuration a token carries says it is, and the one version
@@ -92,6 +95,7 @@ _CONFIG_KEYS = frozenset({"kind", "version", "decision_url", "openshell_version"
 SHAPE_SYSTEMD_USER = "systemd-user"
 SHAPE_COMPOSE = "compose"
 SHAPE_SNAP = "snap"
+SHAPE_HOMEBREW = "homebrew"
 
 GATEWAY_UNIT = "openshell-gateway.service"
 SIDECAR_UNIT = "artzain-openshell-sidecar.service"
@@ -504,10 +508,13 @@ class Layout:
     more_dropins: Tuple[Path, ...] = ()
     #: Where ``gateway.toml`` as it would be goes, for the gateway's preflight.
     trial: Optional[Path] = None
+    #: What runs the two services: ``systemd``, or ``launchd`` (Homebrew's
+    #: gateway, which has no drop-ins).
+    manager: str = "systemd"
 
     @property
     def dropins(self) -> Tuple[Path, ...]:
-        return (self.dropin, *self.more_dropins)
+        return () if self.manager == "launchd" else (self.dropin, *self.more_dropins)
 
     @property
     def candidate(self) -> Path:
@@ -578,6 +585,15 @@ def snap_layout(host: Host, paths: Layout, gateway: snap.Gateway) -> Layout:
                    system=gateway.system, trial=snap.candidate(host, gateway))
 
 
+def brew_layout(host: Host, paths: Layout, gateway: brew.Gateway) -> Layout:
+    """Where things are for Homebrew's gateway: the ``gateway.toml`` and
+    ``gateway.env`` its wrapper reads, the sidecar's launchd agent, and a
+    socket in a folder of the user's alone."""
+    return replace(paths, gateway_toml=gateway.gateway_toml, gateway_env=gateway.gateway_env,
+                   sidecar_unit=brew.agent(host), socket=brew.socket(host),
+                   gateway_service=brew.FORMULA, manager="launchd")
+
+
 @dataclass(frozen=True)
 class Shape:
     kind: str
@@ -587,6 +603,8 @@ class Shape:
     project: Optional[compose.Project] = None
     #: The snap's gateway, for the snap shape.
     snap: Optional[snap.Gateway] = None
+    #: The formula's gateway, for the Homebrew shape.
+    brew: Optional[brew.Gateway] = None
 
 
 def receipt_url(engine: Any, decision_id: Any) -> str:
@@ -674,6 +692,13 @@ def _snap_of(host: Host, data: Mapping[str, Any]) -> Optional[snap.Gateway]:
     return snap.recorded(data.get("snap") or {}, current)
 
 
+def _brew_paths(host: Host, paths: Layout, data: Mapping[str, Any]) -> Layout:
+    """*paths*, for a record of the Homebrew shape: the files its record names."""
+    if data.get("shape") != SHAPE_HOMEBREW:
+        return paths
+    return brew_layout(host, paths, brew.recorded(data.get("homebrew") or {}))
+
+
 def _recorded_project(data: Mapping[str, Any]) -> Optional[compose.Project]:
     """The Compose project a record names, or None."""
     if data.get("shape") != SHAPE_COMPOSE:
@@ -702,6 +727,34 @@ def _compose_shape(host: Host, paths: Layout, project: compose.Project) -> Shape
                  project)
 
 
+def _brew_shape(host: Host, paths: Layout) -> Shape:
+    """Homebrew's gateway on this Mac. A host already bound keeps the files
+    its record names."""
+    if sys.version_info < (3, 11):
+        raise ConnectError("artzain connect needs Python 3.11 or later (it reads TOML)")
+    if host.uid == 0:
+        raise ConnectError("run this as the user who installed OpenShell with Homebrew, "
+                           "not as root")
+    gateway = brew.find(host)
+    if gateway is None:
+        raise ConnectError("no OpenShell gateway from NVIDIA's Homebrew formula here: install "
+                           "it as NVIDIA's installer does, start it (`brew services start "
+                           "openshell`), then run this again")
+    try:
+        data = json.loads(paths.record.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if isinstance(data, dict) and data.get("shape") == SHAPE_HOMEBREW:
+        gateway = replace(brew.recorded(data.get("homebrew") or {}), version=gateway.version)
+    for tool in ("openshell", "openshell-gateway"):
+        if not host.which(tool):
+            raise ConnectError(f"{tool} is not on PATH: Homebrew's bin folder "
+                               f"({gateway.prefix}/bin) must be on PATH")
+    brew.check_socket(brew.socket(host))
+    return Shape(SHAPE_HOMEBREW, gateway.version, brew_layout(host, paths, gateway),
+                 brew=gateway)
+
+
 def _snap_shape(host: Host, paths: Layout, gateway: snap.Gateway) -> Shape:
     if host.uid == 0:
         raise ConnectError("run this as the user who operates the gateway, not as root: "
@@ -714,12 +767,15 @@ def _snap_shape(host: Host, paths: Layout, gateway: snap.Gateway) -> Shape:
 
 
 def detect(host: Host) -> Shape:
-    """The gateway on this host, when it is one this release can bind: the
-    deb or rpm package's, else the OpenShell snap's, else one under Docker
-    Compose. A host already bound keeps the shape its record names."""
+    """The gateway on this host, when it is one this release can bind: on
+    Linux the deb or rpm package's, else the OpenShell snap's, else one under
+    Docker Compose; on a Mac, Homebrew's. A host already bound keeps the
+    shape its record names."""
+    if host.platform.startswith("darwin"):
+        return _brew_shape(host, layout(host))
     if not host.platform.startswith("linux"):
-        raise ConnectError("this release binds the deb, rpm, snap or Compose gateway on Linux "
-                           "only; Homebrew comes later")
+        raise ConnectError("this release binds the deb, rpm, snap or Compose gateway on Linux, "
+                           "and Homebrew's on macOS")
     if sys.version_info < (3, 11):
         raise ConnectError("artzain connect needs Python 3.11 or later (it reads TOML)")
     paths = layout(host)
@@ -750,7 +806,7 @@ def detect(host: Host) -> Shape:
     if not paths.gateway_unit.is_file():
         raise ConnectError(f"no {GATEWAY_UNIT} user unit, no OpenShell snap, and no "
                            "OpenShell gateway under Docker Compose: this is not a deb, rpm, "
-                           "snap or Compose gateway (Homebrew comes later)")
+                           "snap or Compose gateway (Homebrew's is bound on macOS)")
     if paths.gateway_toml.exists() and not paths.gateway_toml.is_file():
         raise ConnectError(f"{paths.gateway_toml} is not a file")
     done = host.run("openshell-gateway", "--version", timeout=30)
@@ -1064,7 +1120,9 @@ def _snap_jwt(host: Host, gateway: snap.Gateway,
 
 def _unit(host: Host, paths: Layout, gateway: Optional[snap.Gateway],
           key: Optional[Path] = None) -> str:
-    """The sidecar's unit for this shape."""
+    """The sidecar's unit for this shape: under launchd, its agent."""
+    if paths.manager == "launchd":
+        return brew.sidecar_agent(host, python=host.executable, settings=paths.sidecar_env)
     if gateway is None:
         return sidecar_unit(host, paths)
     python = host.executable
@@ -1168,6 +1226,8 @@ def _ctl(host: Host, paths: Optional[Layout], *args: str,
          timeout: float = 60.0) -> subprocess.CompletedProcess:
     """``systemctl`` on the manager *paths*' units run under: the user's, or
     the system's (through ``sudo``, but for what only reads)."""
+    if paths is not None and paths.manager == "launchd":
+        return brew.ctl(host, paths.gateway_service, *args)
     if paths is None or not paths.system:
         return _systemctl(host, *args, timeout=timeout)
     if args and args[0] in ("is-active", "show"):
@@ -1182,7 +1242,11 @@ def _reload(host: Host, paths: Optional[Layout]) -> None:
 
 
 def _journal(paths: Optional[Layout], unit: str) -> str:
-    """The command that shows *unit*'s log."""
+    """The command, or the file, that shows *unit*'s log."""
+    if paths is not None and paths.manager == "launchd":
+        # The agent is in ~/Library/LaunchAgents: its log, in ~/Library/Logs.
+        return (f"`{paths.sidecar_unit.parents[2].joinpath(*brew.LOG)}`" if unit == SIDECAR_UNIT
+                else f"`brew services info {brew.FORMULA}` and {brew.GATEWAY_LOG}")
     return (f"`journalctl -u {unit}`" if paths is not None and paths.system
             else f"`journalctl --user -u {unit}`")
 
@@ -1274,12 +1338,15 @@ _SNAP_REGISTER = {
 
 
 def _cli_reaches_the_gateway(host: Host, *, under_compose: bool = False,
-                             snap_mode: str = "") -> None:
+                             snap_mode: str = "", homebrew: bool = False) -> None:
     """Raise :class:`ConnectError` unless the ``openshell`` CLI can talk to
     the gateway: every step after the redeem needs it."""
     done = host.run("openshell", "settings", "get", "--global", timeout=60)
     if done.returncode != 0:
-        start, register = (_SNAP_REGISTER[snap_mode] if snap_mode else
+        start, register = (("brew services start openshell",
+                            f"openshell gateway add {brew.ENDPOINT} --local --name openshell")
+                           if homebrew else
+                           _SNAP_REGISTER[snap_mode] if snap_mode else
                            (f"systemctl --user start {GATEWAY_UNIT}",
                             "openshell gateway add https://127.0.0.1:17670 --local "
                             "--name openshell") if not under_compose else
@@ -1342,6 +1409,9 @@ def _restart_bound(host: Host, paths: Layout, project: Optional[compose.Project]
         if not _gateway_stays_up(host, paths):
             raise ConnectError(f"{unit} did not stay up: see {_journal(paths, unit)}. "
                                "`artzain connect openshell remove` puts everything back")
+        if paths.manager == "launchd":
+            _gateway_answers(host, "the gateway runs, but the openshell CLI cannot reach it: "
+                                   f"see {_journal(paths, unit)}")
         return
     _check(compose.up(host, project, paths.compose_file, project.service),
            f"docker compose up -d {project.service}")
@@ -1356,15 +1426,22 @@ def _restart_bound(host: Host, paths: Layout, project: Optional[compose.Project]
 GATEWAY_ANSWER_SECONDS = 90.0
 
 
-def _compose_gateway_answers(host: Host, project: compose.Project) -> None:
-    """Wait until the openshell CLI reaches a gateway container just
-    (re)started. Docker publishes its port as soon as the container runs,
-    before the gateway behind it listens, and a call meanwhile is reset."""
+def _gateway_answers(host: Host, failed: str) -> None:
+    """Wait until the openshell CLI reaches a gateway just (re)started, or
+    raise *failed*: one that ``brew services`` restarted answers once it
+    listens, after launchd started it again if the sidecar was not up yet."""
     def answers() -> bool:
         return host.run("openshell", "settings", "get", "--global", timeout=60).returncode == 0
 
     if not _wait(host, GATEWAY_ANSWER_SECONDS, answers):
-        raise ConnectError(f"the gateway's container is up, but the openshell CLI cannot reach "
+        raise ConnectError(failed)
+
+
+def _compose_gateway_answers(host: Host, project: compose.Project) -> None:
+    """Wait until the openshell CLI reaches a gateway container just
+    (re)started. Docker publishes its port as soon as the container runs,
+    before the gateway behind it listens, and a call meanwhile is reset."""
+    _gateway_answers(host, f"the gateway's container is up, but the openshell CLI cannot reach "
                            f"it: see `docker compose -p {project.name} logs {project.service}`")
 
 
@@ -1402,12 +1479,18 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
         # and so does a CLI that cannot reach the gateway.
         check_gateway_toml(paths, toml_text)
         _cli_reaches_the_gateway(host, under_compose=project is not None,
-                                 snap_mode=gateway.mode if gateway else "")
+                                 snap_mode=gateway.mode if gateway else "",
+                                 homebrew=shape.brew is not None)
     signer: Optional[Tuple[str, str]] = None
     image, release, endpoint = "", "", ""
     key: Optional[Path] = None
     if gateway is not None:
         jwt, key = _snap_jwt(host, gateway, toml_text)
+    elif shape.brew is not None:
+        jwt = _jwt_settings(toml_text) or (
+            {"OPENSHELL_JWT_PUBLIC_KEY": brew.jwt_key(host).as_posix(),
+             "OPENSHELL_JWT_GATEWAY_ID": brew.JWT_GATEWAY_ID}
+            if brew.jwt_key(host).is_file() else {})
     elif project is None:
         jwt = _jwt_settings(toml_text, host)
     else:
@@ -1452,7 +1535,9 @@ def up(host: Host, *, token: str = "", digest: str = "", engine: str = DEFAULT_E
             gateway_endpoint=endpoint).encode("utf-8"),
             private=True)
         shape_facts = ({"shape": SHAPE_COMPOSE, "compose": project.facts()} if project else
-                       {"shape": SHAPE_SNAP, "snap": gateway.facts()} if gateway else {})
+                       {"shape": SHAPE_SNAP, "snap": gateway.facts()} if gateway else
+                       {"shape": SHAPE_HOMEBREW, "homebrew": shape.brew.facts()} if shape.brew
+                       else {})
         record.mark("redeemed", gateway_id=gateway_id, config=got.raw_config,
                     engine=engine.rstrip("/"), port=int(port), **shape_facts)
         _say(out, f"gateway {gateway_id}: credential saved to {paths.sidecar_env}")
@@ -1841,8 +1926,8 @@ def remove(host: Host, *, keep_credential: bool = False,
         result = _unbind_compose(host, paths, data)
     else:
         gateway = _snap_of(host, data)
-        result = _unbind_systemd(host, snap_layout(host, paths, gateway) if gateway else paths,
-                                 data, gateway)
+        result = _unbind_systemd(host, snap_layout(host, paths, gateway) if gateway
+                                 else _brew_paths(host, paths, data), data, gateway)
 
     revoked = None
     if data.get("gateway_id") and paths.sidecar_env.exists() and not keep_credential:
@@ -1896,9 +1981,12 @@ def _unbind_systemd(host: Host, paths: Layout, data: Mapping[str, Any],
                                f"{_journal(paths, unit)}")
         result["gateway"] = "restarted unbound"
 
-    _ctl(host, paths, "disable", "--now", SIDECAR_UNIT)
+    stopped = _ctl(host, paths, "disable", "--now", SIDECAR_UNIT)
     if _drop(host, paths, paths.sidecar_unit):
         result["sidecar"] = "removed"
+    if paths.manager == "launchd" and stopped.returncode != 0:
+        result["sidecar"] = (f"NOT taken out of launchd: run `launchctl bootout "
+                             f"gui/{host.uid}/{brew.LABEL}`")
     _ctl(host, paths, "daemon-reload")
 
     if gateway is None:
@@ -2071,6 +2159,7 @@ def rotate_key(host: Host, *, out: Callable[[str], None] = print) -> Dict[str, A
                if data.get("shape") == SHAPE_COMPOSE else None)
     gateway = _snap_of(host, data)
     key: Optional[Path] = None
+    paths = _brew_paths(host, paths, data)
     if gateway is not None:
         paths = snap_layout(host, paths, gateway)
         _jwt, key = _snap_jwt(host, gateway,
@@ -2162,6 +2251,11 @@ def status(host: Host) -> Dict[str, Any]:
         paths = compose_layout(paths, project)
     elif gateway is not None:
         paths = snap_layout(host, paths, gateway)
+    elif record.get("shape") == SHAPE_HOMEBREW:
+        try:
+            paths = _brew_paths(host, paths, record)
+        except ConnectError as exc:
+            record = {**record, "error": str(exc)}
     toml = _read(host, paths, paths.gateway_toml) or b""
     port = int(record.get("port") or DEFAULT_PORT)
     if project is not None:
@@ -2190,6 +2284,13 @@ def status(host: Host) -> Dict[str, Any]:
                         or "unknown"),
             "gateway": (_ctl(host, paths, "is-active", gateway.unit, timeout=10).stdout.strip()
                         or "unknown"),
+        }
+    elif paths.manager == "launchd":
+        shape = {
+            "shape": SHAPE_HOMEBREW,
+            "launch_agent": paths.sidecar_unit.exists(),
+            "sidecar": brew.sidecar_state(host),
+            "gateway": brew.gateway_state(host),
         }
     else:
         shape = {
@@ -2432,7 +2533,7 @@ def _engine_time(date: str) -> Optional[float]:
 
 def _doctor_systemd(host: Host, paths: Layout, found: Callable[[str, str, str], None]) -> None:
     """doctor's checks of the socket and drop-in of the deb's gateway, or the
-    snap's."""
+    snap's; beside Homebrew's, of the socket and the sidecar's launchd agent."""
     try:
         socket_stat = host.stat(paths.socket)
     except OSError:
@@ -2458,6 +2559,13 @@ def _doctor_systemd(host: Host, paths: Layout, found: Callable[[str, str, str], 
               f"{paths.socket}: " + ("; ".join(problems) if problems
                                      else "the owner's alone, in a folder of the owner's alone"))
 
+    if paths.manager == "launchd":
+        # launchd starts the sidecar's agent at login, as it starts the gateway's.
+        there = paths.sidecar_unit.is_file()
+        found("launch_agent", "ok" if there else "fail",
+              f"{paths.sidecar_unit} " + ("is in place" if there else
+                                          "is missing: launchd does not start the sidecar"))
+        return
     # The drop-in that makes the gateway wait for the sidecar.
     missing = [dropin for dropin in paths.dropins if not dropin.is_file()]
     found("drop_in", "fail" if missing else "ok",
@@ -2494,6 +2602,31 @@ def _doctor_snap(host: Host, data: Mapping[str, Any], gateway: snap.Gateway,
         found("snap", "ok", f"the snap runs its {current.mode} gateway (`{current.app}`, "
                             f"revision {current.revision}), and its refreshes are held")
     return current
+
+
+def _doctor_brew(host: Host, bound: brew.Gateway, found: Callable[[str, str, str], None]) -> None:
+    """doctor's check of Homebrew's gateway: the formula installed, and its
+    wrapper reading the files ``up`` bound. It reads the user's own
+    ``gateway.toml`` once there is one, and else the formula's."""
+    try:
+        current = brew.find(host)
+    except ConnectError as exc:
+        found("homebrew", "fail", str(exc))
+        return
+    if current is None:
+        found("homebrew", "fail", f"NVIDIA's {brew.FORMULA} formula is not installed")
+    elif current.gateway_toml != bound.gateway_toml:
+        found("homebrew", "fail", f"the formula's gateway now reads {current.gateway_toml}, and "
+                                  f"`up` bound {bound.gateway_toml}: the gateway runs without "
+                                  "ArtzAIn's registration. Take the new file away, or `remove` "
+                                  "and then `up` with a new token")
+    elif current.gateway_env != bound.gateway_env:
+        found("homebrew", "warn", f"the formula's gateway now reads {current.gateway_env}, and "
+                                  f"`up` added the gateway's telemetry choice to "
+                                  f"{bound.gateway_env}")
+    else:
+        found("homebrew", "ok", f"the formula's gateway (OpenShell {current.version}) reads "
+                                f"{bound.gateway_toml}")
 
 
 def _doctor_services(host: Host, paths: Layout, project: Optional[compose.Project], port: int,
@@ -2653,6 +2786,14 @@ def doctor(host: Host) -> Dict[str, Any]:
             found("compose", "fail", str(exc))
         else:
             paths = compose_layout(paths, project)
+    elif data.get("shape") == SHAPE_HOMEBREW:
+        try:
+            bound = brew.recorded(data.get("homebrew") or {})
+        except ConnectError as exc:
+            found("homebrew", "fail", str(exc))
+        else:
+            paths = brew_layout(host, paths, bound)
+            _doctor_brew(host, bound, found)
     elif data.get("shape") == SHAPE_SNAP:
         try:
             gateway = _snap_of(host, data)
@@ -2720,6 +2861,8 @@ def doctor(host: Host) -> Dict[str, Any]:
     # The CLI that the sidecar lists sandboxes with.
     done = host.run("openshell", "settings", "get", "--global", timeout=60)
     register = (_SNAP_REGISTER[gateway.mode][1] if gateway is not None else
+                f"openshell gateway add {brew.ENDPOINT} --local --name openshell"
+                if paths.manager == "launchd" else
                 "openshell gateway add https://127.0.0.1:17670 --local --name openshell")
     found("cli", "ok" if done.returncode == 0 else "fail",
           "the openshell CLI reaches the gateway" if done.returncode == 0 else

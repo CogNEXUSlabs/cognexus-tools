@@ -36,15 +36,18 @@ IDENTITY = (r"^https://github\.com/CogNEXUSlabs/cognexus-tools/\.github/workflow
             r"openshell-compat\.yml@refs/tags/compat-v[0-9]+$")
 
 #: cosign, the 2.x release the mirror's workflows sign with, by
-#: ``uname -m``, with the SHA-256 its cosign_checksums.txt lists (and the
-#: release API's asset digest).
+#: ``uname -sm``, with the SHA-256 its cosign_checksums.txt lists (and the
+#: release API's asset digest). A Mac's is Apple silicon's, beside a Homebrew
+#: gateway (NVIDIA's formula is arm64's alone).
 COSIGN_VERSION = "v2.6.5"
 COSIGN_RELEASE = f"https://github.com/sigstore/cosign/releases/download/{COSIGN_VERSION}/"
 COSIGN: Mapping[str, Tuple[str, str]] = {
-    "x86_64": ("cosign-linux-amd64",
-               "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644"),
-    "aarch64": ("cosign-linux-arm64",
-                "426193b4c5da4d4d643e822f48fe0cc8a476ca1782a272704831f5a0cef716d7"),
+    "Linux x86_64": ("cosign-linux-amd64",
+                     "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644"),
+    "Linux aarch64": ("cosign-linux-arm64",
+                      "426193b4c5da4d4d643e822f48fe0cc8a476ca1782a272704831f5a0cef716d7"),
+    "Darwin arm64": ("cosign-darwin-arm64",
+                     "4d41cc18f0563907c0c785b51db76e1d1af10db4422b605ba876b1758e1771ab"),
 }
 #: The name it is kept under, in the sidecar's state folder.
 COSIGN_NAME = f"cosign-{COSIGN_VERSION}"
@@ -105,11 +108,11 @@ def newest_serial(host: Any, work: Path) -> int:
 def cosign(host: Any, state_dir: Path, say: Any) -> Path:
     """cosign, as pinned, kept in *state_dir*/bin for the next run and
     checked against its SHA-256 every time before it runs."""
-    done = host.run("uname", "-m", timeout=10)
-    arch = (done.stdout or "").strip()
-    if arch not in COSIGN:
-        raise UpgradeError(f"there is no pinned cosign for {arch or 'this machine'}")
-    name, sha = COSIGN[arch]
+    done = host.run("uname", "-sm", timeout=10)
+    machine = " ".join((done.stdout or "").split())
+    if machine not in COSIGN:
+        raise UpgradeError(f"there is no pinned cosign for {machine or 'this machine'}")
+    name, sha = COSIGN[machine]
     kept = state_dir / "bin" / COSIGN_NAME
     if kept.is_file() and _sha256(kept) == sha:
         return kept
