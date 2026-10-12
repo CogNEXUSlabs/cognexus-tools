@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.6.48
+
+### Added
+
+- **`artzain connect openshell` binds NVIDIA's OpenShell Homebrew formula on
+  a Mac with Apple silicon**, whose gateway `brew services` runs as a launchd
+  agent of the user, through the formula's wrapper. `up` adds the
+  registration to the `gateway.toml` the wrapper reads (the user's own
+  `~/.config/openshell/gateway.toml` when there is one, else the formula's
+  `var/openshell/gateway.toml`) and the telemetry choice to the
+  `gateway.env` it sources; it creates neither file in Homebrew's folders,
+  and refuses a `gateway.env` that points the gateway at another
+  configuration (`OPENSHELL_GATEWAY_CONFIG`). The sidecar is a launchd agent
+  of the same user (`~/Library/LaunchAgents/ai.cognexuslabs.artzain-openshell-sidecar.plist`),
+  which reads `sidecar.env` through `sh` and serves a socket under
+  `~/.local/state/artzain/openshell/run`; `up` refuses, before the token is
+  spent, a state folder whose socket the gateway could not connect to
+  (longer than 103 bytes, or with a space). It checks the gateway's signed
+  calls against the key the wrapper copies to
+  `~/.local/state/openshell/homebrew/tls`. launchd starts the two agents in
+  no order: a gateway restarted before the sidecar answers exits and is
+  started again by launchd, and `up` waits until the CLI reaches it. The
+  sidecar's agent is loaded again from its file whenever it restarts
+  (launchd does not reread a loaded agent's file). `doctor` fails when the
+  wrapper now reads another `gateway.toml` than the one `up` bound, and
+  `remove` puts back the files the record names.
+- **The connect script runs on a Mac with Apple silicon**, with uv's
+  `aarch64-apple-darwin` build, pinned by SHA-256 like the Linux builds; the
+  sidecar's requirements lock carries the macOS wheels of its dependencies.
+- **`artzain connect openshell upgrade` runs on a Mac with Apple silicon**:
+  cosign v2.6.5's `cosign-darwin-arm64`, pinned by SHA-256, checks the
+  compatibility manifest. Each pinned cosign is now picked by `uname -sm`.
+
 ## 0.6.47
 
 ### Added

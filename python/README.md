@@ -680,6 +680,12 @@ sidecar's socket is in the snap's own folder, where the snap lets its gateway
 connect. `up` holds the snap's refreshes, so OpenShell stays the approved
 release until you refresh it yourself; `remove` lifts that hold.
 
+**Homebrew's gateway on macOS** (0.6.48), from NVIDIA's `openshell` formula
+on a Mac with Apple silicon, is bound by the same command. The sidecar runs
+as a launchd agent of yours, beside the gateway `brew services` runs, and
+`up` changes the `gateway.toml` and `gateway.env` the formula's wrapper
+reads (`~/.config/openshell/` when you have them, else the formula's).
+
 Then:
 
 ```bash

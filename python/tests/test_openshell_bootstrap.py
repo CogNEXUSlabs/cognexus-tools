@@ -49,8 +49,10 @@ def test_the_script_names_its_version_and_the_pinned_uv():
     assert script.startswith("#!/bin/sh\n") and "\nset -eu\n" in script
     assert f'ARTZAIN_VERSION="{VERSION}"' in script
     assert f'UV_VERSION="{bootstrap.UV_VERSION}"' in script
-    for arch, digest in bootstrap.UV_SHA256.items():
-        assert f'arch={arch}; uv_sha256="{digest}"' in script
+    assert set(bootstrap.UV_SHA256) == {"x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl",
+                                        "aarch64-apple-darwin"}
+    for target, digest in bootstrap.UV_SHA256.items():
+        assert f'target={target}; uv_sha256="{digest}"' in script
     assert re.search(r"@[A-Z0-9_]+@", script) is None  # every placeholder filled
     assert "\r" not in script
     assert "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/$asset" in script
@@ -177,7 +179,8 @@ class _Host:
             folder.mkdir()
         self.log.write_text("", encoding="utf-8")
         arch = machine.replace("amd64", "x86_64").replace("arm64", "aarch64")
-        digest = digest or bootstrap.UV_SHA256.get(arch, "0" * 64)
+        target = f"{arch}-" + ("apple-darwin" if system == "Darwin" else "unknown-linux-musl")
+        digest = digest or bootstrap.UV_SHA256.get(target, "0" * 64)
         log, locks = self.log.as_posix(), self.locks.as_posix()
         _stub(self.bin, "uname", '[ "$1" = -s ] && echo ' + system + " || echo " + machine)
         _stub(self.bin, "id", "echo " + uid)
@@ -223,7 +226,7 @@ class _Host:
         _stub(self.bin, "tar", lines([
             'echo "tar $*" >> ' + log,
             'while [ $# -gt 1 ]; do [ "$1" = -C ] && to="$2"; shift; done',
-            'd="$to/uv-' + arch + '-unknown-linux-musl"; mkdir -p "$d"',
+            'd="$to/uv-' + target + '"; mkdir -p "$d"',
             "printf '%s" + chr(92) + "n' " + " ".join("'" + line + "'" for line in uv)
             + ' > "$d/uv"',
             'chmod +x "$d/uv"']))
@@ -335,12 +338,18 @@ def test_an_environment_that_does_not_hold_this_artzain_is_made_again(tmp_path):
 
 
 @needs_posix_sh
-@pytest.mark.parametrize("machine, arch", [("amd64", "x86_64"), ("aarch64", "aarch64"),
-                                           ("arm64", "aarch64")])
-def test_each_machine_gets_its_own_pinned_build(tmp_path, machine, arch):
-    host = _Host(tmp_path, machine=machine)
+@pytest.mark.parametrize("system, machine, target", [
+    ("Linux", "amd64", "x86_64-unknown-linux-musl"),
+    ("Linux", "aarch64", "aarch64-unknown-linux-musl"),
+    ("Linux", "arm64", "aarch64-unknown-linux-musl"),
+    # A Mac with Apple silicon, beside a Homebrew gateway (NVIDIA's formula
+    # is arm64's alone).
+    ("Darwin", "arm64", "aarch64-apple-darwin"),
+])
+def test_each_machine_gets_its_own_pinned_build(tmp_path, system, machine, target):
+    host = _Host(tmp_path, system=system, machine=machine)
     assert host.run().returncode == 0
-    assert host.calls("curl")[0].endswith(f"/uv-{arch}-unknown-linux-musl.tar.gz")
+    assert host.calls("curl")[0].endswith(f"/uv-{target}.tar.gz")
 
 
 @needs_posix_sh
@@ -355,10 +364,11 @@ def test_a_download_that_is_not_the_pinned_build_is_not_run(tmp_path):
 
 @needs_posix_sh
 @pytest.mark.parametrize("change, says", [
-    ({"system": "Darwin"}, "on Linux"),
+    ({"system": "FreeBSD"}, "on Linux"),
+    ({"system": "Darwin", "machine": "x86_64"}, "no pinned uv for x86_64 on Darwin"),
     ({"machine": "riscv64"}, "no pinned uv for riscv64"),
     ({"uid": "0"}, "not as root"),
-], ids=["macos", "riscv", "root"])
+], ids=["freebsd", "intel-mac", "riscv", "root"])
 def test_a_host_it_does_not_connect_is_refused_before_anything_is_fetched(tmp_path, change,
                                                                           says):
     host = _Host(tmp_path, **change)

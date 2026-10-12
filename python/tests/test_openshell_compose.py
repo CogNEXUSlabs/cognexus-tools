@@ -341,11 +341,11 @@ class _Docker:
             return self._docker(args)
         if argv[:3] == ["snap", "list", "openshell"]:
             return _done(1, "", "error: no matching snaps installed\n")  # snapd, no OpenShell snap
-        if argv == ["uname", "-m"]:
-            return _done(0, "x86_64\n")
+        if argv == ["uname", "-sm"]:
+            return _done(0, "Linux x86_64\n")
         if name == "curl":
             url = argv[-1]
-            assert url == upgrade.COSIGN_RELEASE + upgrade.COSIGN["x86_64"][0], url
+            assert url == upgrade.COSIGN_RELEASE + upgrade.COSIGN["Linux x86_64"][0], url
             Path(argv[argv.index("-o") + 1]).write_bytes(COSIGN_BYTES)
             return _done()
         if name.endswith(upgrade.COSIGN_NAME) and args[0] == "verify":
@@ -470,8 +470,8 @@ class _Docker:
 @pytest.fixture(autouse=True)
 def pinned_cosign(monkeypatch):
     monkeypatch.setattr(upgrade, "COSIGN", {
-        "x86_64": ("cosign-linux-amd64", _sha(COSIGN_BYTES)),
-        "aarch64": ("cosign-linux-arm64", _sha(COSIGN_BYTES))})
+        "Linux x86_64": ("cosign-linux-amd64", _sha(COSIGN_BYTES)),
+        "Linux aarch64": ("cosign-linux-arm64", _sha(COSIGN_BYTES))})
 
 
 @pytest.fixture

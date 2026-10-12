@@ -9,12 +9,13 @@ SHA-256 the dashboard shows, and runs it as the user the gateway runs as::
 
 What the script does, in order:
 
-1. Refuses anything but Linux on x86_64 or aarch64, and root: it binds the
-   gateway OpenShell's deb or rpm package runs as a systemd user service, the
-   snap's, or one under Docker Compose, as the user who operates it.
-2. Downloads uv :data:`UV_VERSION` (the static musl build) from its GitHub
-   release, over HTTPS only, and runs it only if its SHA-256 is the one
-   written into the script.
+1. Refuses anything but Linux on x86_64 or aarch64, or macOS on Apple
+   silicon, and root: it binds the gateway OpenShell's deb or rpm package
+   runs as a systemd user service, the snap's, one under Docker Compose, or
+   Homebrew's (``brew services``), as the user who operates it.
+2. Downloads uv :data:`UV_VERSION` (on Linux the static musl build, on
+   macOS Apple silicon's) from its GitHub release, over HTTPS only, and runs
+   it only if its SHA-256 is the one written into the script.
 3. Makes an environment of its own, ``venv-<version>`` under
    ``$XDG_DATA_HOME/artzain/openshell`` (``~/.local/share`` by default), on
    Python :data:`PYTHON` as uv manages it: a lasting one, which the
@@ -47,14 +48,16 @@ import re
 import sys
 from pathlib import Path
 
-#: The uv the script installs with, and the SHA-256 of each static build,
-#: from its GitHub release (each asset's ``.sha256`` file and GitHub's own
-#: digest agree). The engine repository's ``packaging/local-setup`` pins the
-#: same version; a test there holds the two together.
+#: The uv the script installs with, and the SHA-256 of each build it may
+#: run, by uv's target name, from its GitHub release (each asset's
+#: ``.sha256`` file and GitHub's own digest agree). The engine repository's
+#: ``packaging/local-setup`` pins the same version and builds; a test there
+#: holds the two together.
 UV_VERSION = "0.8.15"
 UV_SHA256 = {
-    "x86_64": "d0fec58f3124e05e0a1af0f6541abfce4333253cdaf23c7b6bb2e6128bf138ea",
-    "aarch64": "23ea21a05c62c4c307ce691f29bff2f15c94c4f07f2b83d9b356f0664bc8b3a2",
+    "x86_64-unknown-linux-musl": "d0fec58f3124e05e0a1af0f6541abfce4333253cdaf23c7b6bb2e6128bf138ea",
+    "aarch64-unknown-linux-musl": "23ea21a05c62c4c307ce691f29bff2f15c94c4f07f2b83d9b356f0664bc8b3a2",
+    "aarch64-apple-darwin": "103367962c5cb00bf7370d84cbaa3fec5a9807be9cc833ea9d8eea400c119fa2",
 }
 #: The Python the environment runs on: the one :data:`REQUIREMENTS` is
 #: locked for.
@@ -89,11 +92,16 @@ UV_VERSION="@UV_VERSION@"
 say() { printf 'artzain connect: %s\n' "$*" >&2; }
 fail() { say "$*"; exit 1; }
 
-[ "$(uname -s)" = Linux ] || fail "this connects an OpenShell gateway on Linux: the deb or rpm package's, the snap's, or one under Docker Compose"
-case "$(uname -m)" in
-  x86_64|amd64) arch=x86_64; uv_sha256="@UV_SHA256_X86_64@" ;;
-  aarch64|arm64) arch=aarch64; uv_sha256="@UV_SHA256_AARCH64@" ;;
-  *) fail "there is no pinned uv for $(uname -m)" ;;
+system="$(uname -s)"
+case "$system" in
+  Linux|Darwin) ;;
+  *) fail "this connects an OpenShell gateway on Linux (the deb or rpm package's, the snap's, or one under Docker Compose) or on macOS (Homebrew's)" ;;
+esac
+case "$system:$(uname -m)" in
+  Linux:x86_64|Linux:amd64) target=x86_64-unknown-linux-musl; uv_sha256="@UV_SHA256_X86_64_UNKNOWN_LINUX_MUSL@" ;;
+  Linux:aarch64|Linux:arm64) target=aarch64-unknown-linux-musl; uv_sha256="@UV_SHA256_AARCH64_UNKNOWN_LINUX_MUSL@" ;;
+  Darwin:arm64|Darwin:aarch64) target=aarch64-apple-darwin; uv_sha256="@UV_SHA256_AARCH64_APPLE_DARWIN@" ;;
+  *) fail "there is no pinned uv for $(uname -m) on $system" ;;
 esac
 [ "$(id -u)" != 0 ] || fail "run this as the user the gateway runs as, not as root"
 for tool in curl tar mktemp; do
@@ -111,14 +119,14 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 trap 'exit 130' INT TERM
 
-asset="uv-$arch-unknown-linux-musl.tar.gz"
+asset="uv-$target.tar.gz"
 say "downloading uv $UV_VERSION"
 curl --proto '=https' --tlsv1.2 -fsSL -o "$work/$asset" \
   "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/$asset"
 [ "$(sha256_of "$work/$asset")" = "$uv_sha256" ] \
   || fail "uv $UV_VERSION is not the build its SHA-256 names: not running it"
 tar -xzf "$work/$asset" -C "$work"
-uv="$work/uv-$arch-unknown-linux-musl/uv"
+uv="$work/uv-$target/uv"
 
 data="${XDG_DATA_HOME:-$HOME/.local/share}/artzain/openshell"
 venv="$data/venv-$ARTZAIN_VERSION"
@@ -195,10 +203,11 @@ def render(version: str, wheel_sha256: str) -> str:
     if not _SHA256.fullmatch(wheel_sha256 or ""):
         raise ValueError("the wheel's SHA-256 must be 64 lowercase hex characters")
     requirements = REQUIREMENTS.read_text(encoding="utf-8").rstrip("\n")
-    return (_SCRIPT.replace("@ARTZAIN_VERSION@", version)
+    script = _SCRIPT
+    for target, digest in UV_SHA256.items():
+        script = script.replace(f"@UV_SHA256_{target.upper().replace('-', '_')}@", digest)
+    return (script.replace("@ARTZAIN_VERSION@", version)
             .replace("@UV_VERSION@", UV_VERSION)
-            .replace("@UV_SHA256_X86_64@", UV_SHA256["x86_64"])
-            .replace("@UV_SHA256_AARCH64@", UV_SHA256["aarch64"])
             .replace("@PYTHON@", PYTHON)
             .replace("@WHEEL_SHA256@", wheel_sha256)
             .replace("@REQUIREMENTS@", requirements))

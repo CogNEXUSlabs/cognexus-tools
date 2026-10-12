@@ -63,8 +63,8 @@ def _done(code=0, out="", err=""):
 class _Host:
     """A connected deb gateway, OpenShell *openshell*, and what it can download."""
 
-    def __init__(self, tmp: Path, *, openshell="0.1.2", arch="x86_64", serials=(3,),
-                 manifest=None, connected=True):
+    def __init__(self, tmp: Path, *, openshell="0.1.2", arch="x86_64", system="Linux",
+                 serials=(3,), manifest=None, connected=True):
         self.home = tmp / "home"
         self.root = tmp / "root"
         unit = self.root / "usr" / "lib" / "systemd" / "user" / connect.GATEWAY_UNIT
@@ -72,6 +72,7 @@ class _Host:
         unit.write_text("[Service]\n")
         self.openshell = openshell
         self.arch = arch
+        self.system = system
         self.calls = []
         self.executed = []
         self.exit_code = 0
@@ -85,7 +86,8 @@ class _Host:
             self.served[base + upgrade.BUNDLE] = GOOD_BUNDLE
         for version, body in SCRIPT.items():
             self.served[f"{upgrade.RELEASES}python-v{version}/connect-{version}.sh"] = body
-        name = upgrade.COSIGN[arch][0] if arch in upgrade.COSIGN else "cosign-linux-x"
+        machine = f"{system} {arch}"
+        name = upgrade.COSIGN[machine][0] if machine in upgrade.COSIGN else "cosign-linux-x"
         self.served[f"{upgrade.COSIGN_RELEASE}{name}"] = COSIGN_BYTES
         self.downloads = []
         if connected is not None:
@@ -101,8 +103,8 @@ class _Host:
         name = argv[0]
         if argv == ["openshell-gateway", "--version"]:
             return _done(0, f"openshell-gateway {self.openshell}\n")
-        if argv == ["uname", "-m"]:
-            return _done(0, self.arch + "\n")
+        if argv == ["uname", "-sm"]:
+            return _done(0, f"{self.system} {self.arch}\n")
         if name == "curl":
             url, path = argv[-1], Path(argv[argv.index("-o") + 1])
             self.downloads.append(url)
@@ -146,8 +148,9 @@ class _Host:
 def pinned_cosign(monkeypatch):
     """The pins as tests serve them: the cosign binary hashes to its pin."""
     monkeypatch.setattr(upgrade, "COSIGN", {
-        "x86_64": ("cosign-linux-amd64", _sha(COSIGN_BYTES)),
-        "aarch64": ("cosign-linux-arm64", _sha(COSIGN_BYTES))})
+        "Linux x86_64": ("cosign-linux-amd64", _sha(COSIGN_BYTES)),
+        "Linux aarch64": ("cosign-linux-arm64", _sha(COSIGN_BYTES)),
+        "Darwin arm64": ("cosign-darwin-arm64", _sha(COSIGN_BYTES))})
 
 
 def _upgrade(host_, **kwargs):
@@ -177,10 +180,13 @@ def test_cosign_is_the_2x_release_the_mirror_signs_with_pinned_by_sha256(monkeyp
     assert upgrade.COSIGN_VERSION == "v2.6.5"
     assert upgrade.COSIGN_RELEASE == "https://github.com/sigstore/cosign/releases/download/v2.6.5/"
     assert upgrade.COSIGN == {
-        "x86_64": ("cosign-linux-amd64",
-                   "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644"),
-        "aarch64": ("cosign-linux-arm64",
-                    "426193b4c5da4d4d643e822f48fe0cc8a476ca1782a272704831f5a0cef716d7"),
+        "Linux x86_64": ("cosign-linux-amd64",
+                         "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644"),
+        "Linux aarch64": ("cosign-linux-arm64",
+                          "426193b4c5da4d4d643e822f48fe0cc8a476ca1782a272704831f5a0cef716d7"),
+        # A Mac with Apple silicon, beside a Homebrew gateway.
+        "Darwin arm64": ("cosign-darwin-arm64",
+                         "4d41cc18f0563907c0c785b51db76e1d1af10db4422b605ba876b1758e1771ab"),
     }
 
 
@@ -403,11 +409,21 @@ def test_the_arm64_build_on_an_arm64_host(tmp_path):
     assert f"{upgrade.COSIGN_RELEASE}cosign-linux-arm64" in gw.downloads
 
 
+def test_the_apple_silicon_build_on_a_mac(tmp_path):
+    gw = _Host(tmp_path, system="Darwin", arch="arm64")
+    kept = upgrade.cosign(gw.host(platform="darwin"), gw.paths.state_dir, lambda _said: None)
+    assert gw.downloads == [f"{upgrade.COSIGN_RELEASE}cosign-darwin-arm64"]
+    assert kept.read_bytes() == COSIGN_BYTES
+
+
 @needs_tomllib
-def test_an_architecture_with_no_pinned_cosign_is_refused(tmp_path):
-    gw = _Host(tmp_path, arch="riscv64")
-    with pytest.raises(connect.ConnectError, match="no pinned cosign for riscv64"):
-        _upgrade(gw)
+@pytest.mark.parametrize("system, arch", [("Linux", "riscv64"), ("Darwin", "x86_64")],
+                         ids=["riscv", "intel-mac"])
+def test_a_machine_with_no_pinned_cosign_is_refused(tmp_path, system, arch):
+    gw = _Host(tmp_path, system=system, arch=arch)
+    with pytest.raises(upgrade.UpgradeError, match=f"no pinned cosign for {system} {arch}"):
+        upgrade.cosign(gw.host(), gw.paths.state_dir, lambda _said: None)
+    assert gw.downloads == []
 
 
 # ---------------------------------------------------------------------------
