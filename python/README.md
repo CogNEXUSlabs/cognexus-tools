@@ -686,6 +686,16 @@ as a launchd agent of yours, beside the gateway `brew services` runs, and
 `up` changes the `gateway.toml` and `gateway.env` the formula's wrapper
 reads (`~/.config/openshell/` when you have them, else the formula's).
 
+**A release of NVIDIA's Helm chart on Kubernetes** (0.6.50) is bound with
+`--kubernetes` (and `--namespace`, `--release`, `--kube-context`), through
+your own `kubectl` and `helm` (Helm 3). `up` adds the registration to the
+release's values and the sidecar to the gateway's pod as a native sidecar,
+by serving as Helm's post-renderer; the credential goes to a Secret in the
+release's namespace. For your own `helm upgrade` of the release, pass
+`--reuse-values` and the post-renderer arguments `status --kubernetes`
+prints (`helm_post_renderer`). `status`, `doctor`, `rotate-key` and
+`remove` take the same options.
+
 Then:
 
 ```bash

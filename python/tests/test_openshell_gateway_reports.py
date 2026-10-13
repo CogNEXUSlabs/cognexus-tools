@@ -1059,6 +1059,29 @@ def test_a_cli_that_does_not_say_falls_back_to_the_sdk(image_cli, how):
     assert sidecar._openshell_version() == "0.1.2"
 
 
+def test_a_gateway_the_cli_cannot_reach_yet_is_asked_again_soon(image_cli, monkeypatch):
+    """In the gateway's pod the sidecar starts first (a native sidecar), so
+    its first ask finds no gateway: that lack of an answer is kept for
+    GATEWAY_VERSION_RETRY_SECONDS, not ten minutes, and a heartbeat soon after
+    carries the release. An answer is kept ten minutes, as before."""
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(sidecar.time, "monotonic", lambda: clock["now"])
+    answer = image_cli["stdout"]
+    image_cli["code"], image_cli["stdout"] = 1, ""
+    assert sidecar._openshell_version() == "0.1.2"
+    image_cli["code"], image_cli["stdout"] = 0, answer
+    clock["now"] += sidecar.GATEWAY_VERSION_RETRY_SECONDS - 1
+    assert sidecar._openshell_version() == "0.1.2"
+    assert len(image_cli["runs"]) == 1
+    clock["now"] += 1
+    assert sidecar._openshell_version() == "0.1.3"
+    assert len(image_cli["runs"]) == 2
+    clock["now"] += sidecar.GATEWAY_VERSION_SECONDS - 1
+    assert sidecar._openshell_version() == "0.1.3"
+    assert len(image_cli["runs"]) == 2
+    assert sidecar.GATEWAY_VERSION_RETRY_SECONDS == 30
+
+
 def test_the_gateways_binary_is_asked_first(gateway_binary, monkeypatch):
     """On a deb or rpm host the binary is there, and it is the one asked."""
     monkeypatch.setenv("OPENSHELL_SIDECAR_LIST_CLI", "/usr/bin/openshell")

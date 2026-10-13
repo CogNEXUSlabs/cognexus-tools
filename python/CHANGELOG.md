@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.6.50
+
+### Added
+
+- **`artzain connect openshell --kubernetes` binds a release of NVIDIA's
+  OpenShell Helm chart** (`oci://ghcr.io/nvidia/openshell/helm-chart`),
+  through the operator's own `kubectl` and `helm` (Helm 3): `--namespace`,
+  `--release` and `--kube-context` name it, on `up`, `status`, `doctor`,
+  `rotate-key` and `remove`. Before the token is spent, `up` checks the
+  release runs NVIDIA's chart and one gateway workload, as a user other than
+  root. It adds ArtzAIn's interceptors to the release's values under the
+  chart's dotted key (`gatewayConfig["openshell.gateway"].interceptors`) and
+  the socket's `emptyDir` to `server.extraVolumes`, keeping the operator's
+  own values, and upgrades the release. The chart has no value for a
+  container of someone else's, so `artzain openshell kube-render` serves as
+  Helm's post-renderer: a strategic merge patch, run by `kubectl kustomize`,
+  adds the sidecar to the release's gateway workload alone as a native
+  sidecar (`restartPolicy: Always`) from this release's image, checked with
+  cosign, as the gateway's user, non-root, read-only, with no capabilities.
+  The credential goes to a Secret of the release's namespace, written from a
+  private file and never on a command line, and the self-test runs inside the
+  sidecar without it. `status --kubernetes` prints the post-renderer's
+  arguments for the operator's own `helm upgrade`. `doctor --kubernetes`
+  reads the live pod through kubectl, and fails on a pod an upgrade without
+  the post-renderer left without the sidecar; `up --kubernetes` again, with
+  no new token, puts it back, and deletes a pod the StatefulSet left on the
+  old template. `remove --kubernetes` gives the release back the operator's
+  own values (the telemetry choice included), revokes the credential and
+  deletes the Secret.
+- **`--ca-bundle` on Kubernetes.** The PEM bundle is read on the operator's
+  machine, checked, written with LF line endings to a ConfigMap the sidecar
+  mounts, and trusted by that machine's own calls to the engine too.
+
+### Fixed
+
+- **The sidecar asks the gateway its release again 30 s after the CLI found
+  no gateway**, not ten minutes later. A sidecar that starts before its
+  gateway (as in the gateway's pod) sent heartbeats without the gateway's
+  OpenShell release for ten minutes, so advisories could not reach it. An
+  answer, and the gateway binary's lack of one, are still kept ten minutes.
+
 ## 0.6.49
 
 ### Changed
