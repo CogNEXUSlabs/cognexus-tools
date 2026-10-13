@@ -1809,6 +1809,9 @@ def cmd_connect_openshell(args: argparse.Namespace) -> None:
 
     host = connect.Host()
     try:
+        if getattr(args, "kubernetes", False):
+            _connect_kubernetes(host, args)
+            return
         if args.connect_command == "up":
             # The token comes from the environment only: an argument would be
             # on display in the process list.
@@ -1845,6 +1848,49 @@ def cmd_connect_openshell(args: argparse.Namespace) -> None:
             print(_json.dumps(connect.status(host), indent=2))
     except connect.ConnectError as exc:
         raise SystemExit(f"artzain connect openshell {args.connect_command}: {exc}") from None
+
+
+def _connect_kubernetes(host: Any, args: argparse.Namespace) -> None:
+    """``artzain connect openshell <command> --kubernetes``: a release of
+    NVIDIA's OpenShell chart, through kubectl and helm."""
+    import json as _json
+
+    from artzain.openshell import kube
+
+    target = kube.target(host, namespace=args.namespace, release=args.release,
+                         context=args.kube_context or "")
+    if args.connect_command == "up":
+        kube.up(host, target, token=os.environ.get("ARTZAIN_ENROLL_TOKEN", "").strip(),
+                digest=(args.config_digest or "").strip().lower(), engine=args.engine,
+                proxy=args.proxy or "", ca_bundle=args.ca_bundle or "", port=args.port,
+                sidecar_image=(args.sidecar_image or "").strip())
+    elif args.connect_command == "remove":
+        kube.remove(host, target, keep_credential=args.keep_credential)
+    elif args.connect_command == "rotate-key":
+        kube.rotate_key(host, target)
+    elif args.connect_command == "doctor":
+        found = kube.doctor(host, target)
+        if args.json:
+            print(_json.dumps(found, indent=2))
+        else:
+            for check in found["checks"]:
+                label = "FAIL" if check["result"] == "fail" else check["result"]
+                print(f"{label:<5} {check['check']:<13} {check['says']}")
+        if not found["ok"]:
+            raise SystemExit(1)
+    else:
+        print(_json.dumps(kube.status(host, target), indent=2))
+
+
+def cmd_openshell_kube_render(args: argparse.Namespace) -> None:
+    """``artzain openshell kube-render``: Helm's post-renderer, which adds the
+    ArtzAIn sidecar to the gateway's pod."""
+    from artzain.openshell import connect, kube
+
+    try:
+        kube.render_stdio(kube.render_of(args), sys.stdin, sys.stdout)
+    except connect.ConnectError as exc:
+        raise SystemExit(f"artzain openshell kube-render: {exc}") from None
 
 
 def cmd_openshell_sidecar(_args: argparse.Namespace) -> None:
@@ -2299,6 +2345,27 @@ def _add_openshell_parser(sub: argparse._SubParsersAction) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     os_sidecar.set_defaults(func=cmd_openshell_sidecar)
+    os_render = openshell_sub.add_parser(
+        "kube-render",
+        help="Helm's post-renderer for a release `connect openshell up --kubernetes` bound: "
+             "adds the ArtzAIn sidecar to the gateway's pod (manifests on stdin).",
+    )
+    from artzain.openshell.kube import render_arguments
+
+    render_arguments(os_render)
+    os_render.set_defaults(func=cmd_openshell_kube_render)
+
+
+def _kubernetes_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--kubernetes", action="store_true",
+                        help="a release of NVIDIA's OpenShell Helm chart, through kubectl and "
+                             "helm as you, in place of a gateway on this host")
+    parser.add_argument("--namespace", default="openshell",
+                        help="the release's namespace (default: %(default)s)")
+    parser.add_argument("--release", default="openshell",
+                        help="the Helm release (default: %(default)s)")
+    parser.add_argument("--kube-context", default="",
+                        help="the kube context (default: kubectl's current one)")
 
 
 def _add_connect_parser(sub: argparse._SubParsersAction) -> None:
@@ -2360,10 +2427,12 @@ def _add_connect_parser(sub: argparse._SubParsersAction) -> None:
     c_up.add_argument("--install-openshell", action="store_true",
                       help="on a host without OpenShell, install NVIDIA's deb or rpm of the "
                            "pinned release (checked against its SHA-256) without asking")
+    _kubernetes_flags(c_up)
     c_up.set_defaults(func=cmd_connect_openshell)
     c_remove = c_os_sub.add_parser("remove", help="Undo up, and revoke the credential.")
     c_remove.add_argument("--keep-credential", action="store_true",
                           help="do not revoke the gateway's credential in the engine")
+    _kubernetes_flags(c_remove)
     c_remove.set_defaults(func=cmd_connect_openshell)
     c_upgrade = c_os_sub.add_parser(
         "upgrade",
@@ -2375,8 +2444,10 @@ def _add_connect_parser(sub: argparse._SubParsersAction) -> None:
                            help="say what it would do, and change nothing")
     c_upgrade.set_defaults(func=cmd_connect_openshell)
     c_status = c_os_sub.add_parser("status", help="What is installed, and whether it is up.")
+    _kubernetes_flags(c_status)
     c_status.set_defaults(func=cmd_connect_openshell)
     c_rotate = c_os_sub.add_parser("rotate-key", help="Swap the gateway's credential for a new one.")
+    _kubernetes_flags(c_rotate)
     c_rotate.set_defaults(func=cmd_connect_openshell)
     c_glass = c_os_sub.add_parser(
         "break-glass",
@@ -2389,6 +2460,7 @@ def _add_connect_parser(sub: argparse._SubParsersAction) -> None:
     c_glass.set_defaults(func=cmd_connect_openshell)
     c_doctor = c_os_sub.add_parser("doctor", help="Check what binds the gateway; exit 1 on a failure.")
     c_doctor.add_argument("--json", action="store_true", help="print the checks as JSON")
+    _kubernetes_flags(c_doctor)
     c_doctor.set_defaults(func=cmd_connect_openshell)
 
 

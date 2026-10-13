@@ -1121,8 +1121,11 @@ def registration_found(path: str) -> str:
 #: How long the gateway's own version is kept before it is asked again: its
 #: package can be upgraded under a running sidecar.
 GATEWAY_VERSION_SECONDS = 600
+#: How long the CLI's lack of an answer is kept: in the gateway's pod the
+#: sidecar starts first, and its first ask finds no gateway yet.
+GATEWAY_VERSION_RETRY_SECONDS = 30
 _VERSION_IN = re.compile(r"(\d+)\.(\d+)\.(\d+)")
-_gateway_version: Dict[str, Any] = {"at": None, "value": ""}
+_gateway_version: Dict[str, Any] = {"at": None, "value": "", "keep": GATEWAY_VERSION_SECONDS}
 _gateway_version_lock = threading.Lock()
 
 
@@ -1132,11 +1135,12 @@ def _gateway_openshell_version() -> str:
     deb or rpm gateway), or else what the gateway tells the CLI the sidecar
     lists with (``openshell status -o json``), as beside a gateway under
     Docker Compose, whose binary is in another container. An answer, or the
-    lack of one, is kept for :data:`GATEWAY_VERSION_SECONDS`."""
+    binary's lack of one, is kept for :data:`GATEWAY_VERSION_SECONDS`; the
+    CLI's lack of one, for :data:`GATEWAY_VERSION_RETRY_SECONDS`."""
     now = time.monotonic()
     with _gateway_version_lock:
         at = _gateway_version["at"]
-        if at is not None and now - at < GATEWAY_VERSION_SECONDS:
+        if at is not None and now - at < _gateway_version.get("keep", GATEWAY_VERSION_SECONDS):
             return _gateway_version["value"]
         value = ""
         binary = shutil.which("openshell-gateway")
@@ -1163,7 +1167,9 @@ def _gateway_openshell_version() -> str:
                     value = version
         except (OSError, subprocess.SubprocessError, ValueError):
             pass
-        _gateway_version.update(at=now, value=value)
+        keep = (GATEWAY_VERSION_RETRY_SECONDS if cli and not binary and not value
+                else GATEWAY_VERSION_SECONDS)
+        _gateway_version.update(at=now, value=value, keep=keep)
         return value
 
 

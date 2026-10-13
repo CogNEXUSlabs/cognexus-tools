@@ -3174,10 +3174,243 @@
             }
            ]
           }
+         },
+         {
+          "name": "kube-render",
+          "help": "Helm's post-renderer for a release `connect openshell up --kubernetes` bound: adds the ArtzAIn sidecar to the gateway's pod (manifests on stdin).",
+          "parser": {
+           "prog": "artzain openshell kube-render",
+           "usage": null,
+           "description": null,
+           "epilog": null,
+           "formatter_class": "HelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_openshell_kube_render>"
+           },
+           "groups": [
+            [],
+            [
+             "help",
+             "kind",
+             "release",
+             "fullname",
+             "image",
+             "uid",
+             "gid",
+             "port",
+             "gateway_id",
+             "jwt_secret",
+             "client_tls",
+             "sidecar_port",
+             "ca_bundle_configmap"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--kind"
+             ],
+             "dest": "kind",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--release"
+             ],
+             "dest": "release",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--fullname"
+             ],
+             "dest": "fullname",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--image"
+             ],
+             "dest": "image",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--uid"
+             ],
+             "dest": "uid",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": "<int>",
+             "required": true,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--gid"
+             ],
+             "dest": "gid",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": "<int>",
+             "required": true,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--port"
+             ],
+             "dest": "port",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": "<int>",
+             "required": true,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--gateway-id"
+             ],
+             "dest": "gateway_id",
+             "nargs": null,
+             "const": null,
+             "default": "",
+             "type": null,
+             "required": false,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--jwt-secret"
+             ],
+             "dest": "jwt_secret",
+             "nargs": null,
+             "const": null,
+             "default": "",
+             "type": null,
+             "required": false,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--client-tls"
+             ],
+             "dest": "client_tls",
+             "nargs": null,
+             "const": null,
+             "default": "openshell-client-tls",
+             "type": null,
+             "required": false,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--sidecar-port"
+             ],
+             "dest": "sidecar_port",
+             "nargs": null,
+             "const": null,
+             "default": 8088,
+             "type": "<int>",
+             "required": false,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--ca-bundle-configmap"
+             ],
+             "dest": "ca_bundle_configmap",
+             "nargs": null,
+             "const": null,
+             "default": "",
+             "type": null,
+             "required": false,
+             "help": null,
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
          }
         ],
         "choices": [
-         "sidecar"
+         "sidecar",
+         "kube-render"
         ]
        }
       ]
@@ -3305,7 +3538,11 @@
                   "ca_bundle",
                   "port",
                   "sidecar_image",
-                  "install_openshell"
+                  "install_openshell",
+                  "kubernetes",
+                  "namespace",
+                  "release",
+                  "kube_context"
                  ]
                 ],
                 "actions": [
@@ -3429,6 +3666,66 @@
                   "help": "on a host without OpenShell, install NVIDIA's deb or rpm of the pinned release (checked against its SHA-256) without asking",
                   "metavar": null,
                   "choices": null
+                 },
+                 {
+                  "kind": "_StoreTrueAction",
+                  "option_strings": [
+                   "--kubernetes"
+                  ],
+                  "dest": "kubernetes",
+                  "nargs": 0,
+                  "const": true,
+                  "default": false,
+                  "type": null,
+                  "required": false,
+                  "help": "a release of NVIDIA's OpenShell Helm chart, through kubectl and helm as you, in place of a gateway on this host",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--namespace"
+                  ],
+                  "dest": "namespace",
+                  "nargs": null,
+                  "const": null,
+                  "default": "openshell",
+                  "type": null,
+                  "required": false,
+                  "help": "the release's namespace (default: %(default)s)",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--release"
+                  ],
+                  "dest": "release",
+                  "nargs": null,
+                  "const": null,
+                  "default": "openshell",
+                  "type": null,
+                  "required": false,
+                  "help": "the Helm release (default: %(default)s)",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--kube-context"
+                  ],
+                  "dest": "kube_context",
+                  "nargs": null,
+                  "const": null,
+                  "default": "",
+                  "type": null,
+                  "required": false,
+                  "help": "the kube context (default: kubectl's current one)",
+                  "metavar": null,
+                  "choices": null
                  }
                 ]
                }
@@ -3451,7 +3748,11 @@
                  [],
                  [
                   "help",
-                  "keep_credential"
+                  "keep_credential",
+                  "kubernetes",
+                  "namespace",
+                  "release",
+                  "kube_context"
                  ]
                 ],
                 "actions": [
@@ -3483,6 +3784,66 @@
                   "type": null,
                   "required": false,
                   "help": "do not revoke the gateway's credential in the engine",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreTrueAction",
+                  "option_strings": [
+                   "--kubernetes"
+                  ],
+                  "dest": "kubernetes",
+                  "nargs": 0,
+                  "const": true,
+                  "default": false,
+                  "type": null,
+                  "required": false,
+                  "help": "a release of NVIDIA's OpenShell Helm chart, through kubectl and helm as you, in place of a gateway on this host",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--namespace"
+                  ],
+                  "dest": "namespace",
+                  "nargs": null,
+                  "const": null,
+                  "default": "openshell",
+                  "type": null,
+                  "required": false,
+                  "help": "the release's namespace (default: %(default)s)",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--release"
+                  ],
+                  "dest": "release",
+                  "nargs": null,
+                  "const": null,
+                  "default": "openshell",
+                  "type": null,
+                  "required": false,
+                  "help": "the Helm release (default: %(default)s)",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--kube-context"
+                  ],
+                  "dest": "kube_context",
+                  "nargs": null,
+                  "const": null,
+                  "default": "",
+                  "type": null,
+                  "required": false,
+                  "help": "the kube context (default: kubectl's current one)",
                   "metavar": null,
                   "choices": null
                  }
@@ -3578,7 +3939,11 @@
                 "groups": [
                  [],
                  [
-                  "help"
+                  "help",
+                  "kubernetes",
+                  "namespace",
+                  "release",
+                  "kube_context"
                  ]
                 ],
                 "actions": [
@@ -3595,6 +3960,66 @@
                   "type": null,
                   "required": false,
                   "help": "show this help message and exit",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreTrueAction",
+                  "option_strings": [
+                   "--kubernetes"
+                  ],
+                  "dest": "kubernetes",
+                  "nargs": 0,
+                  "const": true,
+                  "default": false,
+                  "type": null,
+                  "required": false,
+                  "help": "a release of NVIDIA's OpenShell Helm chart, through kubectl and helm as you, in place of a gateway on this host",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--namespace"
+                  ],
+                  "dest": "namespace",
+                  "nargs": null,
+                  "const": null,
+                  "default": "openshell",
+                  "type": null,
+                  "required": false,
+                  "help": "the release's namespace (default: %(default)s)",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--release"
+                  ],
+                  "dest": "release",
+                  "nargs": null,
+                  "const": null,
+                  "default": "openshell",
+                  "type": null,
+                  "required": false,
+                  "help": "the Helm release (default: %(default)s)",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--kube-context"
+                  ],
+                  "dest": "kube_context",
+                  "nargs": null,
+                  "const": null,
+                  "default": "",
+                  "type": null,
+                  "required": false,
+                  "help": "the kube context (default: kubectl's current one)",
                   "metavar": null,
                   "choices": null
                  }
@@ -3618,7 +4043,11 @@
                 "groups": [
                  [],
                  [
-                  "help"
+                  "help",
+                  "kubernetes",
+                  "namespace",
+                  "release",
+                  "kube_context"
                  ]
                 ],
                 "actions": [
@@ -3635,6 +4064,66 @@
                   "type": null,
                   "required": false,
                   "help": "show this help message and exit",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreTrueAction",
+                  "option_strings": [
+                   "--kubernetes"
+                  ],
+                  "dest": "kubernetes",
+                  "nargs": 0,
+                  "const": true,
+                  "default": false,
+                  "type": null,
+                  "required": false,
+                  "help": "a release of NVIDIA's OpenShell Helm chart, through kubectl and helm as you, in place of a gateway on this host",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--namespace"
+                  ],
+                  "dest": "namespace",
+                  "nargs": null,
+                  "const": null,
+                  "default": "openshell",
+                  "type": null,
+                  "required": false,
+                  "help": "the release's namespace (default: %(default)s)",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--release"
+                  ],
+                  "dest": "release",
+                  "nargs": null,
+                  "const": null,
+                  "default": "openshell",
+                  "type": null,
+                  "required": false,
+                  "help": "the Helm release (default: %(default)s)",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--kube-context"
+                  ],
+                  "dest": "kube_context",
+                  "nargs": null,
+                  "const": null,
+                  "default": "",
+                  "type": null,
+                  "required": false,
+                  "help": "the kube context (default: kubectl's current one)",
                   "metavar": null,
                   "choices": null
                  }
@@ -3747,7 +4236,11 @@
                  [],
                  [
                   "help",
-                  "json"
+                  "json",
+                  "kubernetes",
+                  "namespace",
+                  "release",
+                  "kube_context"
                  ]
                 ],
                 "actions": [
@@ -3779,6 +4272,66 @@
                   "type": null,
                   "required": false,
                   "help": "print the checks as JSON",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreTrueAction",
+                  "option_strings": [
+                   "--kubernetes"
+                  ],
+                  "dest": "kubernetes",
+                  "nargs": 0,
+                  "const": true,
+                  "default": false,
+                  "type": null,
+                  "required": false,
+                  "help": "a release of NVIDIA's OpenShell Helm chart, through kubectl and helm as you, in place of a gateway on this host",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--namespace"
+                  ],
+                  "dest": "namespace",
+                  "nargs": null,
+                  "const": null,
+                  "default": "openshell",
+                  "type": null,
+                  "required": false,
+                  "help": "the release's namespace (default: %(default)s)",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--release"
+                  ],
+                  "dest": "release",
+                  "nargs": null,
+                  "const": null,
+                  "default": "openshell",
+                  "type": null,
+                  "required": false,
+                  "help": "the Helm release (default: %(default)s)",
+                  "metavar": null,
+                  "choices": null
+                 },
+                 {
+                  "kind": "_StoreAction",
+                  "option_strings": [
+                   "--kube-context"
+                  ],
+                  "dest": "kube_context",
+                  "nargs": null,
+                  "const": null,
+                  "default": "",
+                  "type": null,
+                  "required": false,
+                  "help": "the kube context (default: kubectl's current one)",
                   "metavar": null,
                   "choices": null
                  }
