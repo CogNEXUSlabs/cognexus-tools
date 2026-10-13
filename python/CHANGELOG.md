@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.49
+
+### Changed
+
+- **The prompt-injection and destructive-action checks are split into smaller
+  helpers.** Each decision is unchanged. The SDK copies are regenerated from
+  the engine's modules.
+
 ## 0.6.48
 
 ### Added

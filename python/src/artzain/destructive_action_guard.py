@@ -1420,97 +1420,202 @@ class _SqlStatementReader:
             self._semicolons[pos] = found
         return found
 
+    def _edges_tail(
+        self,
+        pos: int,
+        state: int,
+        flags: int,
+        direct: int,
+        edges: list[tuple[tuple[int, int, int, int], tuple[int, ...]]],
+    ) -> int:
+        """Process edges when the current node kind is ``_TAIL``."""
+        for gap in self.gaps(pos):
+            # ``direct`` is the best score seen so far for a direct match.
+            direct = max(direct, self._ending(pos, gap))
+            edges.append(((gap, _GAP_END, state, flags), _SAME))
+        return direct
+
+    def _edges_gap_end(
+        self,
+        pos: int,
+        state: int,
+        flags: int,
+        direct: int,
+        edges: list[tuple[tuple[int, int, int, int], tuple[int, ...]]],
+    ) -> int:
+        """Process edges when the current node kind is ``_GAP_END``."""
+        text = self.text
+        grammar = self.grammar
+        char = text[pos : pos + 1]
+
+        # Comma after a table name can start a list of tables.
+        if char == "," and state in (_AFTER_TABLE, _AFTER_STAR) and grammar.comma_tables:
+            edges.extend(
+                ((end, _TAIL, _AFTER_TABLE, flags), _SAME) for end in self._listed_tables(pos)
+            )
+        # ``*`` after ``TRUNCATE`` can start a ``TRUNCATE *`` pattern.
+        elif char == "*" and state == _AFTER_TABLE:
+            edges.append(((pos + 1, _TAIL, _AFTER_STAR, flags), _SAME))
+
+        # Option-phrase handling.
+        word = grammar.option_word.match(text, pos)
+        # The gap-ends after the option's first word, for the second-word guard
+        # below, computed once for every phrase that shares the word.
+        after_word = self.gaps(word.end()) if word else ()
+
+        for phrase, opens_list in grammar.option_phrases[word.lastgroup] if word else ():
+            # Skip phrases that are not applicable given the current flags.
+            if phrase in grammar.table_options and not flags & _NAMED:
+                continue
+            if phrase in grammar.object_options and not flags & _TAKES_ON:
+                continue
+            if phrase in grammar.capital_options and not (
+                flags & _NAMED or text.startswith(phrase[0], pos)
+            ):
+                continue
+
+            # Skip a phrase whose fixed second word cannot follow, so a long
+            # run of one option (`ON b\n` × n) does not walk the others' phrases
+            # once per position (see SqlLinearTimeTests).
+            neutral = phrase in grammar.neutral_options
+            if neutral and state == _AFTER_NEUTRAL:
+                continue
+
+            second = phrase[1] if len(phrase) > 1 else None
+            if second is not None and second not in _SQL_TOKEN_STANDINS and second not in _SQL_PUNCTUATION:
+                if all(self._token_end(second, start) is None for start in after_word):
+                    continue
+
+            ends = self.phrase_ends(pos, phrase)
+            if opens_list and ends:
+                direct = max(direct, _WEAK)
+            elif not opens_list:
+                counts = _SAME if neutral else _THROUGH_OPTION
+                next_state = _AFTER_NEUTRAL if neutral else _AFTER_OPTION
+                edges.extend(
+                    ((end, _TAIL, next_state, flags), counts) for end in ends
+                )
+        return direct
+
+    def _edges_default(
+        self,
+        pos: int,
+        state: int,
+        flags: int,
+        direct: int,
+        span: int | None,
+        edges: list[tuple[tuple[int, int, int, int], tuple[int, ...]]],
+    ) -> tuple[int, int | None]:
+        """Process edges for all other node kinds (tables, heads, etc.)."""
+        text = self.text
+        grammar = self.grammar
+
+        # -----------------------------------------------------------------
+        # First pass: look for table names that may start at ``pos``.
+        # -----------------------------------------------------------------
+        for start in self.gaps(pos, names=True):
+            # A string that closes right after TABLE written in capitals can
+            # be joined to a name (`["TRUNCATE TABLE", name]`); one that
+            # closes right after TRUNCATE is more often a word in a list
+            # (`["TRUNCATE", "DROP"]`), and a lower-case one a class list.
+            glued_ok = flags & _NAMED and flags & _CAPITALS and flags & _LISTED
+
+            # Without TABLE, the string must be joined to a name, and not by
+            # ``<<``, which also writes a message to a stream.
+            if flags and (start > pos or glued_ok) and not direct:
+                joined = self._joined(start)
+                if joined == _JOINED_NAME or (joined and flags & _NAMED):
+                    direct, span = (
+                        _SCORE_NAMED if flags & _NAMED else _SCORE_WEAK,
+                        start,
+                    )
+
+            # SQL Server takes ``[name]`` only after ``TRUNCATE TABLE``, so a
+            # ``[`` glued to ``TRUNCATE`` is a subscript (``TRUNCATE[idx]``),
+            # not a name.
+            if not self._first_table_may_start(pos, start, brackets=state > 0):
+                continue
+
+            end = self.table_end(start, after_table=bool(flags & (_NAMED | _HEAD_READ)))
+            if end is not None:
+                # After required words, a name written as no English word
+                # is marked SQL as capitals do (`drop table #staging`).
+                soft = self._soft(start, end)
+                if flags & _NAMED or (
+                    flags & _HEAD_READ and not soft and self._identifier(start, end)
+                ):
+                    first = _FIRST_TABLE_NAMED
+                elif not flags & _LOWER_HEAD and (flags & _CAPITALS or not soft):
+                    first = _FIRST_TABLE
+                else:
+                    first = _FIRST_PLACEHOLDER
+                edges.append(
+                    ((end, _TAIL, _AFTER_TABLE, flags & _TAIL_FLAGS), first)
+                )
+
+        # -----------------------------------------------------------------
+        # Second pass: handle head words, lists, and tables.
+        # -----------------------------------------------------------------
+        for gap in self.gaps(pos):
+            word = grammar.head_word.match(text, gap) if gap > pos else None
+
+            # Head phrases (e.g., ``FROM``, ``JOIN``) that may start a new
+            # clause.
+            for group, phrase in grammar.head_phrases[word.lastgroup] if word else ():
+                if group >= state:
+                    table = flags | (_NAMED if phrase in grammar.names_table else 0)
+                    if group == 0 and not table & _NAMED and not text.startswith(
+                        phrase[0], gap
+                    ):
+                        table |= _LOWER_HEAD
+                    ends = self.phrase_ends(gap, phrase)
+                    edges.extend(
+                        ((end, _HEAD, group + 1, table), _SAME) for end in ends
+                    )
+
+            # Head list handling (e.g., ``IN (a, b, c)``) when we are at the
+            # start of a statement.
+            for phrase in grammar.head_lists if word and state == 0 else ():
+                ends = (
+                    self.phrase_ends(gap, phrase)
+                    if phrase[0] == word.lastgroup
+                    else ()
+                )
+                if ends and direct < _SCORE_WEAK:
+                    direct, span = _SCORE_WEAK, ends[0]
+
+            # Head table handling (e.g., ``UPDATE table SET …``) when we are at
+            # the start of a statement.
+            for phrase in grammar.head_tables if word and state == 0 else ():
+                ends = (
+                    self.phrase_ends(gap, phrase)
+                    if phrase[0] == word.lastgroup
+                    else ()
+                )
+                first = (
+                    _FIRST_TABLE if text.startswith(phrase[0], gap) else _FIRST_PLACEHOLDER
+                )
+                edges.extend(
+                    ((end, _TAIL, _AFTER_TABLE, flags & _TAIL_FLAGS), first)
+                    for end in ends
+                )
+        return direct, span
+
     def _edges(
-        self, node: tuple[int, int, int, int]
+        self,
+        node: tuple[int, int, int, int],
     ) -> tuple[int, int | None, list[tuple[tuple[int, int, int, int], tuple[int, ...]]]]:
         """``(direct value, its span, [(next node, how it counts)])`` for *node*."""
         pos, kind, state, flags = node
-        text, grammar = self.text, self.grammar
         direct, span, edges = 0, None, []
+
         if kind == _TAIL:
-            for gap in self.gaps(pos):
-                direct = max(direct, self._ending(pos, gap))
-                edges.append(((gap, _GAP_END, state, flags), _SAME))
+            direct = self._edges_tail(pos, state, flags, direct, edges)
         elif kind == _GAP_END:
-            char = text[pos:pos + 1]
-            if char == "," and state in (_AFTER_TABLE, _AFTER_STAR) and grammar.comma_tables:
-                edges.extend(((end, _TAIL, _AFTER_TABLE, flags), _SAME) for end in self._listed_tables(pos))
-            elif char == "*" and state == _AFTER_TABLE:
-                edges.append(((pos + 1, _TAIL, _AFTER_STAR, flags), _SAME))
-            word = grammar.option_word.match(text, pos)
-            # The gap-ends after the option's first word, for the second-word
-            # guard below, computed once for every phrase that shares the word.
-            after_word = self.gaps(word.end()) if word else ()
-            for phrase, opens_list in grammar.option_phrases[word.lastgroup] if word else ():
-                if phrase in grammar.table_options and not flags & _NAMED:
-                    continue
-                if phrase in grammar.object_options and not flags & _TAKES_ON:
-                    continue
-                if phrase in grammar.capital_options and not (flags & _NAMED or text.startswith(phrase[0], pos)):
-                    continue
-                # Skip a phrase whose fixed second word cannot follow, so a long
-                # run of one option (`ON b\n` × n) does not walk the others'
-                # phrases once per position (see SqlLinearTimeTests).
-                neutral = phrase in grammar.neutral_options
-                if neutral and state == _AFTER_NEUTRAL:
-                    continue
-                second = phrase[1] if len(phrase) > 1 else None
-                if second is not None and second not in _SQL_TOKEN_STANDINS and second not in _SQL_PUNCTUATION:
-                    if all(self._token_end(second, start) is None for start in after_word):
-                        continue
-                ends = self.phrase_ends(pos, phrase)
-                if opens_list and ends:
-                    direct = max(direct, _WEAK)
-                elif not opens_list:
-                    counts = _SAME if neutral else _THROUGH_OPTION
-                    next_state = _AFTER_NEUTRAL if neutral else _AFTER_OPTION
-                    edges.extend(((end, _TAIL, next_state, flags), counts) for end in ends)
+            direct = self._edges_gap_end(pos, state, flags, direct, edges)
         else:
-            for start in self.gaps(pos, names=True):
-                # A string that closes right after TABLE written in capitals can
-                # be joined to a name (`["TRUNCATE TABLE", name]`); one that
-                # closes right after TRUNCATE is more often a word in a list
-                # (`["TRUNCATE", "DROP"]`), and a lower-case one a class list.
-                glued_ok = flags & _NAMED and flags & _CAPITALS and flags & _LISTED
-                # Without TABLE, the string must be joined to a name, and not by
-                # `<<`, which also writes a message to a stream.
-                if flags and (start > pos or glued_ok) and not direct:
-                    joined = self._joined(start)
-                    if joined == _JOINED_NAME or (joined and flags & _NAMED):
-                        direct, span = (_SCORE_NAMED if flags & _NAMED else _SCORE_WEAK), start
-                # SQL Server takes `[name]` only after TRUNCATE TABLE, so a `[`
-                # glued to TRUNCATE is a subscript (`TRUNCATE[idx]`), not a name.
-                if not self._first_table_may_start(pos, start, brackets=state > 0):
-                    continue
-                end = self.table_end(start, after_table=bool(flags & (_NAMED | _HEAD_READ)))
-                if end is not None:
-                    # After required words, a name written as no English word
-                    # is marks SQL as capitals do (`drop table #staging`).
-                    soft = self._soft(start, end)
-                    if flags & _NAMED or (flags & _HEAD_READ and not soft and self._identifier(start, end)):
-                        first = _FIRST_TABLE_NAMED
-                    elif not flags & _LOWER_HEAD and (flags & _CAPITALS or not soft):
-                        first = _FIRST_TABLE
-                    else:
-                        first = _FIRST_PLACEHOLDER
-                    edges.append(((end, _TAIL, _AFTER_TABLE, flags & _TAIL_FLAGS), first))
-            for gap in self.gaps(pos):
-                word = grammar.head_word.match(text, gap) if gap > pos else None
-                for group, phrase in grammar.head_phrases[word.lastgroup] if word else ():
-                    if group >= state:
-                        table = flags | (_NAMED if phrase in grammar.names_table else 0)
-                        if group == 0 and not table & _NAMED and not text.startswith(phrase[0], gap):
-                            table |= _LOWER_HEAD
-                        ends = self.phrase_ends(gap, phrase)
-                        edges.extend(((end, _HEAD, group + 1, table), _SAME) for end in ends)
-                for phrase in grammar.head_lists if word and state == 0 else ():
-                    ends = self.phrase_ends(gap, phrase) if phrase[0] == word.lastgroup else ()
-                    if ends and direct < _SCORE_WEAK:
-                        direct, span = _SCORE_WEAK, ends[0]
-                for phrase in grammar.head_tables if word and state == 0 else ():
-                    ends = self.phrase_ends(gap, phrase) if phrase[0] == word.lastgroup else ()
-                    first = _FIRST_TABLE if text.startswith(phrase[0], gap) else _FIRST_PLACEHOLDER
-                    edges.extend(((end, _TAIL, _AFTER_TABLE, flags & _TAIL_FLAGS), first) for end in ends)
+            direct, span = self._edges_default(pos, state, flags, direct, span, edges)
+
         return direct, span, edges
 
     def _value(self, root: tuple[int, int, int, int]) -> int:

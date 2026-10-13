@@ -1772,8 +1772,160 @@ class _Candidates:
             self.found.pop(control, None)
 
 
+def _process_segment(
+    rlo: int,
+    lro: int,
+    watched: int,
+    text: str,
+    position: int,
+    end: int,
+    known: dict[str, int],
+    budget: int,
+    work: int,
+    candidates: "_Candidates",
+    rtl_over_ltr: bool,
+    override: bool,
+    ltr_segments: int,
+    rtl_segments: int,
+    isolate_states: list[int | None],
+) -> tuple[
+    bool,  # budget_exceeded
+    bool,  # new_override
+    bool,  # new_rtl_over_ltr
+    int,   # new_work
+    int,   # new_position
+    int,   # new_ltr_segments
+    int,   # new_rtl_segments
+    int,   # new_watched
+    list[int | None],  # possibly updated isolate_states
+]:
+    """
+    Process the text between two events (or start/end of text).
+
+    Returns a flag indicating whether the budget was exceeded; if so the caller
+    should return early using the current stack state.
+    """
+    # The original block starts with:
+    # if (rlo or lro or watched) and end > position:
+    # The caller ensures this condition holds before invoking.
+    ltr = rtl = False
+    if rlo and not override or watched:
+        ltr = _ASCII_LTR_OR_DIGIT_RE.search(text, position, end) is not None
+        if not ltr:
+            ltr, looked = _any_bits(text, position, end, _LTR | _DIGIT, known, budget - work)
+            work += looked
+    if lro and not override or watched:
+        rtl, looked = _has_rtl_alnum(text, position, end, known, budget - work)
+        work += looked
+    if (rlo and ltr or lro and rtl) and not override:
+        override = True
+        candidates.settle(override, rtl_over_ltr)
+    ltr_segments += ltr
+    rtl_segments += rtl
+    if isolate_states and isolate_states[-1] == 0 and work <= budget:
+        if rtl:
+            starts = False
+        else:
+            starts, looked = _first_strong_is_rtl(text, position, end, known, budget - work)
+            work += looked
+        if starts is not None:
+            isolate_states[-1] = 1 if starts else None
+            watched -= not starts
+    # Budget check – if exceeded we signal the caller to return early.
+    budget_exceeded = work > budget
+    return (
+        budget_exceeded,
+        override,
+        rtl_over_ltr,
+        work,
+        position,
+        ltr_segments,
+        rtl_segments,
+        watched,
+        isolate_states,
+    )
+
+
+def _close_scopes(
+    control: str,
+    stack: list[tuple[str, bool, int, int]],
+    isolate_states: list[int | None],
+    rlo: int,
+    lro: int,
+    watched: int,
+    rtl_over_ltr: bool,
+    override: bool,
+    candidates: "_Candidates",
+    cut: bool,
+    ltr_segments: int,
+    rtl_segments: int,
+) -> tuple[
+    int,  # new_rlo
+    int,  # new_lro
+    int,  # new_watched
+    bool,  # new_cut
+    bool,  # new_rtl_over_ltr
+]:
+    """
+    Close scopes according to the control character (PDF, PDI, or paragraph
+    separator). Mutates ``stack`` and ``isolate_states`` in-place.
+    """
+    if control == _PDF:
+        closing = 1 if stack and stack[-1][0] not in _ISOLATE_INITIATORS else 0
+    elif control == _PDI:
+        closing = 0
+        if isolate_states:
+            closing = len(stack)
+            while stack[closing - 1][0] not in _ISOLATE_INITIATORS:
+                closing -= 1
+            closing = len(stack) - closing + 1
+    else:  # paragraph separator
+        cut = cut or control in "\n\r"
+        closing = len(stack)
+
+    for _ in range(closing):
+        opener, checked, ltr_before, rtl_before = stack.pop()
+        state = isolate_states.pop() if opener in _ISOLATE_INITIATORS else 1
+        if not checked:
+            continue
+        if opener == _RLO:
+            rlo -= 1
+        elif opener == _LRO:
+            lro -= 1
+        elif state is not None:
+            watched -= 1
+            if state == 1 and ltr_segments > ltr_before and rtl_segments == rtl_before and not rtl_over_ltr:
+                rtl_over_ltr = True
+                candidates.settle(override, rtl_over_ltr)
+    return rlo, lro, watched, cut, rtl_over_ltr
+
+
+def _finalize_stack(
+    stack: list[tuple[str, bool, int, int]],
+    isolate_states: list[int | None],
+    rtl_over_ltr: bool,
+    ltr_segments: int,
+    rtl_segments: int,
+) -> bool:
+    """
+    After the main scan, pop any remaining checked scopes to see if a
+    right-to-left over left-to-right situation occurs.
+    """
+    while stack:
+        opener, checked, ltr_before, rtl_before = stack.pop()
+        state = isolate_states.pop() if opener in _ISOLATE_INITIATORS else 1
+        if checked and opener not in (_RLO, _LRO) and state == 1:
+            if ltr_segments > ltr_before and rtl_segments == rtl_before:
+                rtl_over_ltr = True
+    return rtl_over_ltr
+
+
 def _reordered_scopes(
-    text: str, events: re.Pattern[str], candidates: _Candidates, budget: int, known: dict[str, int],
+    text: str,
+    events: re.Pattern[str],
+    candidates: _Candidates,
+    budget: int,
+    known: dict[str, int],
 ) -> tuple[bool, bool, bool, int, int | None, set[str]]:
     """``(override, rtl_over_ltr, cut, work, stopped, open_kinds)`` for *text*, with scopes opening, closing and ending where *events* matches.
 
@@ -1818,33 +1970,50 @@ def _reordered_scopes(
             unclosed = _UNCLOSED_OPENER_RE.search(text, position, nearest)
             match = find_opener(text, unclosed.start() if unclosed else nearest)
         end = match.start() if match else len(text)
+
+        # -----------------------------------------------------------------
+        # Process the segment between the previous position and the next event.
+        # -----------------------------------------------------------------
         if (rlo or lro or watched) and end > position:
-            ltr = rtl = False
-            if rlo and not override or watched:
-                ltr = _ASCII_LTR_OR_DIGIT_RE.search(text, position, end) is not None
-                if not ltr:
-                    ltr, looked = _any_bits(text, position, end, _LTR | _DIGIT, known, budget - work)
-                    work += looked
-            if lro and not override or watched:
-                rtl, looked = _has_rtl_alnum(text, position, end, known, budget - work)
-                work += looked
-            if (rlo and ltr or lro and rtl) and not override:
-                override = True
-                candidates.settle(override, rtl_over_ltr)
-            ltr_segments += ltr
-            rtl_segments += rtl
-            if isolate_states and isolate_states[-1] == 0 and work <= budget:
-                if rtl:
-                    starts = False
-                else:
-                    starts, looked = _first_strong_is_rtl(text, position, end, known, budget - work)
-                    work += looked
-                if starts is not None:
-                    isolate_states[-1] = 1 if starts else None
-                    watched -= not starts
-            if work > budget:
+            (
+                budget_exceeded,
+                override,
+                rtl_over_ltr,
+                work,
+                position,
+                ltr_segments,
+                rtl_segments,
+                watched,
+                isolate_states,
+            ) = _process_segment(
+                rlo,
+                lro,
+                watched,
+                text,
+                position,
+                end,
+                known,
+                budget,
+                work,
+                candidates,
+                rtl_over_ltr,
+                override,
+                ltr_segments,
+                rtl_segments,
+                isolate_states,
+            )
+            if budget_exceeded:
                 # Stopped inside the text between two events.
-                return override, rtl_over_ltr, cut, work, position, _open_kinds(stack, isolate_states, rtl_segments)
+                return (
+                    override,
+                    rtl_over_ltr,
+                    cut,
+                    work,
+                    position,
+                    _open_kinds(stack, isolate_states, rtl_segments),
+                )
+        # -----------------------------------------------------------------
+
         if match is None:
             break
         work += _EVENT_WORK
@@ -1853,32 +2022,21 @@ def _reordered_scopes(
         control = match.group()
         position = end + 1
         if control in _PARAGRAPH_SEPARATORS or control == _PDI or control == _PDF:
-            if control == _PDF:
-                closing = 1 if stack and stack[-1][0] not in _ISOLATE_INITIATORS else 0
-            elif control == _PDI:
-                closing = 0
-                if isolate_states:
-                    closing = len(stack)
-                    while stack[closing - 1][0] not in _ISOLATE_INITIATORS:
-                        closing -= 1
-                    closing = len(stack) - closing + 1
-            else:
-                cut = cut or control in "\n\r"
-                closing = len(stack)
-            for _ in range(closing):
-                opener, checked, ltr_before, rtl_before = stack.pop()
-                state = isolate_states.pop() if opener in _ISOLATE_INITIATORS else 1
-                if not checked:
-                    continue
-                if opener == _RLO:
-                    rlo -= 1
-                elif opener == _LRO:
-                    lro -= 1
-                elif state is not None:
-                    watched -= 1
-                    if state == 1 and ltr_segments > ltr_before and rtl_segments == rtl_before and not rtl_over_ltr:
-                        rtl_over_ltr = True
-                        candidates.settle(override, rtl_over_ltr)
+            # Close scopes according to the control character.
+            rlo, lro, watched, cut, rtl_over_ltr = _close_scopes(
+                control,
+                stack,
+                isolate_states,
+                rlo,
+                lro,
+                watched,
+                rtl_over_ltr,
+                override,
+                candidates,
+                cut,
+                ltr_segments,
+                rtl_segments,
+            )
         else:
             checked = len(stack) < _BIDI_MAX_DEPTH and candidates.at(control, end)
             stack.append((control, checked, ltr_segments, rtl_segments))
@@ -1888,12 +2046,12 @@ def _reordered_scopes(
                 watched += control in (_RLE, _RLI, _FSI)
             if control in _ISOLATE_INITIATORS:
                 isolate_states.append((0 if control == _FSI else 1) if checked else None)
-    while stack:
-        opener, checked, ltr_before, rtl_before = stack.pop()
-        state = isolate_states.pop() if opener in _ISOLATE_INITIATORS else 1
-        if checked and opener not in (_RLO, _LRO) and state == 1:
-            if ltr_segments > ltr_before and rtl_segments == rtl_before:
-                rtl_over_ltr = True
+
+    # -----------------------------------------------------------------
+    # Finalize any remaining open scopes.
+    # -----------------------------------------------------------------
+    rtl_over_ltr = _finalize_stack(stack, isolate_states, rtl_over_ltr, ltr_segments, rtl_segments)
+
     return override, rtl_over_ltr, cut, work, None, set()
 
 
