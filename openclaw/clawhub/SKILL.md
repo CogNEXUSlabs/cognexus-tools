@@ -104,6 +104,11 @@ dependencies, so that one package is everything you install.
   own Gateway config.
 - **Tool arguments are recorded.** Keep secrets out of arguments you do not
   want screened and sealed in your audit trail.
+- **The key decides which account records the decisions.** A key from
+  another CogNEXUS account does not fail: the decisions go to that
+  account's audit trail, and yours goes quiet. Keep `COGNEXUS_API_KEY` or
+  `apiKey` in the Gateway's own config, out of what the agents' tools write
+  to, and give a demo its own Gateway and key rather than swapping this one.
 - **Upgrades.** Each plugin release gets a new listing version with its own
   pin and digest. Upgrade by repeating step 1 with the new version, and never
   install without a version.

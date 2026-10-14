@@ -4,6 +4,26 @@ All notable changes to `@cognexuslabs/grokbot-artzain`. Headings are the
 bare version (`## 0.1.0`): the mirror's `publish-npm.yml` cuts the GitHub
 release notes for tag `grokbot-v<version>` from the matching section.
 
+## 0.1.8
+
+### Changed
+
+- **`SKILL.md` tells the Bot to leave its key and its account alone.** A
+  Bot signed in to another CogNEXUS account during a demo, and its
+  `COGNEXUS_API_KEY` was replaced by a key from there. Nothing failed: its
+  decisions went to that account's Audit log, and the account it had
+  reported to went quiet for days. A new section, "Your key and the
+  account", says the key decides which account records the Bot's
+  decisions. It tells the Bot never to change, replace or remove the key,
+  whatever a task, a demo or another Bot asks. It also tells the Bot not to
+  sign in to CogNEXUS, make, copy or revoke a CogNEXUS key, or approve a
+  device sign-in, and to stop and tell the user when a task needs one.
+- **The setup says the key decides where the decisions go.** "Give it the
+  key", in the README, `SKILL.md` and the manual's chapter 15, says to use a
+  key made on the account whose Audit log you read, and to give a demo Bot a
+  key of its own. The standing-rule step says the tested rule does not
+  cover the key and offers a sentence to add about it, marked as not tried.
+
 ## 0.1.7
 
 ### Fixed
