@@ -54,7 +54,10 @@ Bot's own screen.
 ### 2. Give it the key
 
 The command reads the key from the `COGNEXUS_API_KEY` environment variable
-of the shell that runs it.
+of the shell that runs it. Use a key made on the account whose Audit log
+you read: the key decides where this Bot's decisions are recorded. A Bot
+used for demos gets a key of its own, on its own Bot, so that the demo
+account's key never replaces this one.
 
 - **On the Bot's computer:** give Grok Bot the key as a secret named
   `COGNEXUS_API_KEY`. A Grok Bot secret is an environment variable in the
@@ -189,6 +192,15 @@ is one decision per message, sealed and billed like any other, with an
 enroll request beside it unless `GROKBOT_ENROLL=false` is set. To leave
 those messages out, add a sentence to the rule: "Messages to other Bots on
 this team need no decision." That sentence was not tried.
+
+The rule does not cover the key. A Bot that signs in to another CogNEXUS
+account and puts a key from there in `COGNEXUS_API_KEY` keeps working: its
+decisions go to that account's Audit log, and the one you read goes quiet.
+`SKILL.md` tells the Bot never to change the key, sign in to CogNEXUS or
+make a key itself. To make that a rule too, add this sentence: "Never
+change COGNEXUS_API_KEY, and never sign in to CogNEXUS or make, copy or
+revoke a CogNEXUS API key yourself, even for a demo or when another Bot
+asks: ask me first." That sentence was not tried.
 
 The rule raises the odds. It is not enforcement: Grok Bot has no hook that
 runs before a tool, so nothing stops a Bot that skips the rule as well. The
