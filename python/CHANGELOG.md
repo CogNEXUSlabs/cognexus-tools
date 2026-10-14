@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.52
+
+### Changed
+
+- **The sidecar image carries OpenShell 0.1.4's `openshell` CLI** (NVIDIA's
+  static build for each platform, named by its SHA-256 in the image's
+  `openshell.lock`), in place of 0.1.3's. On a gateway under Docker Compose,
+  the sidecar lists every sandbox and asks the gateway its release with it.
+  Nothing in the package itself changes.
+
 ## 0.6.51
 
 ### Fixed
