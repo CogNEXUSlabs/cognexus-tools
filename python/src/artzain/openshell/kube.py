@@ -81,6 +81,11 @@ CONFIG_VOLUME = "gateway-config"
 CLIENT_TLS = "openshell-client-tls"
 #: The volumes ``up`` adds through the chart's values.
 OUR_VOLUMES = (RUN_VOLUME, STATE_VOLUME)
+#: Chart 0.1.4's other form for interceptors: a top-level list, rendered as
+#: ``[[openshell.gateway.interceptors]]``. ``up`` joins it when the
+#: operator's values use it, and else adds ``interceptors`` to the
+#: ``openshell.gateway`` table, which every chart release renders.
+LISTED = "openshell.gateway.interceptors"
 
 _NAME = re.compile(r"^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$")
 _DIGEST = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
@@ -163,10 +168,11 @@ def ours(values: Mapping[str, Any]) -> Dict[str, Any]:
     def as_list(found: Any) -> List[Any]:
         return found if isinstance(found, list) else []
 
-    gateway = as_map(as_map(values.get("gatewayConfig")).get("openshell.gateway"))
+    config = as_map(values.get("gatewayConfig"))
+    gateway = as_map(config.get("openshell.gateway"))
     server = as_map(values.get("server"))
     return {
-        "interceptors": [i for i in as_list(gateway.get("interceptors"))
+        "interceptors": [i for i in as_list(gateway.get("interceptors")) + as_list(config.get(LISTED))
                          if isinstance(i, dict) and i.get("name") in registration.NAMES],
         "volumes": [v for v in as_list(server.get("extraVolumes"))
                     if isinstance(v, dict) and v.get("name") in OUR_VOLUMES],
@@ -194,13 +200,24 @@ def bound(values: Mapping[str, Any], registration: Mapping[str, Any], *,
     if isinstance(config.get("openshell"), dict) and "gateway" in config["openshell"]:
         raise _refused('the release\'s values give gatewayConfig.openshell.gateway as a nested '
                        'map: the chart takes it as the dotted key "openshell.gateway" only')
-    gateway = config.setdefault("openshell.gateway", {})
+    gateway = config.get("openshell.gateway", {})
     if not isinstance(gateway, dict):
         raise _refused('the release\'s gatewayConfig["openshell.gateway"] is not a map')
-    existing = gateway.setdefault("interceptors", [])
-    if not isinstance(existing, list):
-        raise _refused('the release\'s gatewayConfig["openshell.gateway"].interceptors is '
-                       "not a list")
+    if LISTED in config:
+        # The operator's own list: ours join it.
+        if "interceptors" in gateway:
+            raise _refused('the release\'s values give the gateway\'s interceptors both as '
+                           f'gatewayConfig["{LISTED}"] and in gatewayConfig["openshell.gateway"]: '
+                           "keep one of the two")
+        existing = config[LISTED]
+        if not isinstance(existing, list):
+            raise _refused(f'the release\'s gatewayConfig["{LISTED}"] is not a list')
+    else:
+        config["openshell.gateway"] = gateway
+        existing = gateway.setdefault("interceptors", [])
+        if not isinstance(existing, list):
+            raise _refused('the release\'s gatewayConfig["openshell.gateway"].interceptors is '
+                           "not a list")
     existing.extend(_interceptors(registration))
     server = out.setdefault("server", {})
     if not isinstance(server, dict):
@@ -223,6 +240,13 @@ def without(values: Mapping[str, Any]) -> Dict[str, Any]:
 
     out = copy.deepcopy(dict(values))
     config = out.get("gatewayConfig")
+    if isinstance(config, dict) and isinstance(config.get(LISTED), list):
+        config[LISTED] = [i for i in config[LISTED]
+                          if not (isinstance(i, dict) and i.get("name") in reg.NAMES)]
+        if not config[LISTED]:
+            del config[LISTED]
+        if not config:
+            del out["gatewayConfig"]
     if isinstance(config, dict) and isinstance(config.get("openshell.gateway"), dict):
         gateway = config["openshell.gateway"]
         if isinstance(gateway.get("interceptors"), list):
