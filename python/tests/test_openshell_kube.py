@@ -113,13 +113,50 @@ def test_an_artzain_registration_up_did_not_put_is_refused():
         kube.bound(theirs, _registration(), telemetry=False)
 
 
+#: Chart 0.1.4's other form: the interceptors as a top-level list, rendered as
+#: ``[[openshell.gateway.interceptors]]``.
+LISTED = "openshell.gateway.interceptors"
+
+
+def test_an_operators_list_of_interceptors_is_joined_not_doubled():
+    """With the operator's interceptors in chart 0.1.4's list form, ours go
+    in that list: a second form beside it would define the table twice, and
+    the gateway would not start."""
+    mine = {"gatewayConfig": {"openshell.gateway": {"log_level": "debug"},
+                              LISTED: [{"name": "audit", "grpc_endpoint": "unix:///run/a.sock",
+                                        "order": 1}]}}
+    values = kube.bound(mine, _registration(), telemetry=False)
+    config = values["gatewayConfig"]
+    assert [i["name"] for i in config[LISTED]] == ["audit", *registration.NAMES]
+    assert "interceptors" not in config["openshell.gateway"]
+    assert [i["name"] for i in kube.ours(values)["interceptors"]] == list(registration.NAMES)
+    assert kube.bound(values, _registration(), telemetry=False, replace=True) == values
+    unbound = kube.without(values)
+    del unbound["server"]
+    assert unbound == mine
+
+
+def test_an_artzain_registration_in_the_list_form_is_refused_too():
+    theirs = {"gatewayConfig": {LISTED: [{"name": "artzain", "grpc_endpoint": "unix:///x.sock"}]}}
+    with pytest.raises(connect.ConnectError, match="already register artzain"):
+        kube.bound(theirs, _registration(), telemetry=False)
+
+
+def test_the_list_form_and_the_table_form_together_are_refused():
+    both = {"gatewayConfig": {"openshell.gateway": {"interceptors": [{"name": "a"}]},
+                              LISTED: [{"name": "b"}]}}
+    with pytest.raises(connect.ConnectError, match="both"):
+        kube.bound(both, _registration(), telemetry=False)
+
+
 @pytest.mark.parametrize("values, says", [
     ({"gatewayConfig": {"openshell": {"version": 2, "gateway": {"log_level": "x"}}}},
      "dotted key"),
+    ({"gatewayConfig": {LISTED: {"name": "x"}}}, "not a list"),
     ({"gatewayConfig": {"openshell.gateway": {"interceptors": "x"}}}, "not a list"),
     ({"gatewayConfig": "x"}, "not a map"),
     ({"server": {"extraVolumes": {}}}, "server.extraVolumes is not a list"),
-], ids=["nested", "interceptors", "config", "volumes"])
+], ids=["nested", "list", "interceptors", "config", "volumes"])
 def test_values_up_cannot_add_to_are_refused(values, says):
     with pytest.raises(connect.ConnectError, match=says):
         kube.bound(values, _registration(), telemetry=False)

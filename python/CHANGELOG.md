@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.51
+
+### Fixed
+
+- **`up --kubernetes` joins an operator's own list of interceptors.** NVIDIA's
+  chart 0.1.4 also takes the gateway's interceptors as a top-level list,
+  `gatewayConfig["openshell.gateway.interceptors"]`, which it renders as
+  `[[openshell.gateway.interceptors]]`. When the release's values use that
+  form, ArtzAIn's registration joins the list, and `remove` takes it out
+  again, rather than adding `interceptors` to the `openshell.gateway` table
+  beside it: both at once define the table twice, and the gateway does not
+  start. Values that already give interceptors in both forms are refused
+  before the token is spent, as is an `artzain` registration in the list that
+  `up` did not put.
+
 ## 0.6.50
 
 ### Added
