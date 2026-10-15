@@ -89,15 +89,44 @@ jobs:
       - name: Fetch the openshell CLI the lock names
         run: python images/openshell-sidecar/fetch_openshell.py
 
+      # The base image comes from ECR Public, which refuses an anonymous
+      # caller over its limits (429, "toomanyrequests"): a rate, or a
+      # runner's monthly data cap ("Data limit exceeded"), which waiting does
+      # not lift. sidecar-v0.6.52's tag run stopped here. This job holds no
+      # token to sign in with: on a tag run, an OIDC token here would carry
+      # the identity the image is signed as. The base is the Docker official
+      # image, which Docker Hub serves under the same digest with an
+      # anonymous limit of its own, so a refused try is followed by one that
+      # names it there: same digest, same bytes. Four tries in all,
+      # alternating; any other failure ends the job. The publish job builds
+      # from the Dockerfile's base as named, signed in.
       - name: Build the image from that wheel
         env:
           VERSION: ${{ steps.wheel.outputs.version }}
         run: |
-          docker build \
-            --build-arg ARTZAIN_SOURCE=wheel \
-            --build-arg "ARTZAIN_VERSION=${VERSION}" \
-            --tag artzain-openshell-sidecar:rehearsal \
-            images/openshell-sidecar
+          set -uo pipefail
+          base="$(sed -n 's/^ARG PYTHON_IMAGE=//p' images/openshell-sidecar/Dockerfile)"
+          case "$base" in
+            public.ecr.aws/docker/library/*@sha256:*) ;;
+            *) echo "the Dockerfile's base is not ECR Public's Docker official image by digest: $base" >&2
+               exit 1 ;;
+          esac
+          hub="docker.io/library/${base#public.ecr.aws/docker/library/}"
+          for attempt in 1 2 3 4; do
+            if [ $((attempt % 2)) -eq 1 ]; then from="$base"; else from="$hub"; fi
+            if docker build \
+                --build-arg "PYTHON_IMAGE=${from}" \
+                --build-arg ARTZAIN_SOURCE=wheel \
+                --build-arg "ARTZAIN_VERSION=${VERSION}" \
+                --tag artzain-openshell-sidecar:rehearsal \
+                images/openshell-sidecar 2>&1 | tee "$RUNNER_TEMP/build.log"; then
+              exit 0
+            fi
+            grep -qE '429 Too Many Requests|toomanyrequests' "$RUNNER_TEMP/build.log" || exit 1
+            [ "$attempt" -lt 4 ] || exit 1
+            echo "::warning::${from%%/*} refused a pull (try $attempt of 4); trying again"
+            sleep $((attempt * 15))
+          done
 
       - name: Run the image
         env:
@@ -172,6 +201,28 @@ jobs:
         env:
           GHCR_TOKEN: ${{ github.token }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      # Both platforms build from ECR Public's python base, and an anonymous
+      # pull shares that registry's rate and monthly limits with every other
+      # runner (engine ledger row 181). This job already holds the OIDC token
+      # it signs with, so it assumes the engine's pull-only role
+      # (github-actions-registry-pull, which trusts this repository's
+      # `release` environment and nothing else here) for a registry token.
+      # Until the repository variable AWS_REGISTRY_PULL_ROLE_ARN is set, both
+      # steps are skipped and the pull is anonymous, as before.
+      - name: Configure AWS credentials for registry pulls (OIDC)
+        if: vars.AWS_REGISTRY_PULL_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_REGISTRY_PULL_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+
+      - name: Sign in to the image mirror for pulls
+        if: vars.AWS_REGISTRY_PULL_ROLE_ARN != ''
+        run: |
+          # ECR Public auth is always us-east-1 (AWS docs: public-registry-auth).
+          aws ecr-public get-login-password --region us-east-1 \
+            | docker login --username AWS --password-stdin public.ecr.aws
 
       # GHCR tags can be moved, so the digest is what is signed and what a
       # customer pins. A version that is already there is not built again: a
