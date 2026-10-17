@@ -474,7 +474,7 @@
           "parser": {
            "prog": "artzain audit export",
            "usage": null,
-           "description": "Download a self-contained, offline-verifiable evidence bundle from\nGET /api/v1/audit/export. Use --profile to add a framework artifact\nset (control mapping, bundle history, promotion trail, and a\ncompliance summary): eu-ai-act, nist-ai-rmf, iso-42001, or\nsoc2-ai-controls. Requires COGNEXUS_API_KEY.",
+           "description": "Download a self-contained, offline-verifiable evidence bundle from\nGET /api/v1/audit/export. Use --profile to add a framework artifact\nset (control mapping, bundle history, promotion trail, and a\ncompliance summary): eu-ai-act, nist-ai-rmf, iso-42001,\nsoc2-ai-controls, or gdpr. Requires COGNEXUS_API_KEY.",
            "epilog": null,
            "formatter_class": "RawDescriptionHelpFormatter",
            "add_help": true,
@@ -526,7 +526,8 @@
               "eu-ai-act",
               "nist-ai-rmf",
               "iso-42001",
-              "soc2-ai-controls"
+              "soc2-ai-controls",
+              "gdpr"
              ]
             },
             {

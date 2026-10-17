@@ -136,6 +136,9 @@ def test_every_command_prints_its_help(capsys, monkeypatch):
     (["audit", "export", "--from", "2026-01-01"], "cmd_audit_export",
      {"command": "audit", "audit_command": "export", "profile": None, "from_": "2026-01-01",
       "to": None, "out": None}),
+    (["audit", "export", "--profile", "gdpr"], "cmd_audit_export",
+     {"command": "audit", "audit_command": "export", "profile": "gdpr", "from_": None,
+      "to": None, "out": None}),
     (["licence", "install", "c.json", "--offline-only"], "cmd_licence_install",
      {"command": "licence", "licence_command": "install", "certificate": "c.json",
       "chain": None, "root_key": None, "issuing": None, "root_fingerprint": None,
@@ -188,6 +191,29 @@ def test_the_parsed_arguments_reach_the_command(monkeypatch, argv, command, pars
     seen = vars(args)
     assert seen.pop("func") == calls.append
     assert seen == parsed
+
+
+def _subparser(parser: argparse.ArgumentParser, *path: str) -> argparse.ArgumentParser:
+    for name in path:
+        (commands,) = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
+        parser = commands.choices[name]
+    return parser
+
+
+def test_audit_export_takes_and_names_each_evidence_profile(monkeypatch):
+    """``--profile`` offers the server's evidence profiles, one per first-party
+    bundle (the engine's registry test pins ``_AUDIT_EXPORT_PROFILES`` to its
+    registry), and the command's description names each one."""
+    assert cli._AUDIT_EXPORT_PROFILES[-1] == "gdpr"
+    export = _subparser(_built_parser(), "audit", "export")
+    (profile,) = [a for a in export._actions if a.dest == "profile"]
+    assert tuple(profile.choices) == cli._AUDIT_EXPORT_PROFILES
+    for name in cli._AUDIT_EXPORT_PROFILES:
+        assert name in export.description, name
+        calls: list[argparse.Namespace] = []
+        monkeypatch.setattr(cli, "cmd_audit_export", calls.append)
+        cli.main(["audit", "export", "--profile", name])
+        assert [args.profile for args in calls] == [name]
 
 
 def _recapture() -> None:

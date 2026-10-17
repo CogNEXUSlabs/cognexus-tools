@@ -88,7 +88,35 @@ def test_online_decide_posts_and_returns(monkeypatch):
     assert out["audit_block_id"] == "abc123"
     assert captured["url"] == "https://example.test/api/v1/decisions"
     assert captured["body"]["payload_kind"] == "user_input"
+    assert "workload_id" not in captured["body"]
+    assert "model_id" not in captured["body"]
     assert captured["api_key"] == "cnx_live_key"
+
+
+def test_decide_sends_a_workload_and_a_model_when_named(monkeypatch):
+    from artzain import cloud
+
+    cloud.configure(api_key="cnx_live_key", base_url="https://example.test")
+    captured = {}
+
+    def _fake_urlopen(req, timeout=None):
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return _FakeResp({"outcome": "allow", "decision_id": "01J", "reasons": []})
+
+    monkeypatch.setattr(cloud, "_urlopen", _fake_urlopen)
+    decide(
+        action="send_email", target="crm:1", payload="hi", kind="user_input",
+        workload_id=" invoice-approval ", model_id="model-a",
+    )
+    assert captured["body"]["workload_id"] == "invoice-approval"
+    assert captured["body"]["model_id"] == "model-a"
+
+    def _refuse(req, timeout=None):
+        raise AssertionError("sent")
+
+    monkeypatch.setattr(cloud, "_urlopen", _refuse)
+    with pytest.raises(ValueError):
+        decide(action="send_email", target="crm:1", payload="hi", workload_id="bad\nid")
 
 
 def test_online_http_error_raises_decision_error(monkeypatch):

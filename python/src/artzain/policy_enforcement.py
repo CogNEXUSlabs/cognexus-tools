@@ -1068,6 +1068,33 @@ def _is_one_repeat(body: Any) -> bool:
     return op in _GREEDY_REPEATS and _repeated_at_least_twice(av[1])
 
 
+def _offers_an_open_repeat(body: Any, depth: int = 0) -> bool:
+    """Is *body* a choice one of whose alternatives is nothing but one open repeat?
+
+    Repeated, the choice takes that alternative run after run on the same
+    text, and the alternative's repeat can end anywhere it likes, so the runs
+    divide the text as a repeat of a repeat does. Open means its count varies:
+    a run of exactly four of something ends where it must. A choice inside
+    the alternative is read the same way, and so are a conditional group's
+    branches, whether or not the pattern can ever take one.
+    """
+    items = _parsed_items(body)
+    if len(items) != 1 or depth > 24:
+        return False
+    op, av = items[0]
+    if op is not _sre_constants.BRANCH and op is not _sre_constants.GROUPREF_EXISTS:
+        return False
+    for alternative in _sub_sequences(op, av):
+        found = _parsed_items(alternative)
+        if len(found) == 1 and found[0][0] in _GREEDY_REPEATS:
+            low, high, _body = found[0][1]
+            if low != high and _repeated_at_least_twice(high):
+                return True
+        if _offers_an_open_repeat(alternative, depth + 1):
+            return True
+    return False
+
+
 def _matches_nothing(seq: Any) -> bool:
     """Can *seq* match without consuming a character?
 
@@ -1138,8 +1165,9 @@ def _gap_ways(seq: Any, depth: int = 0) -> int:
                 ways *= inner
         elif op is _sre_constants.SUBPATTERN:
             ways *= _gap_ways(av[3], depth + 1)
-        elif op is _sre_constants.BRANCH:
-            ways *= max([_gap_ways(b, depth + 1) for b in av[1]] or [1])
+        elif op is _sre_constants.BRANCH or op is _sre_constants.GROUPREF_EXISTS:
+            # One alternative, or one branch of a conditional, runs where it stands.
+            ways *= max([_gap_ways(b, depth + 1) for b in _sub_sequences(op, av)] or [1])
         elif op in (_sre_constants.ASSERT, _sre_constants.ASSERT_NOT):
             ways *= _gap_ways(av[1], depth + 1)
         elif _ATOMIC_GROUP is not None and op is _ATOMIC_GROUP:
@@ -1168,6 +1196,12 @@ def _refusal_in(seq: Any, depth: int = 0) -> Optional[str]:
                         "taken without consuming anything, so the same text can "
                         "be divided between the runs in more than one way"
                     )
+                if _offers_an_open_repeat(body):
+                    return (
+                        "it repeats a choice one of whose alternatives is itself "
+                        "an open repeat, so the same text can be divided between "
+                        "the runs in more than one way"
+                    )
         for part in _sub_sequences(op, av):
             found = _refusal_in(part, depth + 1)
             if found:
@@ -1183,6 +1217,10 @@ def _sub_sequences(op: Any, av: Any) -> list[Any]:
         return [av[3]]
     if op is _sre_constants.BRANCH:
         return list(av[1])
+    if op is _sre_constants.GROUPREF_EXISTS:
+        # ``(?(1)yes|no)``: without ``no``, the other choice matches nothing.
+        _group, yes, no = av
+        return [yes] if no is None else [yes, no]
     if op in (_sre_constants.ASSERT, _sre_constants.ASSERT_NOT):
         return [av[1]]
     if _ATOMIC_GROUP is not None and op is _ATOMIC_GROUP:

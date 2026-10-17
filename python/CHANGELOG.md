@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.6.54
+
+### Added
+
+- **`decide(workload_id=, model_id=)` names the workload and the model on a
+  sealed decision.** Empty values are omitted. The leaderboard groups tokens
+  per outcome by those ids and by the policy bundle that sealed the decision.
+- **`artzain audit export --profile gdpr` downloads the GDPR evidence pack**,
+  the server's fifth first-party profile (bundle `gdpr:1.0.0`). Before, the
+  command refused the name and the pack came only from the REST call or the
+  dashboard.
+
+### Fixed
+
+- **`pattern_refusal` reads inside conditional groups.** A shape it refuses
+  on its own, such as a group that repeats a repeat, is now refused in either
+  branch of `(?(group)yes|no)`, and the open gaps in a branch count with the
+  gaps around it. Before, a conditional hid them, and without the `bounded`
+  extra nothing cut such a search off. The two branches still count as one
+  choice, since only one of them runs.
+- **`pattern_refusal` refuses a repeated choice whose alternative is itself
+  an open repeat.** Run after run, the choice can re-enter that alternative
+  on the same text, so it costs what a repeat of a repeat costs, and that
+  shape was already refused. A rule holding one now raises
+  `PatternTooCostly`. An alternative with an exact count, or one that ends on
+  a fixed part, is still accepted, and so is the same repeat made atomic
+  (`(?>...)`, Python 3.11 and later).
+
+## 0.6.53
+
+### Added
+
+- **`post_decision_result(decision_id, result_ref)` posts the business result
+  of a sealed decision.** The call is synchronous. It sends the decision id
+  and the reference, and the server records the time. An allow whose
+  signature verifies and whose result was posted counts as an accountable
+  outcome on the leaderboard.
+
 ## 0.6.52
 
 ### Changed
