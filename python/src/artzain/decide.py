@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -60,6 +61,14 @@ class DecisionError(RuntimeError):
         super().__init__(message)
 
 
+def _dimension_id(value: str) -> str:
+    """A workload or model id. Empty is allowed. Control characters are not."""
+    text = str(value or "").strip()
+    if any(ord(ch) < 32 for ch in text):
+        raise ValueError("workload_id and model_id cannot include control characters.")
+    return text[:80]
+
+
 def decide(
     *,
     action: str,
@@ -71,6 +80,8 @@ def decide(
     request_id: Optional[str] = None,
     product: Optional[str] = None,
     context: Optional[dict[str, Any]] = None,
+    workload_id: str = "",
+    model_id: str = "",
     timeout_sec: float = 10.0,
 ) -> dict[str, Any]:
     """Gate a proposed agent action and return the decision.
@@ -99,6 +110,8 @@ def decide(
             Validated at the server boundary against negotiated product
             schemas — unknown products/versions are rejected with a 422.
         context: Advisory context (recorded with the decision).
+        workload_id: Workload this decision belongs to. Omitted when empty.
+        model_id: Model that produced the payload. Omitted when empty.
         timeout_sec: HTTP timeout for the online path.
 
     Returns:
@@ -165,6 +178,12 @@ def decide(
         "product": product,
         "context": context or {},
     }
+    workload = _dimension_id(workload_id)
+    model = _dimension_id(model_id)
+    if workload:
+        body["workload_id"] = workload
+    if model:
+        body["model_id"] = model
     url = creds.base_url + "/api/v1/decisions"
     try:
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -223,6 +242,80 @@ def decide(
             "decision API answered with a body that is not JSON: %r",
             raw[:240].decode("utf-8", errors="replace"),
         )
+    raise DecisionError("decision API answered with a body that is not JSON")
+
+
+_DECISION_ID = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
+
+
+def post_decision_result(
+    decision_id: str,
+    result_ref: str,
+    *,
+    timeout_sec: float = 10.0,
+) -> dict[str, Any]:
+    """Post the business result of a sealed decision.
+
+    Synchronous, like :func:`decide`. The server records the time. This call
+    sends only the decision id and ``result_ref``. No API key means the
+    result cannot be posted.
+
+    Raises:
+        ValueError: The decision id is not 26 characters, or ``result_ref``
+            is empty.
+        DecisionError: No API key is configured, or the call fails.
+    """
+    token = (decision_id or "").strip().upper()
+    if _DECISION_ID.fullmatch(token) is None:
+        raise ValueError("decision_id must be 26 characters.")
+    ref = (result_ref or "").strip()
+    if not ref or len(ref) > 200 or any(ord(ch) < 32 for ch in ref):
+        raise ValueError("result_ref is required.")
+    try:
+        creds = _resolve()
+    except CredentialConflictError as exc:
+        raise DecisionError(f"result was not posted: {exc}") from exc
+    if not creds.api_key:
+        raise DecisionError("result was not posted: no API key is configured.")
+    url = creds.base_url + "/api/v1/decisions/" + token + "/result"
+    try:
+        data = json.dumps({"result_ref": ref}, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise DecisionError(
+            "result was not posted: result_ref holds an unpaired surrogate, "
+            "which is not valid Unicode"
+        ) from exc
+    headers = _api_request_headers(creds.api_key)
+    headers["Content-Type"] = "application/json"
+    failure: Optional[DecisionError] = None
+    raw = b""
+    try:
+        req = urllib.request.Request(url, data=data, method="POST", headers=headers)
+        with cloud._urlopen(req, timeout=timeout_sec) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            parsed = json.loads(exc.read().decode("utf-8", errors="replace") or "{}")
+            detail = str(parsed.get("detail") or "")
+        except Exception:
+            _log.debug("HTTP %s error body is not JSON", exc.code, exc_info=True)
+        failure = DecisionError(
+            f"decision API returned HTTP {exc.code}{': ' + detail if detail else ''}",
+            status=exc.code,
+        )
+    except _UNSENDABLE as exc:
+        _log.debug("result was not posted: %s", exc)
+        failure = DecisionError(f"result was not posted: {_describe_failure(exc, creds.base_source)}")
+    except Exception as exc:
+        _log.debug("result post unreachable: %s", exc)
+        failure = DecisionError(f"decision API unreachable: {_describe_failure(exc, creds.base_source)}")
+    if failure is not None:
+        raise failure
+    try:
+        return json.loads(raw.decode("utf-8")) if raw.strip() else {}
+    except (ValueError, RecursionError):
+        _log.debug("decision API answered with a body that is not JSON")
     raise DecisionError("decision API answered with a body that is not JSON")
 
 

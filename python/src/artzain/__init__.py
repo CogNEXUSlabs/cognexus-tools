@@ -119,6 +119,7 @@ from artzain.cloud import (
 from artzain.decide import (
     DecisionError,
     decide,
+    post_decision_result,
 )
 from artzain.destructive_action_guard import (
     ActionMatch,
@@ -179,7 +180,7 @@ from artzain.prompt_injection import (
     load_prompt_injection_config,
 )
 
-__version__ = "0.6.52"
+__version__ = "0.6.54"
 
 __all__ = [
     # Version
@@ -244,6 +245,7 @@ __all__ = [
     "has_api_key",
     "note_session_user_prompt",
     "post_generation_outcome",
+    "post_decision_result",
     "post_sdk_event",
     "post_policy_human_decision",
     # Core data models — prompt defence

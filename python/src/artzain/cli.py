@@ -2001,6 +2001,15 @@ def _add_gui_parser(sub: argparse._SubParsersAction) -> None:
     p_gui.set_defaults(func=cmd_gui)
 
 
+#: The evidence profiles ``GET /api/v1/audit/export?profile=`` serves, one per
+#: first-party bundle in the engine's registry order. The engine's registry
+#: test (``services/tests/test_first_party_registry.py``) pins this tuple to
+#: ``compliance_evidence.FIRST_PARTY_BUNDLES``, so a new bundle lands here too.
+_AUDIT_EXPORT_PROFILES: tuple[str, ...] = (
+    "eu-ai-act", "nist-ai-rmf", "iso-42001", "soc2-ai-controls", "gdpr",
+)
+
+
 def _add_audit_parser(sub: argparse._SubParsersAction) -> None:
     """``artzain audit verify`` and ``export``."""
     p_audit = sub.add_parser(
@@ -2041,14 +2050,14 @@ def _add_audit_parser(sub: argparse._SubParsersAction) -> None:
             "Download a self-contained, offline-verifiable evidence bundle from\n"
             "GET /api/v1/audit/export. Use --profile to add a framework artifact\n"
             "set (control mapping, bundle history, promotion trail, and a\n"
-            "compliance summary): eu-ai-act, nist-ai-rmf, iso-42001, or\n"
-            "soc2-ai-controls. Requires COGNEXUS_API_KEY."
+            "compliance summary): eu-ai-act, nist-ai-rmf, iso-42001,\n"
+            "soc2-ai-controls, or gdpr. Requires COGNEXUS_API_KEY."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p_export.add_argument(
         "--profile",
-        choices=["eu-ai-act", "nist-ai-rmf", "iso-42001", "soc2-ai-controls"],
+        choices=list(_AUDIT_EXPORT_PROFILES),
         help="Evidence profile (adds a framework-mapped artifact set).",
     )
     p_export.add_argument("--from", dest="from_", metavar="ISO", help="ISO-8601 lower bound on created_at.")
