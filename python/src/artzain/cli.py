@@ -2006,7 +2006,7 @@ def _add_gui_parser(sub: argparse._SubParsersAction) -> None:
 #: test (``services/tests/test_first_party_registry.py``) pins this tuple to
 #: ``compliance_evidence.FIRST_PARTY_BUNDLES``, so a new bundle lands here too.
 _AUDIT_EXPORT_PROFILES: tuple[str, ...] = (
-    "eu-ai-act", "nist-ai-rmf", "iso-42001", "soc2-ai-controls", "gdpr",
+    "eu-ai-act", "nist-ai-rmf", "iso-42001", "soc2-ai-controls", "gdpr", "hipaa", "sox",
 )
 
 
@@ -2051,7 +2051,7 @@ def _add_audit_parser(sub: argparse._SubParsersAction) -> None:
             "GET /api/v1/audit/export. Use --profile to add a framework artifact\n"
             "set (control mapping, bundle history, promotion trail, and a\n"
             "compliance summary): eu-ai-act, nist-ai-rmf, iso-42001,\n"
-            "soc2-ai-controls, or gdpr. Requires COGNEXUS_API_KEY."
+            "soc2-ai-controls, gdpr, hipaa, or sox. Requires COGNEXUS_API_KEY."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
