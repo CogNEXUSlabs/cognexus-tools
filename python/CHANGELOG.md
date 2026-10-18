@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.55
+
+### Added
+
+- **`artzain audit export --profile hipaa` downloads the HIPAA evidence
+  pack**, the server's sixth first-party profile (bundle `hipaa:1.0.0`).
+  Before, the command refused the name and the pack came only from the REST
+  call or the dashboard.
+- **`artzain audit export --profile sox` downloads the SOX evidence pack**,
+  the server's seventh first-party profile (bundle `sox:1.0.0`).
+
 ## 0.6.54
 
 ### Added

@@ -204,7 +204,7 @@ def test_audit_export_takes_and_names_each_evidence_profile(monkeypatch):
     """``--profile`` offers the server's evidence profiles, one per first-party
     bundle (the engine's registry test pins ``_AUDIT_EXPORT_PROFILES`` to its
     registry), and the command's description names each one."""
-    assert cli._AUDIT_EXPORT_PROFILES[-1] == "gdpr"
+    assert cli._AUDIT_EXPORT_PROFILES[-1] == "sox"
     export = _subparser(_built_parser(), "audit", "export")
     (profile,) = [a for a in export._actions if a.dest == "profile"]
     assert tuple(profile.choices) == cli._AUDIT_EXPORT_PROFILES
