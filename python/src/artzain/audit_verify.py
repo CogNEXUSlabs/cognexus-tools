@@ -7,7 +7,10 @@ bundled public keys.  It is the Art. 12 "offline reconstruction" artifact.
 Because those keys come from the bundle, trust in the producing server drops
 out only at ``VERIFIED, ATTESTED``, once the Evidence Root is pinned
 (:data:`EVIDENCE_ROOT_FINGERPRINT`).  While that pin is ``None`` and the caller
-supplies no root, an intact bundle verifies ``SELF-ATTESTED``.
+supplies no root, an intact bundle verifies ``SELF-ATTESTED``.  A re-root
+(ceremony runbook §14) appends to :data:`EVIDENCE_ROOT_FINGERPRINTS` instead
+of replacing the pin, so a bundle certified under the earlier root keeps
+verifying ATTESTED under it, and the result says which root it reached.
 
 Bundle layout::
 
@@ -17,8 +20,17 @@ Bundle layout::
     manifest.json       range / counts / key ids (optionally Ed25519-signed)
     certificates.json   optional certificate chain to the CogNEXUS Evidence Root
     key-rotations.json  optional countersigned signing-key handovers (WS-8)
+    proofs.jsonl        optional, one per sealed leaf present: its Merkle
+                        inclusion proof {seq, seal_id, index, path} through
+                        the seal's full tree
 
 Leaf-hash, chain, and Merkle integrity verify with the standard library alone.
+A seal whose leaves are only partly present (a range- or tenant-filtered
+export) has its root recomputed when it can be; otherwise every present leaf
+is proved against that root through its inclusion proof, when the bundle
+carries them, and a proof that does not reach the root is a failure. A bundle
+without ``proofs.jsonl`` reads as before: such a seal is reported as a
+boundary of a filtered export, root not recomputed.
 **Signature** verification needs the ``cryptography`` package; install the extra::
 
     pip install 'artzain[verify]'
@@ -29,7 +41,8 @@ Three-state result (WS-4).  Integrity (``ok``) and provenance
 (``attestation``) are separate axes:
 
 * ``FAILED`` (``ok=False``) — chain broken, signature invalid, Merkle root
-  mismatch, or a signed manifest that no longer verifies.
+  mismatch, an inclusion proof that does not reach its seal's root, or a
+  signed manifest that no longer verifies.
 * ``VERIFIED, ATTESTED`` — intact; the signed manifest commits a
   ``leaves_digest`` binding the exact exported ``(seq, leaf_hash)`` set, and its
   signer plus every leaf/seal signer is covered by a deployment certificate that
@@ -58,16 +71,26 @@ import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional, Union
 
 _GENESIS_HASH = "0" * 64
 
 #: Full SHA-256 hex fingerprint of the CogNEXUS Evidence Root public key
-#: (canonical SubjectPublicKeyInfo PEM).  ``None`` until the root ceremony
-#: publishes it (docs/runbooks/evidence-root-ceremony.md); while ``None`` the
-#: verifier reports SELF-ATTESTED only.  Overriding at call time exists for
-#: test roots — the CLI states loudly when a non-default root is in use.
+#: (canonical SubjectPublicKeyInfo PEM): the CURRENT pin, always the last
+#: entry of :data:`EVIDENCE_ROOT_FINGERPRINTS`.  ``None`` until the root
+#: ceremony publishes it (docs/runbooks/evidence-root-ceremony.md); while
+#: ``None`` the verifier reports SELF-ATTESTED only.  Overriding at call time
+#: exists for test roots — the CLI states loudly when a non-default root is
+#: in use.
 EVIDENCE_ROOT_FINGERPRINT: Optional[str] = None
+
+#: Every Evidence Root fingerprint this verifier pins, oldest first, the
+#: current one last.  A re-root (runbook §14) APPENDS the new fingerprint and
+#: moves :data:`EVIDENCE_ROOT_FINGERPRINT` onto it; it never replaces the
+#: tuple, because a bundle certified under the earlier root must keep
+#: verifying ATTESTED under that root.  An entry may be dropped only once no
+#: customer bundle was ever certified under it.  Empty until the ceremony.
+EVIDENCE_ROOT_FINGERPRINTS: tuple[str, ...] = ()
 
 _ISSUING_CERT_FORMAT = "cognexus-issuing-certificate"
 _DEPLOYMENT_CERT_FORMAT = "cognexus-licence-certificate"
@@ -123,15 +146,25 @@ class VerifyResult:
     unexplained_key_ids: list[str] = field(default_factory=list)
     #: The Evidence Root fingerprint this run pinned against, in comparison
     #: form (stripped, lower case): the caller override when one was supplied,
-    #: otherwise the module default.  ``None`` when neither is set.
+    #: otherwise the current module pin — and, once the certificate chain was
+    #: read, the pinned root that chain actually reached, which after a
+    #: re-root may be a retired one.  ``None`` when nothing is pinned.
     #: ``root_fingerprint_overridden`` is ``True`` when the caller passed a
-    #: fingerprint that still differs after that normalisation — an ATTESTED
-    #: result then attests to *that* root, not the published CogNEXUS Evidence
-    #: Root.  Case and surrounding whitespace alone are not an override.
+    #: fingerprint that is in none of the pinned set after that normalisation
+    #: — an ATTESTED result then attests to *that* root, not a published
+    #: CogNEXUS Evidence Root.  Case and surrounding whitespace alone are not
+    #: an override, and neither is naming a retired pin.
     #: Machine consumers must read this flag: the loud human-readable warning
     #: is on the text path only.
     evidence_root_fingerprint: Optional[str] = None
     root_fingerprint_overridden: bool = False
+    #: ``True`` when the chain reached a root this verifier still pins but a
+    #: later re-root replaced (runbook §14).  An ATTESTED verdict under it is
+    #: still ATTESTED — the bundle was certified before the re-root, which is
+    #: why the pin is kept — and ``attestation_reasons`` then carries
+    #: "attested under retired root <16 hex>".  ``False`` when the chain was
+    #: not evaluated, reached the current pin, or reached an override.
+    evidence_root_retired: bool = False
 
     def _fail(self, seq: Optional[int], msg: str) -> "VerifyResult":
         self.ok = False
@@ -246,6 +279,26 @@ def _canonical_list(obj: list[Any]) -> bytes:
                       separators=(",", ":")).encode("utf-8")
 
 
+def _proofs_digest(proofs: list[dict[str, Any]]) -> str:
+    """SHA-256 over the canonical sorted ``[seq, seal_id, index, path]`` rows
+    of the inclusion proofs present.
+
+    Binds ``proofs.jsonl`` to the signed manifest the way ``leaves_digest``
+    binds the leaves. A proof cannot be forged (a path that reaches a signed
+    root for a leaf outside the tree is a hash collision), so what the digest
+    guards is the set: a proof dropped so that its seal falls back to the
+    weaker "root not recomputed" reading, added, or relabelled. Step 4 has
+    checked every record's shape before this runs. Must match
+    ``application/api/audit.py::_proofs_digest`` byte for byte.
+    """
+    rows = sorted(
+        ([int(p["seq"]), str(p["seal_id"]), int(p["index"]),
+          [[str(sibling), str(side)] for sibling, side in p["path"]]] for p in proofs),
+        key=lambda r: (r[0], r[1]),
+    )
+    return hashlib.sha256(_canonical_list(rows)).hexdigest()
+
+
 def _mk_leaf(data: bytes) -> bytes:
     return hashlib.sha256(b"\x00" + data).digest()
 
@@ -267,6 +320,42 @@ def _merkle_root(leaf_hashes_hex: list[str]) -> str:
                 nxt.append(level[i])
         level = nxt
     return level[0].hex()
+
+
+def _proof_path(value: Any) -> Optional[list[tuple[bytes, str]]]:
+    """The audit path a ``proofs.jsonl`` record carries, as ``(sibling, side)``
+    steps, or ``None`` when it is not one: a list of ``[64-hex, side]`` pairs
+    with ``side`` ``"left"`` or ``"right"``. Attacker-shaped input; nothing
+    here raises."""
+    if not isinstance(value, list):
+        return None
+    path: list[tuple[bytes, str]] = []
+    for step in value:
+        if not (isinstance(step, list) and len(step) == 2):
+            return None
+        sibling, side = step
+        if (not isinstance(sibling, str) or len(sibling) != 64
+                or side not in ("left", "right")):
+            return None
+        try:
+            raw = bytes.fromhex(sibling)
+        except ValueError:
+            return None
+        path.append((raw, side))
+    return path
+
+
+def _verify_inclusion(leaf_hash_hex: Any, path: list[tuple[bytes, str]], root_hex: Any) -> bool:
+    """``True`` when the leaf with *path* reconstructs *root_hex*: the mirror
+    of ``services/merkle.py::verify_inclusion`` (leaf prefix ``0x00``, node
+    prefix ``0x01``, the sibling on the side each step names)."""
+    try:
+        running = _mk_leaf(bytes.fromhex(leaf_hash_hex))
+    except (TypeError, ValueError):
+        return False
+    for sibling, side in path:
+        running = _mk_node(sibling, running) if side == "left" else _mk_node(running, sibling)
+    return running.hex() == root_hex
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +429,64 @@ def _normalised_root_fingerprint(value: Optional[str]) -> Optional[str]:
     return text or None
 
 
+def pinned_root_fingerprints() -> tuple[str, ...]:
+    """The Evidence Root fingerprints this verifier pins, in comparison form.
+
+    Retired roots first, in :data:`EVIDENCE_ROOT_FINGERPRINTS` order, and the
+    current pin (:data:`EVIDENCE_ROOT_FINGERPRINT`) last; blanks and repeats
+    dropped.  Read at call time, so a test that sets the single name alone
+    pins exactly that root.  Empty before the ceremony.
+    """
+    current = _normalised_root_fingerprint(EVIDENCE_ROOT_FINGERPRINT)
+    pins: list[str] = []
+    for value in EVIDENCE_ROOT_FINGERPRINTS:
+        fp = _normalised_root_fingerprint(value) if isinstance(value, str) else None
+        if fp and fp != current and fp not in pins:
+            pins.append(fp)
+    if current:
+        pins.append(current)
+    return tuple(pins)
+
+
+def _root_pin_set(value: Union[str, Iterable[str], None]) -> tuple[str, ...]:
+    """*value* as the set of fingerprints the chain check compares against:
+    one string is a set of one, a blank value is no fingerprint."""
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        fp = _normalised_root_fingerprint(value)
+        return (fp,) if fp else ()
+    pins: list[str] = []
+    for item in value:
+        fp = _normalised_root_fingerprint(item) if isinstance(item, str) else None
+        if fp and fp not in pins:
+            pins.append(fp)
+    return tuple(pins)
+
+
+def matched_root_fingerprint(certs: dict[str, Any],
+                             root_fingerprint: Union[str, Iterable[str], None],
+                             ) -> Optional[str]:
+    """The pinned fingerprint the chain's root public key has, or ``None``.
+
+    After a re-root the pinned set holds more than one root; this names the
+    one a chain :func:`validated_deployment_certificates` accepted reached.
+    """
+    root_pem = certs.get("root_public_key_pem") if isinstance(certs, dict) else None
+    pins = _root_pin_set(root_fingerprint)
+    if not root_pem or not pins:
+        return None
+    actual = _pem_fingerprint(root_pem)
+    return actual if actual in pins else None
+
+
+def _retired_root_note(fingerprint: str) -> str:
+    """The note an ATTESTED result carries when the root it reached is a pin
+    a later re-root replaced.  Shared with ``artzain.licence``."""
+    return (f"attested under retired root {fingerprint[:16]} — pinned before the "
+            "current Evidence Root; this bundle was certified before the re-root")
+
+
 def _parse_ts(value: Any) -> Optional[datetime]:
     if not value:
         return None
@@ -391,9 +538,13 @@ def _cert_sig_ok(record: dict[str, Any], issuer_pem: str) -> bool:
 
 
 def validated_deployment_certificates(
-    certs: dict[str, Any], root_fingerprint: Optional[str],
+    certs: dict[str, Any], root_fingerprint: Union[str, Iterable[str], None],
 ) -> tuple[list[dict[str, Any]], Optional[str], int, list[str]]:
-    """Deployment certificates that chain to the pinned Evidence Root.
+    """Deployment certificates that chain to a pinned Evidence Root.
+
+    *root_fingerprint* is one fingerprint or the whole pinned set (see
+    :func:`pinned_root_fingerprints`); the chain's root may be any of them,
+    and :func:`matched_root_fingerprint` says which one it was.
 
     Returns ``(certificates, blocking_reason, checked, notes)`` —
     ``blocking_reason`` is ``None`` when at least one certificate chains, and
@@ -411,10 +562,11 @@ def validated_deployment_certificates(
     root_pem = certs.get("root_public_key_pem")
     if not root_pem:
         return [], "no Evidence Root public key supplied", checked, notes
-    if not root_fingerprint:
+    pins = _root_pin_set(root_fingerprint)
+    if not pins:
         return [], ("no Evidence Root fingerprint pinned (pre-ceremony "
                     "verifier)"), checked, notes
-    if _pem_fingerprint(root_pem) != root_fingerprint.strip().lower():
+    if _pem_fingerprint(root_pem) not in pins:
         return [], ("root public key fingerprint mismatch — does not chain to "
                     "the pinned Evidence Root"), checked, notes
     root_key_id = _pem_key_id(root_pem)
@@ -620,15 +772,18 @@ def _evaluate_attestation(
     keys: list[dict[str, Any]],
     leaves: list[dict[str, Any]],
     seals: list[dict[str, Any]],
-    root_fingerprint: Optional[str],
+    root_fingerprints: tuple[str, ...],
     manifest_trusted: bool,
     manifest_signer_kid: Optional[str] = None,
     manifest_binds_content: bool = False,
+    retired_roots: frozenset[str] = frozenset(),
 ) -> None:
     """Set ``res.attestation`` for an intact bundle.
 
     Never fails the bundle: every problem here caps the claim at
-    SELF-ATTESTED and is named in ``attestation_reasons``.
+    SELF-ATTESTED and is named in ``attestation_reasons``.  The chain may
+    reach any of *root_fingerprints*; the one it reached is recorded on the
+    result, flagged when it is in *retired_roots* (a pin a re-root replaced).
     """
     def self_attested(reason: str) -> None:
         res.attestation = "SELF-ATTESTED"
@@ -650,16 +805,22 @@ def _evaluate_attestation(
         return self_attested(
             "no verifiable signed manifest — the exported record set is not "
             "bound to the certified key, so its completeness cannot be attested")
-    if not root_fingerprint:
+    if not root_fingerprints:
         return self_attested(
             "no Evidence Root fingerprint pinned (pre-ceremony verifier)")
 
     deploy, reason, checked, notes = validated_deployment_certificates(
-        certs, root_fingerprint)
+        certs, root_fingerprints)
     res.certificates_checked += checked
     res.attestation_reasons.extend(notes)
     if reason is not None:
         return self_attested(reason)
+    # The pinned root this chain reached is the one the result names from
+    # here on, whatever the verdict below.
+    matched = matched_root_fingerprint(certs, root_fingerprints)
+    if matched is not None:
+        res.evidence_root_fingerprint = matched
+        res.evidence_root_retired = matched in retired_roots
 
     # Coverage: every leaf and seal must be signed by a certified key, valid
     # at the record's signing time.  Compare the actual key bytes the
@@ -726,6 +887,8 @@ def _evaluate_attestation(
             "within a windowed export cannot be ruled out (re-export to attest)")
 
     res.attestation = "ATTESTED"
+    if res.evidence_root_retired and res.evidence_root_fingerprint:
+        res.attestation_reasons.append(_retired_root_note(res.evidence_root_fingerprint))
 
 
 # ---------------------------------------------------------------------------
@@ -770,6 +933,7 @@ def _load_bundle(path: Path) -> dict[str, Any]:
     certificates = json.loads(certs_raw) if certs_raw.strip() else {}
     rotations_raw = _read("key-rotations.json")
     rotations = json.loads(rotations_raw) if rotations_raw.strip() else []
+    proofs = _read_jsonl(_read("proofs.jsonl"))
     # Optional top-level structures degrade to their empty form when malformed
     # (a non-object manifest/chain, a non-list key set) so hostile bytes can
     # never reach a .get()/iteration and raise; a missing manifest/chain is
@@ -785,7 +949,7 @@ def _load_bundle(path: Path) -> dict[str, Any]:
         rotations = []
     return {"leaves": leaves, "seals": seals, "keys": keys,
             "manifest": manifest, "certificates": certificates,
-            "rotations": rotations}
+            "rotations": rotations, "proofs": proofs}
 
 
 # ---------------------------------------------------------------------------
@@ -797,30 +961,33 @@ def verify_bundle(bundle_path: str | Path,
                   root_fingerprint: Optional[str] = None) -> VerifyResult:
     """Verify a bundle directory or .zip. Returns a :class:`VerifyResult`.
 
-    *root_fingerprint* overrides the module-level
-    :data:`EVIDENCE_ROOT_FINGERPRINT` pin (test roots only). Comparison
-    ignores case and surrounding whitespace, the same way the certificate
-    check does, and ``evidence_root_fingerprint`` is that normalised value.
+    *root_fingerprint* replaces the pinned set (:func:`pinned_root_fingerprints`)
+    with that one root (test roots only). Comparison ignores case and
+    surrounding whitespace, the same way the certificate check does, and
+    ``evidence_root_fingerprint`` is that normalised value — or, once the chain
+    was read, the pinned root it reached.
     """
     path = Path(bundle_path)
     res = VerifyResult()
     # Record which root this run actually pinned against, before any early
     # return, so even a FAILED result carries it. A caller-supplied
-    # fingerprint that still differs once both sides are stripped and lower
-    # cased is an override: an ATTESTED verdict then attests to that root,
-    # not the published one. ``None`` and ``""`` use the module pin, as
-    # before. A value that is blank once stripped is not a fingerprint.
-    pinned = _normalised_root_fingerprint(EVIDENCE_ROOT_FINGERPRINT)
+    # fingerprint that is in none of the pinned set once both sides are
+    # stripped and lower cased is an override: an ATTESTED verdict then
+    # attests to that root, not a published one. ``None`` and ``""`` use the
+    # module pins, as before. A value that is blank once stripped is not a
+    # fingerprint, and replaces the set with nothing.
+    pins = pinned_root_fingerprints()
     if root_fingerprint:
-        effective_root = _normalised_root_fingerprint(root_fingerprint)
-        overridden = effective_root != pinned
+        supplied = _normalised_root_fingerprint(root_fingerprint)
+        effective = (supplied,) if supplied else ()
+        overridden = supplied not in pins if supplied else bool(pins)
     else:
-        effective_root = pinned
+        effective = pins
         overridden = False
-    res.evidence_root_fingerprint = effective_root
+    res.evidence_root_fingerprint = effective[-1] if effective else None
     res.root_fingerprint_overridden = overridden
     try:
-        return _verify_bundle_body(res, path, effective_root)
+        return _verify_bundle_body(res, path, effective, frozenset(pins[:-1]))
     except Exception as exc:  # noqa: BLE001
         # Absolute fail-closed backstop: the verifier's contract is that
         # hostile bundle bytes yield a FAILED result, never a raised
@@ -831,7 +998,8 @@ def verify_bundle(bundle_path: str | Path,
 
 
 def _verify_bundle_body(res: VerifyResult, path: Path,
-                        effective_root: Optional[str]) -> VerifyResult:
+                        root_fingerprints: tuple[str, ...],
+                        retired_roots: frozenset[str]) -> VerifyResult:
     if not path.exists():
         return res._fail(None, f"bundle path not found: {path}")
 
@@ -880,18 +1048,19 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
     if failed is not None:
         return failed
 
-    # 4) Seals.
-    failed = _verify_seals(res, seals, leaf_by_seq, pubkeys, manifest_binds_content)
+    # 4) Seals, and the inclusion proofs of the leaves under them.
+    proofs = bundle.get("proofs") or []
+    failed = _verify_seals(res, seals, leaf_by_seq, pubkeys, manifest_binds_content, proofs)
     if failed is not None:
         return failed
 
     # 5) The record set a trusted signed manifest commits to.
     if manifest_trusted:
-        failed = _verify_manifest_record_set(res, manifest, leaf_by_seq, leaves, seals)
+        failed = _verify_manifest_record_set(res, manifest, leaf_by_seq, leaves, seals, proofs)
         if failed is not None:
             return failed
 
-    # 5) Provenance (WS-4): does the intact chain also chain to the pinned
+    # 5) Provenance (WS-4): does the intact chain also chain to a pinned
     #    Evidence Root?  Never fails the bundle — caps the claim instead.
     try:
         _evaluate_attestation(
@@ -900,10 +1069,11 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
             keys=bundle.get("keys") or [],
             leaves=leaves,
             seals=seals,
-            root_fingerprint=effective_root,
+            root_fingerprints=root_fingerprints,
             manifest_trusted=manifest_trusted,
             manifest_signer_kid=manifest_signer_kid,
             manifest_binds_content=manifest_binds_content,
+            retired_roots=retired_roots,
         )
     except Exception:  # noqa: BLE001
         # Provenance is a *cap*, never a failure (see module docstring): a
@@ -1074,10 +1244,49 @@ def _verify_key_custody(
     return None
 
 
+def _index_proofs(
+    res: VerifyResult, proofs: list[dict[str, Any]], leaf_by_seq: dict[int, dict[str, Any]],
+    seals: list[dict[str, Any]],
+) -> tuple[Optional[VerifyResult], dict[str, dict[int, list[tuple[bytes, str]]]]]:
+    """The inclusion proofs by seal and seq, each checked for shape, for
+    naming a seal and a leaf the bundle carries, and for being the only proof
+    of its leaf under that seal. ``proofs.jsonl`` is attacker-shaped input
+    like the rest of the bundle: a record that is not a proof fails closed
+    with its seq named, never raises.
+
+    Returns ``(failed, by_seal)``: the failed result, or ``None`` with the
+    index.
+    """
+    known = {seal.get("seal_id") for seal in seals if isinstance(seal.get("seal_id"), str)}
+    by_seal: dict[str, dict[int, list[tuple[bytes, str]]]] = {}
+    for proof in proofs:
+        seq = _as_int(proof.get("seq"))
+        if seq is None:
+            return res._fail(None, "non-integer inclusion proof seq (malformed record)"), {}
+        path = _proof_path(proof.get("path"))
+        if path is None or _as_int(proof.get("index")) is None:
+            return res._fail(seq, f"malformed inclusion proof for seq {seq}"), {}
+        seal_id = proof.get("seal_id")
+        if not isinstance(seal_id, str) or seal_id not in known:
+            return res._fail(
+                seq, f"inclusion proof for seq {seq} names seal {seal_id}, "
+                     "which is not in the bundle"), {}
+        if seq not in leaf_by_seq:
+            return res._fail(
+                seq, f"inclusion proof for seq {seq}, but no such leaf is in the bundle"), {}
+        if seq in by_seal.setdefault(seal_id, {}):
+            return res._fail(
+                seq, f"duplicate inclusion proof for seq {seq} under seal {seal_id}"), {}
+        by_seal[seal_id][seq] = path
+    return None, by_seal
+
+
 def _verify_seals(res: VerifyResult, seals: list[dict[str, Any]],
                   leaf_by_seq: dict[int, dict[str, Any]], pubkeys,
-                  manifest_binds_content: bool) -> Optional[VerifyResult]:
-    """Step 4: every seal's hash, signature and Merkle root.
+                  manifest_binds_content: bool,
+                  proofs: list[dict[str, Any]]) -> Optional[VerifyResult]:
+    """Step 4: every seal's hash, signature and Merkle root, and the inclusion
+    proof of every present leaf that has one.
 
     Returns the failed result, or ``None`` when every seal holds.
     """
@@ -1102,6 +1311,9 @@ def _verify_seals(res: VerifyResult, seals: list[dict[str, Any]],
     # may commit a range far larger than the export (a boundary seal, or a
     # hostile last_seq like 10**15), and iterating that range would hang.
     present_sorted = sorted(leaf_by_seq)
+    failed, proofs_by_seal = _index_proofs(res, proofs, leaf_by_seq, seals)
+    if failed is not None:
+        return failed
     prev_seal_hash: Optional[str] = None
     for seal in sorted(seals, key=lambda r: _as_int(r.get("first_seq")) or 0):
         if _seal_hash(seal) != seal.get("seal_hash"):
@@ -1131,8 +1343,27 @@ def _verify_seals(res: VerifyResult, seals: list[dict[str, Any]],
                 f"non-integer seal range for seal {seal.get('seal_id')} "
                 "(malformed record)")
         expected = last_seq - first_seq + 1
-        covered = [leaf_by_seq[s] for s in present_sorted
-                   if first_seq <= s <= last_seq]
+        covered_seqs = [s for s in present_sorted if first_seq <= s <= last_seq]
+        covered = [leaf_by_seq[s] for s in covered_seqs]
+        # Inclusion proofs (proofs.jsonl): each present leaf's path through
+        # the seal's full tree, checked against the seal's root. They prove
+        # what a partial seal's root recompute cannot — that the leaves here
+        # are the ones the sealer signed — without the absent leaves. A proof
+        # that does not reach the root is a failure whatever the seal's
+        # shape; the bundle carried it as evidence of this leaf.
+        seal_id = seal.get("seal_id")
+        seal_proofs = proofs_by_seal.get(seal_id, {}) if isinstance(seal_id, str) else {}
+        for seq in sorted(seal_proofs):
+            if not first_seq <= seq <= last_seq:
+                return res._fail(
+                    seq, f"inclusion proof for seq {seq} names seal {seal_id}, which "
+                         f"commits seq {first_seq}..{last_seq}")
+            if not _verify_inclusion(leaf_by_seq[seq].get("leaf_hash"), seal_proofs[seq],
+                                     seal.get("merkle_root")):
+                return res._fail(
+                    seq, f"inclusion proof for seq {seq} does not reach the merkle_root "
+                         f"of seal {seal_id} (the leaf is not in the sealed tree, or "
+                         "the proof was altered)")
         within_window = (
             bundle_min is not None and bundle_max is not None
             and first_seq >= bundle_min and last_seq <= bundle_max
@@ -1156,7 +1387,7 @@ def _verify_seals(res: VerifyResult, seals: list[dict[str, Any]],
             # Find the first missing seq by walking the present leaves in range
             # (bounded by leaf count) — never materialise range(first_seq,
             # last_seq+1), which a hostile last_seq could blow up.
-            in_range = [s for s in present_sorted if first_seq <= s <= last_seq]
+            in_range = covered_seqs
             missing_seq = first_seq + len(in_range)  # default: short tail
             for i, s in enumerate(in_range):
                 if s != first_seq + i:
@@ -1181,6 +1412,16 @@ def _verify_seals(res: VerifyResult, seals: list[dict[str, Any]],
                 f"truncated log — seal {seal.get('seal_id')} commits to seq "
                 f"{first_seq}..{last_seq} but leaves end at {bundle_max}",
             )
+        elif covered and all(s in seal_proofs for s in covered_seqs):
+            # Every present leaf under this boundary seal proved above. The
+            # root itself is still not recomputed (the other leaves are not
+            # here), and the seal is still only partly present, so this stays
+            # in the warnings; what changed is what is known about the leaves.
+            res.warnings.append(
+                f"seal {seal_id} only partially present "
+                f"({len(covered)}/{expected} leaves) — boundary of a filtered export; "
+                "every present leaf proved included under its merkle_root"
+            )
         else:
             res.warnings.append(
                 f"seal {seal.get('seal_id')} only partially present "
@@ -1194,9 +1435,10 @@ def _verify_seals(res: VerifyResult, seals: list[dict[str, Any]],
 def _verify_manifest_record_set(res: VerifyResult, manifest: dict[str, Any],
                                 leaf_by_seq: dict[int, dict[str, Any]],
                                 leaves: list[dict[str, Any]],
-                                seals: list[dict[str, Any]]) -> Optional[VerifyResult]:
+                                seals: list[dict[str, Any]],
+                                proofs: list[dict[str, Any]]) -> Optional[VerifyResult]:
     """Step 5, for a trusted manifest: the record set it commits to against
-    the leaves and seals present.
+    the leaves, seals and inclusion proofs present.
 
     Returns the failed result, or ``None`` when they match.
     """
@@ -1244,4 +1486,14 @@ def _verify_manifest_record_set(res: VerifyResult, manifest: dict[str, Any],
             "signed manifest commits to records that are not present — "
             "records suppressed or substituted (" + ", ".join(mism) + ")",
         )
+    # ``proofs_digest`` commits the exact inclusion proof set. Each proof was
+    # checked in step 4 (so an altered one has already failed with its seq);
+    # what is left to catch is a proof dropped, so that its seal reads as
+    # "root not recomputed" instead of proved, added, or relabelled. An
+    # export from before proofs existed commits none, and is read as before.
+    pd = manifest.get("proofs_digest")
+    if pd is not None and pd != _proofs_digest(proofs):
+        return res._fail(
+            None, "inclusion proof set does not match the signed manifest "
+                  "(proofs_digest mismatch)")
     return None

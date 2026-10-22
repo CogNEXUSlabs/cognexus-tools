@@ -40,18 +40,24 @@ from artzain import audit_verify as _av
 from artzain.audit_verify import (
     _canonical_pem,
     _normalised_root_fingerprint,
+    _retired_root_note,
+    _root_pin_set,
+    matched_root_fingerprint,
     validated_deployment_certificates,
 )
 
 
-def _root_pin() -> Optional[str]:
-    """The pinned Evidence Root fingerprint, read at call time.
+def _root_pins() -> tuple[str, ...]:
+    """The pinned Evidence Root fingerprints, read at call time.
 
+    Comparison form, retired roots first and the current pin last, exactly
+    as :func:`artzain.audit_verify.pinned_root_fingerprints` returns them.
     Read through the module rather than bound at import, so a caller (or a
-    test root) that sets ``audit_verify.EVIDENCE_ROOT_FINGERPRINT`` changes
-    what this verifier pins against, exactly as it does for bundles.
+    test root) that sets ``audit_verify.EVIDENCE_ROOT_FINGERPRINT`` (or the
+    full ``EVIDENCE_ROOT_FINGERPRINTS``) changes what this verifier pins
+    against, exactly as it does for bundles.
     """
-    return _av.EVIDENCE_ROOT_FINGERPRINT
+    return _av.pinned_root_fingerprints()
 
 
 ANCHOR_FORMAT = "cognexus-chain-anchor"
@@ -209,11 +215,16 @@ class AttestationResult:
     attestation_reasons: list[str] = field(default_factory=list)
     certificates_checked: int = 0
     #: Comparison form (stripped, lower case), same as
-    #: ``audit_verify.VerifyResult``. ``None`` when no fingerprint is pinned.
-    #: ``root_fingerprint_overridden`` is ``True`` when the caller passed a
-    #: fingerprint that still differs after that normalisation.
+    #: ``audit_verify.VerifyResult``: the root supplied or the current pin,
+    #: and once the chain was read, the pinned root it reached. ``None`` when
+    #: no fingerprint is pinned. ``root_fingerprint_overridden`` is ``True``
+    #: when the caller passed a fingerprint in none of the pinned set after
+    #: that normalisation. ``evidence_root_retired`` is ``True`` when the
+    #: chain reached a pin a later re-root replaced (runbook §14); ATTESTED
+    #: under it is still ATTESTED, and ``attestation_reasons`` says so.
     evidence_root_fingerprint: Optional[str] = None
     root_fingerprint_overridden: bool = False
+    evidence_root_retired: bool = False
 
     def _fail(self, msg: str) -> "AttestationResult":
         self.ok = False
@@ -397,9 +408,9 @@ def root_signed_issuer_keys(certificates: Optional[dict[str, Any]],
     root_pem = certificates.get("root_public_key_pem") or ""
     if not root_pem or not _crypto_available():
         return []
-    pin = (evidence_root_fingerprint if evidence_root_fingerprint is not None
-           else _root_pin())
-    if pin and _av._pem_fingerprint(root_pem) != pin.strip().lower():
+    pins = (_root_pin_set(evidence_root_fingerprint)
+            if evidence_root_fingerprint is not None else _root_pins())
+    if pins and _av._pem_fingerprint(root_pem) not in pins:
         return []
     root_kid = _av._pem_key_id(root_pem)
     keys = []
@@ -436,16 +447,19 @@ def verify_attestation(attestation: dict[str, Any],
     res = AttestationResult()
     # Same comparison form as ``verify_bundle``: strip + lower, and the
     # reported fingerprint is that value. ``None`` means "use the module
-    # pin"; a supplied value, including one that is blank once stripped, is
-    # the caller's pin.
-    pinned = _normalised_root_fingerprint(_root_pin())
+    # pins"; a supplied value replaces the set with that one root — including
+    # a value that is blank once stripped, which replaces it with nothing —
+    # and is an override when it is in none of the pinned set.
+    pins = _root_pins()
     if evidence_root_fingerprint is None:
-        pin = pinned
+        effective = pins
         res.root_fingerprint_overridden = False
     else:
-        pin = _normalised_root_fingerprint(evidence_root_fingerprint)
-        res.root_fingerprint_overridden = pin != pinned
-    res.evidence_root_fingerprint = pin
+        supplied = _normalised_root_fingerprint(evidence_root_fingerprint)
+        effective = (supplied,) if supplied else ()
+        res.root_fingerprint_overridden = (supplied not in pins if supplied
+                                           else bool(pins))
+    res.evidence_root_fingerprint = effective[-1] if effective else None
 
     if not isinstance(attestation, dict):
         return res._fail("attestation is not an object")
@@ -525,7 +539,8 @@ def verify_attestation(attestation: dict[str, Any],
 
     _evaluate_attestation(res, attestation,
                           deployment_public_key_pem=deployment_public_key_pem,
-                          certificates=certificates, root_fingerprint=pin,
+                          certificates=certificates, root_fingerprints=effective,
+                          retired_roots=frozenset(pins[:-1]),
                           period_start=period_start, period_end=period_end)
     return res
 
@@ -716,9 +731,10 @@ def _check_anchors(attestation: dict[str, Any], anchors: list[dict[str, Any]],
 def _evaluate_attestation(res: AttestationResult, attestation: dict[str, Any],
                           *, deployment_public_key_pem: Optional[str],
                           certificates: Optional[dict[str, Any]],
-                          root_fingerprint: Optional[str],
+                          root_fingerprints: tuple[str, ...],
                           period_start: datetime,
-                          period_end: datetime) -> None:
+                          period_end: datetime,
+                          retired_roots: frozenset[str] = frozenset()) -> None:
     """Set ``res.attestation`` for a structurally intact attestation.
 
     Never fails the artifact for a *missing* certificate — absence caps the
@@ -743,11 +759,17 @@ def _evaluate_attestation(res: AttestationResult, attestation: dict[str, Any],
             "anchors supplied but not checked — the usage cross-check did not run")
 
     deploy, reason, checked, notes = validated_deployment_certificates(
-        certificates, root_fingerprint)
+        certificates, root_fingerprints)
     res.certificates_checked += checked
     res.attestation_reasons.extend(notes)
     if reason is not None:
         return res._self_attested(reason)
+    # The pinned root this chain reached is the one the result names from
+    # here on, whatever the verdict below.
+    matched = matched_root_fingerprint(certificates, root_fingerprints)
+    if matched is not None:
+        res.evidence_root_fingerprint = matched
+        res.evidence_root_retired = matched in retired_roots
 
     signer_pem = _canonical_pem(deployment_public_key_pem)
     matching = [c for c in deploy
@@ -808,6 +830,9 @@ def _evaluate_attestation(res: AttestationResult, attestation: dict[str, Any],
 
     if covering:
         res.attestation = "ATTESTED"
+        if res.evidence_root_retired and res.evidence_root_fingerprint:
+            res.attestation_reasons.append(
+                _retired_root_note(res.evidence_root_fingerprint))
         return
     if contradiction:
         res._fail(contradiction)
@@ -829,7 +854,9 @@ def verify_certificate_offline(certificate: dict[str, Any],
     operator as fact, is worse than not having the command.
 
     ``pinned`` is ``False`` when the chain was checked against the root the
-    caller supplied rather than a fingerprint this verifier pins. That is the
+    caller supplied rather than a fingerprint this verifier pins. Any pinned
+    root counts, including one a later re-root retired (runbook §14): a
+    certificate issued under it still chains. That is the
     normal state before the Evidence Root ceremony publishes one, and it is a
     weaker statement — it says the certificate is internally consistent with
     the root in the same file, not that the root is CogNEXUS's. The caller has
@@ -852,15 +879,20 @@ def verify_certificate_offline(certificate: dict[str, Any],
     chain = dict(certificates or {})
     chain["deployment_certificates"] = [certificate]
     root_pem = chain.get("root_public_key_pem") or ""
-    pin = (evidence_root_fingerprint if evidence_root_fingerprint is not None
-           else _root_pin())
-    pinned = bool(pin)
-    if not pin:
+    if evidence_root_fingerprint is not None:
+        # The caller's one root replaces the pinned set; a value that is blank
+        # once stripped is still the caller's pin, and matches nothing.
+        pins = _root_pin_set(evidence_root_fingerprint)
+        pinned = bool(evidence_root_fingerprint)
+    else:
+        pins = _root_pins()
+        pinned = bool(pins)
+    if not pinned:
         if not root_pem:
             return False, "no Evidence Root public key supplied", False
-        pin = _av._pem_fingerprint(root_pem)
+        pins = (_av._pem_fingerprint(root_pem),)
 
-    deploy, reason, _checked, _notes = validated_deployment_certificates(chain, pin)
+    deploy, reason, _checked, _notes = validated_deployment_certificates(chain, pins)
     if reason is not None:
         return False, reason, pinned
     if not deploy:

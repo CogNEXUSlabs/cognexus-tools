@@ -1,4 +1,38 @@
 {
+ "altered_proof_and_record_set_mismatch": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 0,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": 7,
+   "error": "inclusion proof for seq 7 does not reach the merkle_root of seal S0 (the leaf is not in the sealed tree, or the proof was altered)",
+   "warnings": [
+    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)"
+   ],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      0",
+   "  signatures checked: 5",
+   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "",
+   "FAILED (first bad seq: 7): inclusion proof for seq 7 does not reach the merkle_root of seal S0 (the leaf is not in the sealed tree, or the proof was altered)"
+  ]
+ },
  "bad_handover_and_edited_seal": {
   "result": {
    "ok": false,
@@ -15,7 +49,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -43,7 +78,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -71,7 +107,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -101,7 +138,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -134,7 +172,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -166,7 +205,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -196,7 +236,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -226,7 +267,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -259,7 +301,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -270,6 +313,73 @@
    "",
    "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
    "  self-attested because: no Evidence Root fingerprint pinned (pre-ceremony verifier)"
+  ]
+ },
+ "certified_under_a_retired_root": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "ATTESTED",
+   "attestation_reasons": [
+    "attested under retired root <root> — pinned before the current Evidence Root; this bundle was certified before the re-root"
+   ],
+   "certificates_checked": 2,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "  certificates:       2 checked",
+   "",
+   "VERIFIED, ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "Notes on the certificate chain:",
+   "  - attested under retired root <root> — pinned before the current Evidence Root; this bundle was certified before the re-root",
+   "The signing keys chain to a retired CogNEXUS Evidence Root and were certified at signing time."
+  ]
+ },
+ "certified_under_a_root_no_longer_pinned": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "root public key fingerprint mismatch — does not chain to the pinned Evidence Root"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp-2>",
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "  self-attested because: root public key fingerprint mismatch — does not chain to the pinned Evidence Root"
   ]
  },
  "certified_without_signed_manifest": {
@@ -292,7 +402,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -323,7 +434,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -353,7 +465,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -386,7 +499,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -418,7 +532,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -447,7 +562,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -475,7 +591,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -507,7 +624,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -541,7 +659,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -572,7 +691,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -603,7 +723,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -635,7 +756,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -664,7 +786,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -695,7 +818,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -725,7 +849,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -753,7 +878,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -788,7 +914,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -824,7 +951,8 @@
    "rotations_checked": 1,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -860,7 +988,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -893,7 +1022,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -925,7 +1055,8 @@
    "rotations_checked": 1,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -955,7 +1086,8 @@
    "rotations_checked": 1,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -983,7 +1115,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1011,7 +1144,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1043,7 +1177,8 @@
    "rotations_checked": 1,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -1075,7 +1210,8 @@
    "rotations_checked": 1,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -1104,7 +1240,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1114,6 +1251,214 @@
    "  signatures checked: 6",
    "",
    "FAILED (first bad seq: 6): truncated log — seal S0 commits to seq 1..1000000000000000 but leaves end at 5"
+  ]
+ },
+ "inclusion_proof_altered": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 0,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": 4,
+   "error": "inclusion proof for seq 4 does not reach the merkle_root of seal S0 (the leaf is not in the sealed tree, or the proof was altered)",
+   "warnings": [
+    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)"
+   ],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      0",
+   "  signatures checked: 5",
+   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "",
+   "FAILED (first bad seq: 4): inclusion proof for seq 4 does not reach the merkle_root of seal S0 (the leaf is not in the sealed tree, or the proof was altered)"
+  ]
+ },
+ "inclusion_proof_for_absent_leaf": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 0,
+   "signatures_checked": 4,
+   "signatures_skipped": false,
+   "first_bad_seq": 3,
+   "error": "inclusion proof for seq 3, but no such leaf is in the bundle",
+   "warnings": [
+    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)"
+   ],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      0",
+   "  signatures checked: 4",
+   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "",
+   "FAILED (first bad seq: 3): inclusion proof for seq 3, but no such leaf is in the bundle"
+  ]
+ },
+ "inclusion_proof_malformed": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 0,
+   "signatures_checked": 4,
+   "signatures_skipped": false,
+   "first_bad_seq": 7,
+   "error": "malformed inclusion proof for seq 7",
+   "warnings": [
+    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)"
+   ],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      0",
+   "  signatures checked: 4",
+   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "",
+   "FAILED (first bad seq: 7): malformed inclusion proof for seq 7"
+  ]
+ },
+ "inclusion_proof_names_unknown_seal": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 0,
+   "signatures_checked": 4,
+   "signatures_skipped": false,
+   "first_bad_seq": 4,
+   "error": "inclusion proof for seq 4 names seal S9, which is not in the bundle",
+   "warnings": [
+    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)"
+   ],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      0",
+   "  signatures checked: 4",
+   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "",
+   "FAILED (first bad seq: 4): inclusion proof for seq 4 names seal S9, which is not in the bundle"
+  ]
+ },
+ "inclusion_proof_relabelled": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 1,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "inclusion proof set does not match the signed manifest (proofs_digest mismatch)",
+   "warnings": [
+    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seal S0 only partially present (3/8 leaves) — boundary of a filtered export; every present leaf proved included under its merkle_root"
+   ],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      1",
+   "  signatures checked: 5",
+   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seal S0 only partially present (3/8 leaves) — boundary of a filtered export; every present leaf proved included under its merkle_root",
+   "",
+   "FAILED: inclusion proof set does not match the signed manifest (proofs_digest mismatch)"
+  ]
+ },
+ "inclusion_proofs_dropped": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 1,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "inclusion proof set does not match the signed manifest (proofs_digest mismatch)",
+   "warnings": [
+    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seal S0 only partially present (3/8 leaves) — boundary of a filtered export, root not recomputed"
+   ],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      1",
+   "  signatures checked: 5",
+   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seal S0 only partially present (3/8 leaves) — boundary of a filtered export, root not recomputed",
+   "",
+   "FAILED: inclusion proof set does not match the signed manifest (proofs_digest mismatch)"
   ]
  },
  "interior_per_batch_seals_attest": {
@@ -1140,7 +1485,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -1182,7 +1528,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1215,7 +1562,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -1246,7 +1594,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1274,7 +1623,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1303,7 +1653,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1332,7 +1683,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1360,7 +1712,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1388,7 +1741,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1421,7 +1775,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -1452,7 +1807,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1487,7 +1843,8 @@
     "<notary>"
    ],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -1517,7 +1874,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1545,7 +1903,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1573,7 +1932,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1603,7 +1963,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1633,7 +1994,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1663,7 +2025,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1697,7 +2060,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -1711,6 +2075,41 @@
    "",
    "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
    "  self-attested because: signed manifest is not signed by a certified deployment key — the committed record set is not bound to the Evidence Root"
+  ]
+ },
+ "retired_root_supplied_on_the_command_line": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "attestation": "ATTESTED",
+   "attestation_reasons": [
+    "attested under retired root <root> — pinned before the current Evidence Root; this bundle was certified before the re-root"
+   ],
+   "certificates_checked": 2,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": true
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "  certificates:       2 checked",
+   "",
+   "VERIFIED, ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "Notes on the certificate chain:",
+   "  - attested under retired root <root> — pinned before the current Evidence Root; this bundle was certified before the re-root",
+   "The signing keys chain to a retired CogNEXUS Evidence Root and were certified at signing time."
   ]
  },
  "rotations_digest_mismatch": {
@@ -1729,7 +2128,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1761,7 +2161,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -1791,7 +2192,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1819,7 +2221,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1854,7 +2257,8 @@
     "<sealer>"
    ],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -1884,7 +2288,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1915,7 +2320,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -1948,7 +2354,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -1984,7 +2391,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -2022,7 +2430,8 @@
     "<attacker>"
    ],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -2034,6 +2443,127 @@
    "",
    "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
    "  self-attested because: no certificate chain in bundle"
+  ]
+ },
+ "sparse_export_with_inclusion_proofs": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 3,
+   "seals_checked": 1,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seal S0 only partially present (3/8 leaves) — boundary of a filtered export; every present leaf proved included under its merkle_root"
+   ],
+   "attestation": "ATTESTED",
+   "attestation_reasons": [],
+   "certificates_checked": 2,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      1",
+   "  signatures checked: 5",
+   "  certificates:       2 checked",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seal S0 only partially present (3/8 leaves) — boundary of a filtered export; every present leaf proved included under its merkle_root",
+   "",
+   "VERIFIED, ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "The signing keys chain to the root you supplied and were certified at signing time."
+  ]
+ },
+ "sparse_export_with_inclusion_proofs_stdlib_only": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 3,
+   "seals_checked": 1,
+   "signatures_checked": 0,
+   "signatures_skipped": true,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'",
+    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "signed manifest present but not verified (cryptography missing)",
+    "seal S0 only partially present (3/8 leaves) — boundary of a filtered export; every present leaf proved included under its merkle_root"
+   ],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      1",
+   "  signatures:         SKIPPED (install 'artzain[verify]')",
+   "  ! cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'",
+   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! signed manifest present but not verified (cryptography missing)",
+   "  ! seal S0 only partially present (3/8 leaves) — boundary of a filtered export; every present leaf proved included under its merkle_root",
+   "",
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots are intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ },
+ "sparse_export_without_inclusion_proofs": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 3,
+   "seals_checked": 1,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [
+    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seal S0 only partially present (3/8 leaves) — boundary of a filtered export, root not recomputed"
+   ],
+   "attestation": "ATTESTED",
+   "attestation_reasons": [],
+   "certificates_checked": 2,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": "<root-fp>",
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      1",
+   "  signatures checked: 5",
+   "  certificates:       2 checked",
+   "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
+   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! seal S0 only partially present (3/8 leaves) — boundary of a filtered export, root not recomputed",
+   "",
+   "VERIFIED, ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
+   "The signing keys chain to the root you supplied and were certified at signing time."
   ]
  },
  "substituted_keypair": {
@@ -2054,7 +2584,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -2087,7 +2618,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -2120,7 +2652,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -2148,7 +2681,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -2179,7 +2713,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -2209,7 +2744,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -2240,7 +2776,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -2269,7 +2806,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -2300,7 +2838,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -2331,7 +2870,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -2363,7 +2903,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -2397,7 +2938,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "<root-fp>",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -2428,7 +2970,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 1,
   "report": [
@@ -2458,7 +3001,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": "abababababababababababababababababababababababababababababababab",
-   "root_fingerprint_overridden": true
+   "root_fingerprint_overridden": true,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [
@@ -2490,7 +3034,8 @@
    "rotations_checked": 0,
    "unexplained_key_ids": [],
    "evidence_root_fingerprint": null,
-   "root_fingerprint_overridden": false
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
   },
   "exit": 0,
   "report": [

@@ -48,6 +48,16 @@ def _leaves_digest(leaves: list[dict]) -> str:
     return hashlib.sha256(_canonical(pairs)).hexdigest()
 
 
+def _proofs_digest(proofs: list[dict]) -> str:
+    """Mirror of artzain.audit_verify._proofs_digest / the server helper."""
+    rows = sorted(
+        ([int(p["seq"]), str(p["seal_id"]), int(p["index"]),
+          [[str(h), str(side)] for h, side in p["path"]]] for p in proofs),
+        key=lambda r: (r[0], r[1]),
+    )
+    return hashlib.sha256(_canonical(rows)).hexdigest()
+
+
 class _Signer:
     """Mirror of the server AuditSigner (Ed25519 + 16-hex key_id)."""
 
@@ -300,7 +310,7 @@ def authority():
 
 
 def _signed_manifest(signer, first_seq, last_seq, leaf_count,
-                     seal_count=None, leaves=None) -> dict:
+                     seal_count=None, leaves=None, proofs=None) -> dict:
     manifest = {"first_seq": first_seq, "last_seq": last_seq,
                 "leaf_count": leaf_count, "tenant_user_id": 1}
     if seal_count is not None:
@@ -310,6 +320,10 @@ def _signed_manifest(signer, first_seq, last_seq, leaf_count,
     # omitting it models a pre-digest bundle (caps at SELF-ATTESTED).
     if leaves is not None:
         manifest["leaves_digest"] = _leaves_digest(leaves)
+    # An export that ships ``proofs.jsonl`` commits it the same way; omitting
+    # it models a bundle exported before inclusion proofs existed.
+    if proofs is not None:
+        manifest["proofs_digest"] = _proofs_digest(proofs)
     h = hashlib.sha256(_canonical(manifest)).hexdigest()
     return {**manifest, "sig": signer.sign(h.encode("ascii")),
             "signer_key_id": signer.key_id}
@@ -748,6 +762,263 @@ def test_licence_verify_normalises_root_fingerprint_the_same_way(monkeypatch):
     assert r.root_fingerprint_overridden is True
     assert r.evidence_root_fingerprint == "ab" * 32
 
+
+# ---------------------------------------------------------------------------
+# Re-root (ceremony runbook §14). The verifier pins a SET of Evidence Root
+# fingerprints: the current one, EVIDENCE_ROOT_FINGERPRINT, is the last entry
+# of EVIDENCE_ROOT_FINGERPRINTS, and a re-root appends rather than replaces.
+# A bundle certified under a root the re-root retired keeps verifying ATTESTED
+# under that root, and the result says which root it reached.
+# ---------------------------------------------------------------------------
+
+
+def _pin_roots(monkeypatch, *fingerprints: str) -> None:
+    """Pin *fingerprints* the way a release does: the whole set, oldest
+    first, and the single name on its last entry."""
+    import artzain.audit_verify as av
+
+    monkeypatch.setattr(av, "EVIDENCE_ROOT_FINGERPRINTS", tuple(fingerprints))
+    monkeypatch.setattr(av, "EVIDENCE_ROOT_FINGERPRINT",
+                        fingerprints[-1] if fingerprints else None)
+
+
+def test_no_evidence_root_is_pinned_before_the_ceremony():
+    """Both spellings of the pin are empty until the ceremony. The release
+    that pins the first root fills both: the single name is always the last
+    entry of the set."""
+    import artzain.audit_verify as av
+
+    assert av.EVIDENCE_ROOT_FINGERPRINT is None
+    assert av.EVIDENCE_ROOT_FINGERPRINTS == ()
+    assert av.pinned_root_fingerprints() == ()
+    last = av.EVIDENCE_ROOT_FINGERPRINTS[-1] if av.EVIDENCE_ROOT_FINGERPRINTS else None
+    assert last == av.EVIDENCE_ROOT_FINGERPRINT
+
+
+def test_pinned_root_fingerprints_is_the_set_in_comparison_form(monkeypatch):
+    """Retired roots first, in tuple order, the current pin last; stripped and
+    lower cased like the chain check compares; blanks and repeats dropped. A
+    test that sets the single name alone pins exactly that root, which is the
+    shape every earlier test uses."""
+    import artzain.audit_verify as av
+
+    a, b = "ab" * 32, "cd" * 32
+    _pin_roots(monkeypatch, a, b)
+    assert av.pinned_root_fingerprints() == (a, b)
+
+    monkeypatch.setattr(av, "EVIDENCE_ROOT_FINGERPRINTS",
+                        (" " + a.upper() + " ", "", b, a))
+    monkeypatch.setattr(av, "EVIDENCE_ROOT_FINGERPRINT", b.upper())
+    assert av.pinned_root_fingerprints() == (a, b)
+
+    monkeypatch.setattr(av, "EVIDENCE_ROOT_FINGERPRINTS", ())
+    monkeypatch.setattr(av, "EVIDENCE_ROOT_FINGERPRINT", a)
+    assert av.pinned_root_fingerprints() == (a,)
+
+    # The single name is the current pin wherever the tuple lists it.
+    monkeypatch.setattr(av, "EVIDENCE_ROOT_FINGERPRINTS", (b, a))
+    monkeypatch.setattr(av, "EVIDENCE_ROOT_FINGERPRINT", b)
+    assert av.pinned_root_fingerprints() == (a, b)
+
+
+def test_bundle_certified_under_a_retired_root_still_attests(
+        tmp_path, signer, authority, monkeypatch):
+    """After a re-root the earlier root stays pinned: a bundle whose chain
+    reaches it is still ATTESTED, the result names that root and says it is
+    the retired one, and the note is in the reasons every output path prints."""
+    newer = _CertAuthority()
+    _pin_roots(monkeypatch, authority.root_fingerprint, newer.root_fingerprint)
+    d = _certified_bundle(tmp_path, signer, authority)
+    r = verify_bundle(d)
+    assert r.ok and r.attestation == "ATTESTED"
+    assert r.evidence_root_fingerprint == authority.root_fingerprint
+    assert r.evidence_root_retired is True
+    assert r.root_fingerprint_overridden is False
+    assert r.attestation_reasons == [
+        f"attested under retired root {authority.root_fingerprint[:16]} — pinned "
+        "before the current Evidence Root; this bundle was certified before the re-root"]
+
+
+def test_bundle_certified_under_the_current_root_is_not_retired(
+        tmp_path, signer, authority, monkeypatch):
+    older = _CertAuthority()
+    _pin_roots(monkeypatch, older.root_fingerprint, authority.root_fingerprint)
+    d = _certified_bundle(tmp_path, signer, authority)
+    r = verify_bundle(d)
+    assert r.attestation == "ATTESTED"
+    assert r.evidence_root_fingerprint == authority.root_fingerprint
+    assert r.evidence_root_retired is False
+    assert r.attestation_reasons == []
+
+
+def test_bundle_under_a_root_no_longer_pinned_caps_at_self_attested(
+        tmp_path, signer, authority, monkeypatch):
+    """Dropping a pin orphans every bundle certified under it: the existing
+    mismatch reason, and the result names the current pin, not retired."""
+    newer = _CertAuthority()
+    _pin_roots(monkeypatch, newer.root_fingerprint)
+    d = _certified_bundle(tmp_path, signer, authority)
+    r = verify_bundle(d)
+    assert r.ok and r.attestation == "SELF-ATTESTED"
+    assert r.attestation_reasons == [
+        "root public key fingerprint mismatch — does not chain to the pinned "
+        "Evidence Root"]
+    assert r.evidence_root_fingerprint == newer.root_fingerprint
+    assert r.evidence_root_retired is False
+
+
+def test_a_capped_bundle_under_a_retired_root_names_it_without_the_attested_note(
+        tmp_path, signer, authority, monkeypatch):
+    """The chain reached the retired root but the deployment certificate had
+    expired at signing time: the result names the root it reached and flags it
+    retired, and the reasons carry the cap, not "attested under"."""
+    newer = _CertAuthority()
+    _pin_roots(monkeypatch, authority.root_fingerprint, newer.root_fingerprint)
+    d = _certified_bundle(tmp_path, signer, authority,
+                          not_before="2026-01-01T00:00:00+00:00",
+                          not_after="2026-02-01T00:00:00+00:00")
+    r = verify_bundle(d)
+    assert r.ok and r.attestation == "SELF-ATTESTED"
+    assert r.evidence_root_fingerprint == authority.root_fingerprint
+    assert r.evidence_root_retired is True
+    assert r.attestation_reasons == [
+        "leaf seq 1 not covered by a certificate valid at signing time"]
+
+
+def test_a_failed_bundle_names_the_current_pin(tmp_path, signer, authority, monkeypatch):
+    """Provenance is never evaluated for a broken bundle, so the result
+    carries the current pin and no retirement."""
+    newer = _CertAuthority()
+    _pin_roots(monkeypatch, authority.root_fingerprint, newer.root_fingerprint)
+    d = _certified_bundle(tmp_path, signer, authority)
+    leaves = _read_leaves(d)
+    leaves[2]["target"] = "crm:999"
+    _write_leaves(d, leaves)
+    r = verify_bundle(d)
+    assert not r.ok
+    assert r.evidence_root_fingerprint == newer.root_fingerprint
+    assert r.evidence_root_retired is False
+
+
+def test_supplying_a_retired_root_is_not_an_override(
+        tmp_path, signer, authority, monkeypatch):
+    """--root-fingerprint replaces the set with the one root supplied. A root
+    in the set is not an override, retired or current; a root outside it is,
+    and an override is never reported as retired."""
+    newer = _CertAuthority()
+    _pin_roots(monkeypatch, authority.root_fingerprint, newer.root_fingerprint)
+    d = _certified_bundle(tmp_path, signer, authority)
+
+    r = verify_bundle(d, root_fingerprint=" " + authority.root_fingerprint.upper())
+    assert r.attestation == "ATTESTED"
+    assert r.root_fingerprint_overridden is False
+    assert r.evidence_root_retired is True
+    assert r.evidence_root_fingerprint == authority.root_fingerprint
+
+    # The current root alone: the set is replaced, so this bundle reaches no pin.
+    r = verify_bundle(d, root_fingerprint=newer.root_fingerprint)
+    assert r.attestation == "SELF-ATTESTED"
+    assert r.root_fingerprint_overridden is False
+    assert r.evidence_root_retired is False
+    assert r.evidence_root_fingerprint == newer.root_fingerprint
+
+    r = verify_bundle(d, root_fingerprint="ef" * 32)
+    assert r.attestation == "SELF-ATTESTED"
+    assert r.root_fingerprint_overridden is True
+    assert r.evidence_root_retired is False
+    assert r.evidence_root_fingerprint == "ef" * 32
+
+
+def test_cli_attested_under_a_retired_root_says_so(
+        tmp_path, signer, authority, capsys, monkeypatch):
+    """Both output paths name the retired root: the note in the reasons, the
+    flag in --json, and the closing sentence no longer claims the current
+    CogNEXUS Evidence Root. No override warning: the root is a pinned one."""
+    newer = _CertAuthority()
+    _pin_roots(monkeypatch, authority.root_fingerprint, newer.root_fingerprint)
+    d = _certified_bundle(tmp_path, signer, authority)
+    note = f"attested under retired root {authority.root_fingerprint[:16]}"
+
+    code, out = _run_cli(capsys, ["audit", "verify", str(d)])
+    assert code == 0
+    assert "VERIFIED, ATTESTED" in out
+    assert "Notes on the certificate chain:" in out
+    assert f"  - {note}" in out
+    assert "The signing keys chain to a retired CogNEXUS Evidence Root" in out
+    assert "The signing keys chain to the CogNEXUS Evidence Root" not in out
+    assert "NON-DEFAULT" not in out
+
+    code, raw = _run_cli(capsys, ["audit", "verify", str(d), "--json"])
+    assert code == 0
+    payload = json.loads(raw)
+    assert payload["attestation"] == "ATTESTED"
+    assert payload["evidence_root_fingerprint"] == authority.root_fingerprint
+    assert payload["evidence_root_retired"] is True
+    assert payload["root_fingerprint_overridden"] is False
+    assert any(reason.startswith(note) for reason in payload["attestation_reasons"])
+
+
+def test_cli_attested_under_the_current_root_is_unchanged_by_retired_pins(
+        tmp_path, signer, authority, capsys, monkeypatch):
+    older = _CertAuthority()
+    _pin_roots(monkeypatch, older.root_fingerprint, authority.root_fingerprint)
+    d = _certified_bundle(tmp_path, signer, authority)
+    code, out = _run_cli(capsys, ["audit", "verify", str(d)])
+    assert code == 0
+    assert "The signing keys chain to the CogNEXUS Evidence Root" in out
+    assert "retired" not in out
+    code, raw = _run_cli(capsys, ["audit", "verify", str(d), "--json"])
+    assert json.loads(raw)["evidence_root_retired"] is False
+
+
+def test_licence_certificate_under_a_retired_root_is_still_pinned(
+        signer, authority, monkeypatch):
+    """``artzain licence install`` and the anchor cross-check read the same
+    set: a certificate issued under a retired root still chains, as pinned;
+    one whose pin was dropped is refused."""
+    from artzain.licence import root_signed_issuer_keys, verify_certificate_offline
+
+    newer = _CertAuthority()
+    _pin_roots(monkeypatch, authority.root_fingerprint, newer.root_fingerprint)
+    cert = authority.deployment_cert(signer)
+    chain = {"root_public_key_pem": authority.root.public_key_pem,
+             "issuing_certificates": [authority.issuing_cert]}
+    assert verify_certificate_offline(cert, chain) == (True, "ok", True)
+    assert root_signed_issuer_keys(chain) == [authority.issuing.public_key_pem]
+    # Supplying the retired root on the command line reads the same.
+    assert verify_certificate_offline(
+        cert, chain, evidence_root_fingerprint=authority.root_fingerprint,
+    ) == (True, "ok", True)
+
+    _pin_roots(monkeypatch, newer.root_fingerprint)
+    ok, reason, pinned = verify_certificate_offline(cert, chain)
+    assert ok is False and pinned is True
+    assert "fingerprint mismatch" in reason
+    assert root_signed_issuer_keys(chain) == []
+
+
+def test_licence_attestation_bookkeeping_follows_the_pinned_set(monkeypatch):
+    """``verify_attestation`` records the pin the way ``verify_bundle`` does:
+    the current pin by default, the root supplied otherwise, and an override
+    only for a root outside the set."""
+    from artzain.licence import verify_attestation
+
+    a, b = "ab" * 32, "cd" * 32
+    _pin_roots(monkeypatch, a, b)
+    r = verify_attestation({})
+    assert r.evidence_root_fingerprint == b
+    assert r.root_fingerprint_overridden is False
+    assert r.evidence_root_retired is False
+
+    r = verify_attestation({}, evidence_root_fingerprint=a.upper())
+    assert r.evidence_root_fingerprint == a
+    assert r.root_fingerprint_overridden is False
+    # Nothing chained: the artifact failed before the chain was read.
+    assert r.evidence_root_retired is False
+
+    r = verify_attestation({}, evidence_root_fingerprint="ef" * 32)
+    assert r.evidence_root_fingerprint == "ef" * 32
+    assert r.root_fingerprint_overridden is True
 
 
 
@@ -1285,3 +1556,209 @@ def test_cli_attested_prints_notes_for_a_tampered_issuing_certificate(
     assert payload["attestation"] == "ATTESTED"
     assert ("issuing certificate ISS-TAMPERED signature invalid"
             in payload["attestation_reasons"])
+
+
+# ---------------------------------------------------------------------------
+# Per-leaf Merkle inclusion proofs (proofs.jsonl). A hosted tenant's export is
+# sparse: the other tenants' leaves under the same seal are absent, so the
+# seal's root cannot be recomputed. A proof per present leaf lets the verifier
+# check each one against the seal's merkle_root without them.
+# ---------------------------------------------------------------------------
+
+
+def _inclusion_path(leaf_hashes_hex: list[str], index: int) -> list[list[str]]:
+    """RFC 6962 audit path for the leaf at *index*: ``[[sibling_hex, side], ...]``
+    bottom-up, ``side`` being where the sibling sits (mirror of
+    ``services/merkle.py``)."""
+    level = [hashlib.sha256(b"\x00" + bytes.fromhex(h)).digest() for h in leaf_hashes_hex]
+    path: list[list[str]] = []
+    while len(level) > 1:
+        sibling = index ^ 1
+        if sibling < len(level):
+            path.append([level[sibling].hex(), "left" if sibling < index else "right"])
+        level = [
+            hashlib.sha256(b"\x01" + level[i] + level[i + 1]).digest() if i + 1 < len(level)
+            else level[i]
+            for i in range(0, len(level), 2)
+        ]
+        index //= 2
+    return path
+
+
+def _write_proofs(d: Path, proofs: list[dict]) -> None:
+    (d / "proofs.jsonl").write_text(
+        "".join(json.dumps(p, sort_keys=True) + "\n" for p in proofs), encoding="utf-8")
+
+
+def _read_proofs(d: Path) -> list[dict]:
+    return [json.loads(line) for line in (d / "proofs.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()]
+
+
+def _sparse_sealed_bundle(tmp_path, signer, authority=None, *, present=(2, 4, 7),
+                          sealed=8, proofs=True, name="sparse") -> Path:
+    """One tenant's export out of a seal over ``sealed`` chained leaves: only
+    the ``present`` seqs ship (the rest belong to other tenants), the seal's
+    root is the real root over all of them, and each present leaf's inclusion
+    proof ships in ``proofs.jsonl`` with the signed manifest committing a
+    ``proofs_digest`` — or, with ``proofs=False``, neither (a bundle from
+    before proofs existed)."""
+    base_ts = datetime(2026, 6, 17, 19, 0, 0, tzinfo=timezone.utc)
+    chain, prev = [], _GENESIS
+    for seq in range(1, sealed + 1):
+        body = {
+            "leaf_id": f"L{seq:025d}", "decision_id": f"D{seq:025d}",
+            "created_at": (base_ts + timedelta(seconds=seq)).isoformat(),
+            "user_id": 1 if seq in present else 2, "team_id": None,
+            "agent_did": "agent-x", "action": "send_email", "target": "crm:1",
+            "outcome": "allow",
+            "payload_sha256": hashlib.sha256(str(seq).encode()).hexdigest(),
+            "votes": [{"name": "pi", "verdict": "allow", "severity": "none"}],
+            "bundle_version": "builtin:v0", "resolution": "builtin/strict-v0",
+            "prev_leaf_hash": prev,
+        }
+        lh = hashlib.sha256(_canonical(body)).hexdigest()
+        rec = dict(body)
+        rec.update(seq=seq, leaf_hash=lh, sig=signer.sign(lh.encode("ascii")),
+                   signer_key_id=signer.key_id, seal_id="S0")
+        chain.append(rec)
+        prev = lh
+    hashes = [leaf["leaf_hash"] for leaf in chain]
+    leaves = [leaf for leaf in chain if leaf["seq"] in present]
+    seal_body = {
+        "seal_id": "S0", "first_seq": 1, "last_seq": sealed,
+        "merkle_root": _merkle_root(hashes), "prev_seal_hash": _GENESIS,
+        "sealed_at": (base_ts + timedelta(minutes=1)).isoformat(),
+    }
+    sh = hashlib.sha256(_canonical(seal_body)).hexdigest()
+    seal = dict(seal_body)
+    seal.update(seal_hash=sh, sig=signer.sign(sh.encode("ascii")), signer_key_id=signer.key_id)
+    proof_rows = [{"seq": leaf["seq"], "seal_id": "S0", "index": leaf["seq"] - 1,
+                   "path": _inclusion_path(hashes, leaf["seq"] - 1)} for leaf in leaves]
+
+    d = tmp_path / name
+    d.mkdir()
+    _write_leaves(d, leaves)
+    (d / "seals.jsonl").write_text(json.dumps(seal, sort_keys=True) + "\n", encoding="utf-8")
+    (d / "keys.json").write_text(json.dumps(
+        [{"key_id": signer.key_id, "public_key_pem": signer.public_key_pem, "scope": "audit"}]),
+        encoding="utf-8")
+    if authority is not None:
+        authority.write_chain(d, authority.deployment_cert(signer))
+    if proofs:
+        _write_proofs(d, proof_rows)
+    (d / "manifest.json").write_text(json.dumps(_signed_manifest(
+        signer, min(present), max(present), len(present), seal_count=1, leaves=leaves,
+        proofs=proof_rows if proofs else None)), encoding="utf-8")
+    return d
+
+
+_PROVED = "every present leaf proved included under its merkle_root"
+_NOT_RECOMPUTED = "root not recomputed"
+
+
+def test_sparse_bundle_with_inclusion_proofs_verifies(tmp_path, signer):
+    d = _sparse_sealed_bundle(tmp_path, signer)
+    r = verify_bundle(d)
+    assert r.ok, r.error
+    assert r.leaves_checked == 3 and r.seals_checked == 1
+    assert any("seal S0 only partially present (3/8 leaves)" in w and _PROVED in w
+               for w in r.warnings), r.warnings
+    assert not any(_NOT_RECOMPUTED in w for w in r.warnings), r.warnings
+
+
+def test_sparse_bundle_with_inclusion_proofs_attests(tmp_path, signer, authority):
+    d = _sparse_sealed_bundle(tmp_path, signer, authority)
+    r = verify_bundle(d, root_fingerprint=authority.root_fingerprint)
+    assert r.ok, r.error
+    assert r.attestation == "ATTESTED", r.attestation_reasons
+    assert any(_PROVED in w for w in r.warnings), r.warnings
+
+
+def test_altered_inclusion_proof_fails_naming_the_seq(tmp_path, signer):
+    d = _sparse_sealed_bundle(tmp_path, signer)
+    proofs = _read_proofs(d)
+    altered = next(p for p in proofs if p["seq"] == 4)
+    altered["path"][0][0] = "ab" * 32  # a sibling hash that is not in the tree
+    _write_proofs(d, proofs)
+    r = verify_bundle(d)
+    assert not r.ok
+    assert r.first_bad_seq == 4
+    assert "inclusion proof for seq 4" in r.error and "seal S0" in r.error, r.error
+
+
+def test_bundle_without_proofs_keeps_the_boundary_warning(tmp_path, signer):
+    d = _sparse_sealed_bundle(tmp_path, signer, proofs=False)
+    r = verify_bundle(d)
+    assert r.ok, r.error
+    assert r.seals_checked == 1
+    assert any("seal S0 only partially present (3/8 leaves)" in w and _NOT_RECOMPUTED in w
+               for w in r.warnings), r.warnings
+    assert not any(_PROVED in w for w in r.warnings)
+
+
+def test_proofs_dropped_from_a_committing_bundle_fail(tmp_path, signer):
+    d = _sparse_sealed_bundle(tmp_path, signer)
+    (d / "proofs.jsonl").unlink()
+    r = verify_bundle(d)
+    assert not r.ok
+    assert "proofs_digest mismatch" in r.error, r.error
+
+
+def test_a_proof_relabelled_to_another_index_fails_on_the_digest(tmp_path, signer):
+    # The proof still reaches the root for its own leaf; only its ``index``
+    # label changed, which nothing but the committed digest covers.
+    d = _sparse_sealed_bundle(tmp_path, signer)
+    proofs = _read_proofs(d)
+    proofs[0]["index"] = 5
+    _write_proofs(d, proofs)
+    r = verify_bundle(d)
+    assert not r.ok
+    assert "proofs_digest mismatch" in r.error, r.error
+
+
+def test_a_proof_for_a_leaf_not_in_the_bundle_fails(tmp_path, signer):
+    d = _sparse_sealed_bundle(tmp_path, signer)
+    proofs = _read_proofs(d)
+    stray = dict(proofs[0])
+    stray["seq"] = 3
+    _write_proofs(d, proofs + [stray])
+    r = verify_bundle(d)
+    assert not r.ok
+    assert r.first_bad_seq == 3
+    assert "no such leaf" in r.error, r.error
+
+
+def test_a_proof_naming_an_unknown_seal_fails(tmp_path, signer):
+    d = _sparse_sealed_bundle(tmp_path, signer)
+    proofs = _read_proofs(d)
+    proofs[1]["seal_id"] = "S9"
+    _write_proofs(d, proofs)
+    r = verify_bundle(d)
+    assert not r.ok
+    assert r.first_bad_seq == 4
+    assert "seal S9" in r.error and "not in the bundle" in r.error, r.error
+
+
+def test_a_malformed_proof_fails_closed(tmp_path, signer):
+    d = _sparse_sealed_bundle(tmp_path, signer)
+    proofs = _read_proofs(d)
+    proofs[2]["path"] = [["not-hex", "sideways"]]
+    _write_proofs(d, proofs)
+    r = verify_bundle(d)
+    assert not r.ok
+    assert r.first_bad_seq == 7
+    assert "malformed inclusion proof for seq 7" in r.error, r.error
+
+
+def test_proofs_are_checked_without_cryptography(tmp_path, signer, monkeypatch):
+    import artzain.audit_verify as av
+
+    monkeypatch.setattr(av, "_load_public_keys", lambda keys: None)
+    d = _sparse_sealed_bundle(tmp_path, signer)
+    assert verify_bundle(d).ok
+    proofs = _read_proofs(d)
+    proofs[0]["path"][0][0] = "ab" * 32
+    _write_proofs(d, proofs)
+    r = verify_bundle(d)
+    assert not r.ok and r.first_bad_seq == 2
