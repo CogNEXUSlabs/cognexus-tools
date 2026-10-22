@@ -172,6 +172,73 @@ def test_without_leaves_nothing_up_added():
 # ---------------------------------------------------------------------------
 
 
+#: The gateway's pod as NVIDIA's chart 0.1.5 renders it by default (its
+#: values.yaml: podSecurityContext is fsGroup alone; the gateway container's
+#: securityContext carries the seccomp profile). The chart installs into a
+#: namespace that enforces the Restricted Pod Security standard from 0.1.5.
+_CHART_POD = {
+    "securityContext": {"fsGroup": 1000},
+    "containers": [{"name": kube.GATEWAY_CONTAINER, "securityContext": {
+        "runAsNonRoot": True, "runAsUser": 1000, "allowPrivilegeEscalation": False,
+        "capabilities": {"drop": ["ALL"]}, "seccompProfile": {"type": "RuntimeDefault"}}}],
+    "volumes": [{"name": "gateway-config", "configMap": {"name": "os-openshell-config"}},
+                {"name": "openshell-data", "persistentVolumeClaim": {"claimName": "data"}},
+                {"name": "jwt-keys", "secret": {"secretName": "os-openshell-jwt-keys"}}],
+}
+
+#: The volume types the Restricted standard allows.
+_RESTRICTED_VOLUMES = {"configMap", "csi", "downwardAPI", "emptyDir", "ephemeral",
+                       "persistentVolumeClaim", "projected", "secret"}
+
+
+def _restricted_problems(spec):
+    """What the Restricted Pod Security standard (Baseline included) refuses
+    in a pod spec, as kubernetes.io/docs/concepts/security/pod-security-standards
+    lists it. A pod-level setting stands for every container that sets none."""
+    problems, pod = [], spec.get("securityContext") or {}
+    problems += [flag for flag in ("hostNetwork", "hostPID", "hostIPC") if spec.get(flag)]
+    for volume in spec.get("volumes") or []:
+        kinds = set(volume) - {"name"}
+        if not kinds <= _RESTRICTED_VOLUMES:
+            problems.append(f"volume {volume['name']}: {sorted(kinds)}")
+    for container in (spec.get("initContainers") or []) + (spec.get("containers") or []):
+        name, own = container["name"], container.get("securityContext") or {}
+        if own.get("privileged"):
+            problems.append(f"{name}: privileged")
+        if own.get("allowPrivilegeEscalation") is not False:
+            problems.append(f"{name}: allowPrivilegeEscalation is not false")
+        if own.get("runAsNonRoot", pod.get("runAsNonRoot")) is not True:
+            problems.append(f"{name}: runAsNonRoot is not true")
+        if own.get("runAsUser", pod.get("runAsUser")) == 0:
+            problems.append(f"{name}: runs as root")
+        seccomp = (own.get("seccompProfile") or pod.get("seccompProfile") or {}).get("type")
+        if seccomp not in ("RuntimeDefault", "Localhost"):
+            problems.append(f"{name}: seccompProfile is {seccomp}")
+        capabilities = own.get("capabilities") or {}
+        if "ALL" not in (capabilities.get("drop") or []):
+            problems.append(f"{name}: does not drop ALL capabilities")
+        if set(capabilities.get("add") or []) - {"NET_BIND_SERVICE"}:
+            problems.append(f"{name}: adds {capabilities['add']}")
+        if any(port.get("hostPort") for port in container.get("ports") or []):
+            problems.append(f"{name}: hostPort")
+    return problems
+
+
+@pytest.mark.parametrize("ca_bundle", ["", "os-openshell-artzain-ca"], ids=["public", "private CA"])
+def test_the_bound_pod_meets_the_restricted_pod_security_standard(ca_bundle):
+    """NVIDIA's chart 0.1.5 installs into a namespace labeled
+    pod-security.kubernetes.io/enforce=restricted, and the API server refuses
+    a pod with one container that breaks it. The chart sets the seccomp
+    profile on its gateway container alone, so the sidecar has to set its
+    own: without one, binding the release left it with no gateway."""
+    assert _restricted_problems(_CHART_POD) == [], "the checker refuses NVIDIA's own pod"
+    smp = kube.patch(_render(ca_bundle=ca_bundle))["spec"]["template"]["spec"]
+    values = kube.bound({}, _registration(), telemetry=False)
+    pod = {**_CHART_POD, "initContainers": smp["initContainers"],
+           "volumes": _CHART_POD["volumes"] + values["server"]["extraVolumes"] + smp["volumes"]}
+    assert _restricted_problems(pod) == []
+
+
 def test_the_patch_adds_a_native_sidecar_as_the_gateways_user():
     smp = kube.patch(_render())
     assert (smp["apiVersion"], smp["kind"]) == ("apps/v1", "StatefulSet")
@@ -181,7 +248,7 @@ def test_the_patch_adds_a_native_sidecar_as_the_gateways_user():
     assert sidecar["securityContext"] == {
         "runAsUser": 1000, "runAsGroup": 1000, "runAsNonRoot": True,
         "readOnlyRootFilesystem": True, "allowPrivilegeEscalation": False,
-        "capabilities": {"drop": ["ALL"]}}
+        "capabilities": {"drop": ["ALL"]}, "seccompProfile": {"type": "RuntimeDefault"}}
     assert sidecar["envFrom"] == [{"secretRef": {"name": "os-openshell-artzain"}}]
     env = {e["name"]: e["value"] for e in sidecar["env"]}
     assert env["OPENSHELL_SIDECAR_GRPC"] == f"unix://{kube.SOCKET}"

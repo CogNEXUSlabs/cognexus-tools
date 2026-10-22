@@ -384,6 +384,7 @@ release whose sidecar passed conformance against that OpenShell release.
 <!-- openshell-compat:begin -->
 | artzain | OpenShell | Verified |
 |---|---|---|
+| 0.6.55 | 0.1.5 | 2026-10-21 |
 | 0.6.55 | 0.1.4 | 2026-10-20 |
 | 0.6.54 | 0.1.4 | 2026-10-17 |
 | 0.6.52 | 0.1.4 | 2026-10-14 |

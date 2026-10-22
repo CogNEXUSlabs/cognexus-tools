@@ -366,6 +366,11 @@ def sidecar(render: Render) -> Dict[str, Any]:
             "readOnlyRootFilesystem": True,
             "allowPrivilegeEscalation": False,
             "capabilities": {"drop": ["ALL"]},
+            # The Restricted Pod Security standard wants a seccomp profile on
+            # every container, and the chart (0.1.5) sets one on its gateway
+            # container alone, not on the pod: without ours, a namespace that
+            # enforces the standard refuses the gateway's pod.
+            "seccompProfile": {"type": "RuntimeDefault"},
         },
         "volumeMounts": mounts,
         "startupProbe": {"exec": {"command": ["python", "-c", probe]},

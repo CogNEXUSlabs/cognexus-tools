@@ -387,7 +387,7 @@
           "parser": {
            "prog": "artzain audit verify",
            "usage": null,
-           "description": "Recompute every leaf hash, check hash-chain linkage and Merkle roots,\nand verify Ed25519 signatures against the bundle's public keys, with\nzero network. Those keys come from the bundle, so trust in the\nproducing server drops out only at VERIFIED, ATTESTED, which needs the\nsigning keys to chain to the pinned CogNEXUS Evidence Root. This\nrelease pins no Evidence Root: an intact bundle reports\nVERIFIED, SELF-ATTESTED unless --root-fingerprint supplies a test root.\nDownload a bundle from GET /api/v1/audit/export. Signature checks\nrequire 'artzain[verify]'.",
+           "description": "Recompute every leaf hash, check hash-chain linkage and Merkle roots,\nand verify Ed25519 signatures against the bundle's public keys, with\nzero network. Those keys come from the bundle, so trust in the\nproducing server drops out only at VERIFIED, ATTESTED, which needs the\nsigning keys to chain to the pinned CogNEXUS Evidence Root. This\nrelease pins no Evidence Root: an intact bundle reports\nVERIFIED, SELF-ATTESTED unless --root-fingerprint supplies a test root.\nOnce pinned, a root stays pinned through a re-root, so bundles\ncertified under it keep attesting, named as under a retired root.\nDownload a bundle from GET /api/v1/audit/export. Signature checks\nrequire 'artzain[verify]'.",
            "epilog": null,
            "formatter_class": "RawDescriptionHelpFormatter",
            "add_help": true,
@@ -461,7 +461,7 @@
              "default": null,
              "type": null,
              "required": false,
-             "help": "Override the pinned CogNEXUS Evidence Root fingerprint (test roots only — the output states when a non-default root is in use).",
+             "help": "Verify against this Evidence Root fingerprint alone, in place of the pinned set (test roots only — the output states when a root outside the pins is in use).",
              "metavar": "SHA256HEX",
              "choices": null
             }
@@ -879,7 +879,7 @@
              "default": null,
              "type": null,
              "required": false,
-             "help": "Override the pinned Evidence Root fingerprint.",
+             "help": "Verify against this Evidence Root fingerprint alone, in place of the pinned set (test roots only).",
              "metavar": null,
              "choices": null
             },
@@ -1490,7 +1490,7 @@
              "default": null,
              "type": null,
              "required": false,
-             "help": "Override the pinned Evidence Root fingerprint.",
+             "help": "Verify against this Evidence Root fingerprint alone, in place of the pinned set (test roots only).",
              "metavar": null,
              "choices": null
             },
@@ -3067,7 +3067,7 @@
              "default": null,
              "type": null,
              "required": false,
-             "help": "Override the pinned Evidence Root fingerprint.",
+             "help": "Verify against this Evidence Root fingerprint alone, in place of the pinned set (test roots only).",
              "metavar": null,
              "choices": null
             }

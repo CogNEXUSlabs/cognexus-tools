@@ -51,10 +51,13 @@ from .test_audit_verify import (  # noqa: TID252 - the tamper matrix's own build
     _genuine_leaf,
     _leaves_digest,
     _read_leaves,
+    _read_proofs,
     _signed_manifest,
     _Signer,
+    _sparse_sealed_bundle,
     _windowed_certified_bundle,
     _write_leaves,
+    _write_proofs,
 )
 from .test_audit_verify_rotations import (  # noqa: TID252
     _handover,
@@ -76,21 +79,30 @@ class _Case:
     labels: dict[str, str]
     #: Passed as ``root_fingerprint=`` and ``--root-fingerprint``.
     root: Optional[str] = None
-    #: Patched in as the module's ``EVIDENCE_ROOT_FINGERPRINT``.
+    #: Patched in as the module's ``EVIDENCE_ROOT_FINGERPRINT``, the current pin.
     pinned: Optional[str] = None
+    #: Pins a re-root retired (runbook §14), patched in ahead of ``pinned`` as
+    #: the module's ``EVIDENCE_ROOT_FINGERPRINTS``.
+    retired: tuple[str, ...] = ()
     #: Run as if ``cryptography`` were not installed.
     stdlib_only: bool = False
 
 
 def _case(path: Path, *, root: Optional[str] = None, pinned: Optional[str] = None,
-          stdlib_only: bool = False, authority: Optional[_CertAuthority] = None,
+          retired: tuple[str, ...] = (), stdlib_only: bool = False,
+          authority: Optional[_CertAuthority] = None,
+          second: Optional[_CertAuthority] = None,
           **signers: _Signer) -> _Case:
     labels = {s.key_id: f"<{name}>" for name, s in signers.items()}
     if authority is not None:
         labels[authority.root_fingerprint] = "<root-fp>"
         labels[authority.root.key_id] = "<root>"
         labels[authority.issuing.key_id] = "<issuing>"
-    return _Case(path, labels, root, pinned, stdlib_only)
+    if second is not None:
+        labels[second.root_fingerprint] = "<root-fp-2>"
+        labels[second.root.key_id] = "<root-2>"
+        labels[second.issuing.key_id] = "<issuing-2>"
+    return _Case(path, labels, root, pinned, retired, stdlib_only)
 
 
 _SCENARIOS: dict[str, Callable[[Path], _Case]] = {}
@@ -721,6 +733,91 @@ def _interior_per_batch_seals_without_digest(tmp: Path) -> _Case:
     return _case(d, signer=s)
 
 
+# -- inclusion proofs (proofs.jsonl) ---------------------------------------------------
+
+
+@_scenario
+def _sparse_export_with_inclusion_proofs(tmp: Path) -> _Case:
+    s, a = _Signer(), _CertAuthority()
+    d = _sparse_sealed_bundle(tmp, s, a)
+    return _case(d, root=a.root_fingerprint, authority=a, signer=s)
+
+
+@_scenario
+def _sparse_export_with_inclusion_proofs_stdlib_only(tmp: Path) -> _Case:
+    s = _Signer()
+    return _case(_sparse_sealed_bundle(tmp, s), signer=s, stdlib_only=True)
+
+
+@_scenario
+def _sparse_export_without_inclusion_proofs(tmp: Path) -> _Case:
+    # The same export from before proofs existed: nothing committed, nothing
+    # proved, the boundary seal read as it always was.
+    s, a = _Signer(), _CertAuthority()
+    d = _sparse_sealed_bundle(tmp, s, a, proofs=False)
+    return _case(d, root=a.root_fingerprint, authority=a, signer=s)
+
+
+@_scenario
+def _inclusion_proof_altered(tmp: Path) -> _Case:
+    s = _Signer()
+    d = _sparse_sealed_bundle(tmp, s)
+    proofs = _read_proofs(d)
+    next(p for p in proofs if p["seq"] == 4)["path"][0][0] = "ab" * 32
+    _write_proofs(d, proofs)
+    return _case(d, signer=s)
+
+
+@_scenario
+def _inclusion_proofs_dropped(tmp: Path) -> _Case:
+    s = _Signer()
+    d = _sparse_sealed_bundle(tmp, s)
+    (d / "proofs.jsonl").unlink()
+    return _case(d, signer=s)
+
+
+@_scenario
+def _inclusion_proof_relabelled(tmp: Path) -> _Case:
+    # Still reaches the root for its own leaf; only the index label moved.
+    s = _Signer()
+    d = _sparse_sealed_bundle(tmp, s)
+    proofs = _read_proofs(d)
+    proofs[0]["index"] = 5
+    _write_proofs(d, proofs)
+    return _case(d, signer=s)
+
+
+@_scenario
+def _inclusion_proof_for_absent_leaf(tmp: Path) -> _Case:
+    s = _Signer()
+    d = _sparse_sealed_bundle(tmp, s)
+    proofs = _read_proofs(d)
+    stray = dict(proofs[0])
+    stray["seq"] = 3
+    _write_proofs(d, proofs + [stray])
+    return _case(d, signer=s)
+
+
+@_scenario
+def _inclusion_proof_names_unknown_seal(tmp: Path) -> _Case:
+    s = _Signer()
+    d = _sparse_sealed_bundle(tmp, s)
+    proofs = _read_proofs(d)
+    proofs[1]["seal_id"] = "S9"
+    _write_proofs(d, proofs)
+    return _case(d, signer=s)
+
+
+@_scenario
+def _inclusion_proof_malformed(tmp: Path) -> _Case:
+    s = _Signer()
+    d = _sparse_sealed_bundle(tmp, s)
+    proofs = _read_proofs(d)
+    proofs[2]["path"] = [["not-hex", "sideways"]]
+    _write_proofs(d, proofs)
+    return _case(d, signer=s)
+
+
 # -- the record set the signed manifest commits ---------------------------------------
 
 
@@ -797,6 +894,31 @@ def _certified_against_the_pinned_root(tmp: Path) -> _Case:
 def _wrong_root_fingerprint(tmp: Path) -> _Case:
     s, a = _Signer(), _CertAuthority()
     return _case(_certified(tmp, s, a), root="ab" * 32, authority=a, signer=s)
+
+
+@_scenario
+def _certified_under_a_retired_root(tmp: Path) -> _Case:
+    """A re-root (runbook §14) appended a new pin; this chain reaches the earlier one."""
+    s, a, newer = _Signer(), _CertAuthority(), _CertAuthority()
+    return _case(_certified(tmp, s, a), pinned=newer.root_fingerprint,
+                 retired=(a.root_fingerprint,), authority=a, second=newer, signer=s)
+
+
+@_scenario
+def _certified_under_a_root_no_longer_pinned(tmp: Path) -> _Case:
+    """The earlier pin was dropped: the bundle is orphaned at SELF-ATTESTED."""
+    s, a, newer = _Signer(), _CertAuthority(), _CertAuthority()
+    return _case(_certified(tmp, s, a), pinned=newer.root_fingerprint,
+                 authority=a, second=newer, signer=s)
+
+
+@_scenario
+def _retired_root_supplied_on_the_command_line(tmp: Path) -> _Case:
+    """--root-fingerprint naming a retired pin is not an override."""
+    s, a, newer = _Signer(), _CertAuthority(), _CertAuthority()
+    return _case(_certified(tmp, s, a), root=a.root_fingerprint,
+                 pinned=newer.root_fingerprint, retired=(a.root_fingerprint,),
+                 authority=a, second=newer, signer=s)
 
 
 @_scenario
@@ -977,6 +1099,19 @@ def _partial_seal_then_record_set_mismatch(tmp: Path) -> _Case:
     return _case(d, root=a.root_fingerprint, authority=a, signer=s)
 
 
+@_scenario
+def _altered_proof_and_record_set_mismatch(tmp: Path) -> _Case:
+    # A proof is checked with its seal (step 4), before the manifest's
+    # record-set cross-check (step 5): the failure names the seq.
+    s = _Signer()
+    d = _sparse_sealed_bundle(tmp, s)
+    proofs = _read_proofs(d)
+    next(p for p in proofs if p["seq"] == 7)["path"][1][0] = "cd" * 32
+    _write_proofs(d, proofs)
+    _resign_manifest(d, s, leaf_count=4)
+    return _case(d, signer=s)
+
+
 # -- running a scenario ----------------------------------------------------------------
 
 
@@ -1001,7 +1136,11 @@ def _outcome(build: Callable[[Path], _Case], tmp: Path) -> dict[str, Any]:
     with patches:
         if case.stdlib_only:
             patches.enter_context(mock.patch.object(av, "_load_public_keys", lambda keys: None))
-        if case.pinned is not None:
+        if case.pinned is not None or case.retired:
+            # As a release pins: the whole set, oldest first, the single name on
+            # its last entry.
+            pins = (*case.retired, *((case.pinned,) if case.pinned is not None else ()))
+            patches.enter_context(mock.patch.object(av, "EVIDENCE_ROOT_FINGERPRINTS", pins))
             patches.enter_context(mock.patch.object(av, "EVIDENCE_ROOT_FINGERPRINT", case.pinned))
         result = av.verify_bundle(case.path, root_fingerprint=case.root)
         argv = ["audit", "verify", str(case.path)]

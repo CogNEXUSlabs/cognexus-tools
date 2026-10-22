@@ -937,9 +937,11 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
 
     Signatures verify against public keys the bundle carries, so trust in the
     producing server drops out only at ATTESTED, once the Evidence Root is
-    pinned. When ``--root-fingerprint`` differs from the built-in pin, an
-    ATTESTED verdict attests to the root supplied, not the published one, and
-    the output says so.
+    pinned. When ``--root-fingerprint`` names a root outside the built-in
+    pins, an ATTESTED verdict attests to the root supplied, not a published
+    one, and the output says so. A root a re-root retired stays pinned
+    (ceremony runbook §14): a bundle certified under it is ATTESTED, and the
+    output names the retired root.
     """
     from artzain.audit_verify import verify_bundle
 
@@ -970,6 +972,9 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
             # attestation must also read this flag.
             "evidence_root_fingerprint": result.evidence_root_fingerprint,
             "root_fingerprint_overridden": result.root_fingerprint_overridden,
+            # True when that root is a pin a later re-root replaced: still
+            # ATTESTED, under the root that certified the bundle.
+            "evidence_root_retired": result.evidence_root_retired,
         }, indent=2))
         raise SystemExit(0 if result.ok else 1)
 
@@ -1003,8 +1008,14 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
                 print("Notes on the certificate chain:")
                 for reason in result.attestation_reasons:
                     print(f"  - {reason}")
-            root = ("the root you supplied" if result.root_fingerprint_overridden
-                    else "the CogNEXUS Evidence Root")
+            if result.root_fingerprint_overridden:
+                root = "the root you supplied"
+            elif result.evidence_root_retired:
+                # Still ATTESTED: the pin is kept for exactly this bundle. The
+                # note above names the root.
+                root = "a retired CogNEXUS Evidence Root"
+            else:
+                root = "the CogNEXUS Evidence Root"
             print(f"The signing keys chain to {root} and were certified at "
                   "signing time.")
         else:
@@ -1365,6 +1376,7 @@ def cmd_licence_verify(args: argparse.Namespace) -> None:
             "seconds_since_anchor": result.seconds_since_anchor,
             "evidence_root_fingerprint": result.evidence_root_fingerprint,
             "root_fingerprint_overridden": result.root_fingerprint_overridden,
+            "evidence_root_retired": result.evidence_root_retired,
             "warnings": result.warnings,
         }, indent=2))
         raise SystemExit(0 if result.ok else 1)
@@ -1414,8 +1426,12 @@ def cmd_licence_verify(args: argparse.Namespace) -> None:
         for reason in result.attestation_reasons:
             print(f"  - {reason}")
     if result.attestation == "ATTESTED":
-        root = ("the root you supplied" if result.root_fingerprint_overridden
-                else "the CogNEXUS Evidence Root")
+        if result.root_fingerprint_overridden:
+            root = "the root you supplied"
+        elif result.evidence_root_retired:
+            root = "a retired CogNEXUS Evidence Root"
+        else:
+            root = "the CogNEXUS Evidence Root"
         print(f"The signing key is certified under {root} for this licence")
         print("and install, across the whole attested period.")
     else:
@@ -1920,7 +1936,8 @@ def _licence_cert_flags(parser_: argparse.ArgumentParser) -> None:
     parser_.add_argument("--issuing", default=None,
                          help="Issuing certificate(s) JSON.")
     parser_.add_argument("--root-fingerprint", default=None,
-                         help="Override the pinned Evidence Root fingerprint.")
+                         help="Verify against this Evidence Root fingerprint alone, "
+                              "in place of the pinned set (test roots only).")
 
 
 def _add_getting_started_parsers(sub: argparse._SubParsersAction) -> None:
@@ -2028,6 +2045,8 @@ def _add_audit_parser(sub: argparse._SubParsersAction) -> None:
             "signing keys to chain to the pinned CogNEXUS Evidence Root. This\n"
             "release pins no Evidence Root: an intact bundle reports\n"
             "VERIFIED, SELF-ATTESTED unless --root-fingerprint supplies a test root.\n"
+            "Once pinned, a root stays pinned through a re-root, so bundles\n"
+            "certified under it keep attesting, named as under a retired root.\n"
             "Download a bundle from GET /api/v1/audit/export. Signature checks\n"
             "require 'artzain[verify]'."
         ),
@@ -2037,9 +2056,9 @@ def _add_audit_parser(sub: argparse._SubParsersAction) -> None:
     p_verify.add_argument("--json", action="store_true", help="Emit a JSON result.")
     p_verify.add_argument(
         "--root-fingerprint", metavar="SHA256HEX",
-        help="Override the pinned CogNEXUS Evidence Root fingerprint "
-             "(test roots only — the output states when a non-default "
-             "root is in use).",
+        help="Verify against this Evidence Root fingerprint alone, in place of "
+             "the pinned set (test roots only — the output states when a root "
+             "outside the pins is in use).",
     )
     p_verify.set_defaults(func=cmd_audit_verify)
 
@@ -2140,7 +2159,8 @@ def _add_licence_parser(sub: argparse._SubParsersAction) -> None:
                         help="CogNEXUS issuing public key PEM, to verify "
                              "anchors. Taken from --certificates when omitted.")
     p_lver.add_argument("--root-fingerprint", default=None,
-                        help="Override the pinned Evidence Root fingerprint.")
+                        help="Verify against this Evidence Root fingerprint alone, "
+                             "in place of the pinned set (test roots only).")
     p_lver.add_argument("--json", action="store_true")
     p_lver.set_defaults(func=cmd_licence_verify)
 

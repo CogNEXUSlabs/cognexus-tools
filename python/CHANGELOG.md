@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.6.56
+
+### Changed
+
+- **`artzain audit verify` proves each leaf of a partly present seal.** A
+  hosted tenant's export is sparse under the seals it shares with other
+  tenants, so such a seal's root could not be recomputed offline and the
+  verifier reported it as "boundary of a filtered export, root not
+  recomputed". The export now ships `proofs.jsonl`, one Merkle inclusion
+  proof per sealed leaf (hashes only) through the seal's full tree, committed
+  by the signed manifest's `proofs_digest`. The verifier checks every present
+  leaf's proof against its seal's `merkle_root` and reports the seal as
+  "every present leaf proved included under its merkle_root"; a proof that
+  does not reach the root is `FAILED` with the seq named, and a bundle whose
+  proofs were removed or relabelled fails on `proofs_digest`. A bundle from
+  before this release carries no proofs and verifies exactly as before.
+- **The offline verifier pins a set of Evidence Root fingerprints, not
+  one.** `EVIDENCE_ROOT_FINGERPRINTS` holds every pinned root, oldest first,
+  and `EVIDENCE_ROOT_FINGERPRINT` stays its last entry, the current pin. A
+  re-root (ceremony runbook §14) appends rather than replaces, so a bundle
+  or attestation certified under the earlier root still verifies
+  `VERIFIED, ATTESTED`: the result names the root it reached in
+  `evidence_root_fingerprint`, flags it in the new `evidence_root_retired`,
+  and `attestation_reasons` (and the text report) say `attested under
+  retired root <16 hex>`. `--root-fingerprint` verifies against that one
+  root in place of the set and is an override only when the root is in
+  none of the pins. No root is pinned yet, so nothing changes for current
+  bundles.
+
+### Fixed
+
+- **`up --kubernetes` keeps the gateway in a namespace that enforces the
+  Restricted Pod Security standard.** NVIDIA's chart supports such a
+  namespace (`pod-security.kubernetes.io/enforce=restricted`) from 0.1.5,
+  and sets a seccomp profile on its gateway container alone. The sidecar
+  `up` adds set none, so the API server refused the gateway's pod once the
+  release was bound, and the release had no gateway. The sidecar now runs
+  with the runtime's default seccomp profile (`RuntimeDefault`), beside
+  being non-root, on a read-only root filesystem, with no capabilities and
+  no privilege escalation. A release bound before takes it on the next
+  `up --kubernetes` (no new token needed) or the next `helm upgrade` with
+  ArtzAIn's post-renderer.
+
 ## 0.6.55
 
 ### Added
