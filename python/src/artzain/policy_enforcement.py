@@ -10,10 +10,12 @@ privacy posture as prompt defense (no raw document bodies in audit rows).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import re
 import time
+import weakref
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from functools import cached_property, lru_cache
@@ -153,6 +155,34 @@ def _compile_tenant(pattern: str) -> Any:
     return re.compile(pattern, _TENANT_FLAGS)
 
 
+#: Each pattern a rule has admitted (:func:`pattern_refusal` passed it and it
+#: compiled), by its text, for as long as a rule still holds it. A team's
+#: policy is rebuilt from its stored bodies each time its cache entry expires,
+#: inside the decision that finds it gone, while the policy it replaces still
+#: holds every pattern: a rule built then takes each pattern from here instead
+#: of reading and compiling it again. That cost seconds a rebuild once a team
+#: had adopted the first-party bundles, and the engines' own caches cannot
+#: hold a large policy (``regex`` keeps 500 patterns and drops a random fifth
+#: when full, ``re`` keeps 512). Weak, so nothing is kept that the live rules
+#: or the engine's own cache do not hold anyway: a pattern goes once neither
+#: does, and nothing here is ever dropped while a rule holds it. Only a rule's
+#: own compiling enters a pattern, and only rules read it; a plain ``str``
+#: only, as a subclass can hash and compare as another pattern does.
+_ADMITTED: weakref.WeakValueDictionary[str, Any] = weakref.WeakValueDictionary()
+
+
+def _admitted(raw: Any) -> Any:
+    """The compiled pattern a live rule admitted for *raw*, or None."""
+    return _ADMITTED.get(raw) if type(raw) is str else None
+
+
+def _admit(raw: Any, compiled: Any) -> None:
+    # TypeError: an engine whose patterns take no weak reference.
+    if type(raw) is str:
+        with contextlib.suppress(TypeError):
+            _ADMITTED[raw] = compiled
+
+
 @dataclass(frozen=True)
 class ClientPolicyRule:
     """One enforceable rule derived from a client policy document."""
@@ -170,9 +200,14 @@ class ClientPolicyRule:
     def _compiled(self) -> tuple[re.Pattern[str], ...]:
         # Compiled once per rule instance (the dataclass is frozen, but
         # ``cached_property`` writes straight to ``__dict__``); invalid
-        # patterns are skipped exactly as before.
+        # patterns are skipped exactly as before. A pattern a live rule has
+        # already admitted is taken from it (_ADMITTED).
         out: list[re.Pattern[str]] = []
         for raw in self.violation_patterns:
+            admitted = _admitted(raw)
+            if admitted is not None:
+                out.append(admitted)
+                continue
             # Asked before compiling, and of the standard library's parser
             # either way, so which engine is installed cannot change the
             # verdict: the engines do not agree on which faults are a refusal
@@ -183,9 +218,11 @@ class ClientPolicyRule:
                     f"rule {self.rule_id or '?'} pattern {raw[:80]!r} is refused: {refusal}"
                 )
             try:
-                out.append(_compile_tenant(raw))
+                compiled = _compile_tenant(raw)
             except _PATTERN_ERRORS:
                 continue
+            _admit(raw, compiled)
+            out.append(compiled)
         return tuple(out)
 
     def compiled_patterns(self) -> tuple[re.Pattern[str], ...]:
