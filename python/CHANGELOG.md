@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.57
+
+### Fixed
+
+- **A rule built again takes its patterns from the rules that hold them.**
+  Building a `ClientPolicyRule` asked `pattern_refusal()` of each pattern
+  and compiled it every time, and the regex engines' own caches (500
+  patterns for `regex`, 512 for `re`) cannot hold a policy with many rules.
+  A policy holding the seven first-party bundles (383 distinct patterns)
+  took about 2.4 s to rebuild on a developer machine, and the server
+  rebuilds a team's policy whenever its 60 s cache entry expires, while the
+  old one still holds every pattern. A rule now takes a pattern another live
+  rule has already admitted (refusal passed, compiled), so that rebuild
+  takes about 25 ms. The reference is weak: a pattern no rule holds any
+  more is not kept, so no more memory is held than the live rules hold. A
+  pattern compiled anywhere else is not taken, so every pattern a rule runs
+  has passed `pattern_refusal()`. `pattern_refusal()` itself is unchanged.
+
 ## 0.6.56
 
 ### Changed
