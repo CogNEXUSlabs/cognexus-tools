@@ -38,7 +38,7 @@ RUN_DIR = "/run/artzain"
 TEST_KEY = "cnx_image_test_not_a_real_key"
 
 failures: list[str] = []
-#: ``--platform <p>`` for every `docker run`, when one was asked for.
+#: ``--platform <p>`` for the inspect and every `docker run`, when one was asked for.
 platform: list[str] = []
 
 
@@ -145,7 +145,10 @@ print(json.dumps(refused))
 
 
 def test(image: str, version: str) -> None:
-    inspected = docker("image", "inspect", image)
+    # The platform's own settings: a containerd image store keeps a digest's
+    # platforms under one name, and an inspect that names none reads the
+    # host's, which it may not hold (sidecar-v0.6.57's first run).
+    inspected = docker("image", "inspect", *platform, image)
     if inspected.returncode != 0:
         check("the image exists", False, inspected.stderr.strip())
         return
