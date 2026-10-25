@@ -105,7 +105,7 @@ jobs:
           VERSION: ${{ steps.wheel.outputs.version }}
         run: |
           set -uo pipefail
-          base="$(sed -n 's/^ARG PYTHON_IMAGE=//p' images/openshell-sidecar/Dockerfile)"
+          base="$(sed -n 's/^FROM \([^ ]*\) AS base$/\1/p' images/openshell-sidecar/Dockerfile)"
           case "$base" in
             public.ecr.aws/docker/library/*@sha256:*) ;;
             *) echo "the Dockerfile's base is not ECR Public's Docker official image by digest: $base" >&2

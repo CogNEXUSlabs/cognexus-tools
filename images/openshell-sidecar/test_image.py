@@ -12,6 +12,8 @@ writable mount, and checks that:
 
 * the image runs as uid 10001, not root, and declares no port;
 * it holds the `artzain` version it was built for, and no `pip`;
+* the trust store it reaches the engine with holds roots, and not the two
+  Debian withdrew on 20 Oct 2026;
 * it carries the openshell CLI of the release openshell.lock names, which
   fails, and does not hang, with no gateway to reach;
 * the sidecar comes up healthy without a network and without writing
@@ -36,6 +38,13 @@ import uuid
 RUN_DIR = "/run/artzain"
 #: A value for the test, not a credential: the container has no network.
 TEST_KEY = "cnx_image_test_not_a_real_key"
+#: Roots the image's trust store must not hold. The sidecar reaches the engine
+#: through the default `ssl` context, so the base image's ca-certificates is
+#: what it trusts (its lock has no certifi). Debian took these two out on
+#: 20 Oct 2026 (DLA-4845-1): eMudhra's `emSign ECC Root CA - G3`, eight of
+#: whose intermediates had compromised private keys (GHSA-6q48-6c7w-9gw2), and
+#: Comodo's `AAA Certificate Services`.
+WITHDRAWN_ROOTS = ("emSign ECC Root CA - G3", "AAA Certificate Services")
 
 failures: list[str] = []
 #: ``--platform <p>`` for the inspect and every `docker run`, when one was asked for.
@@ -123,6 +132,13 @@ request = urllib.request.Request("http://127.0.0.1:8088/v1/evaluate", data=body.
 print(urllib.request.urlopen(request, timeout=10).read().decode())
 """
 
+ROOTS = r"""
+import json, ssl
+print(json.dumps(sorted({value for cert in ssl.create_default_context().get_ca_certs()
+                         for rdn in cert["subject"] for key, value in rdn
+                         if key == "commonName"})))
+"""
+
 PLACES = r"""
 import json, os, stat
 print(json.dumps({path: [os.stat(path).st_uid, os.stat(path).st_gid,
@@ -176,6 +192,11 @@ def test(image: str, version: str) -> None:
     for python in ("python", "/usr/local/bin/python3"):
         pip = run_once(image, python, "-m", "pip", "--version")
         check(f"{python} has no pip", pip.returncode != 0, pip.stdout.strip())
+    roots = run_once(image, "python", "-c", ROOTS)
+    trusted = json.loads(roots.stdout) if roots.returncode == 0 else []
+    check("its trust store has roots, and none withdrawn on 20 Oct 2026",
+          bool(trusted) and not set(WITHDRAWN_ROOTS) & set(trusted),
+          sorted(set(WITHDRAWN_ROOTS) & set(trusted)) or roots.stderr.strip())
     release = openshell_release()
     cli = run_once(image, "/usr/local/bin/openshell", "--version")
     check(f"it carries the openshell CLI of OpenShell {release}, as openshell.lock names it",
