@@ -31,14 +31,27 @@
 # ARTZAIN_VERSION is required either way, and the build fails unless that is
 # the version that got installed.
 #
-# To move the base image: `docker buildx imagetools inspect
+# The base image is the `base` stage's FROM line, the one place it is named:
+# Dependabot reads an image from a FROM line and nowhere else, and moves its
+# digest weekly (the engine repository's .github/dependabot.yml). That is
+# how a Debian security update reaches this image: the sidecar trusts the
+# base's ca-certificates (it reaches the engine through Python's default
+# `ssl` context, and its lock has no certifi). Debian's update of 20 Oct
+# 2026 (DLA-4845-1), which took out a root whose intermediates' keys were
+# compromised, had to be brought here by hand. The stages start from it
+# through PYTHON_IMAGE, which only the mirror's rehearsal overrides, to take
+# the same digest from Docker Hub when ECR Public refuses a pull.
+#
+# To move it by hand: `docker buildx imagetools inspect
 # public.ecr.aws/docker/library/python:3.12-slim-bookworm` prints the digest
 # of the multi-platform index (the ECR Public mirror of the Docker official
 # image: same manifest and digest as Docker Hub, whose anonymous pull limit
 # stops builds on shared CI runners). The Python here and in
 # scripts/lock_openshell_sidecar_image.py (engine repository) are the same
 # one; a test holds them together.
-ARG PYTHON_IMAGE=public.ecr.aws/docker/library/python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3
+ARG PYTHON_IMAGE=base
+
+FROM public.ecr.aws/docker/library/python:3.12-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70 AS base
 
 FROM ${PYTHON_IMAGE} AS build
 ARG ARTZAIN_SOURCE=pypi

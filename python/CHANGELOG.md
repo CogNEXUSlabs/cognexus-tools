@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.58
+
+### Fixed
+
+- **The sidecar image no longer trusts the compromised emSign root.** Its
+  Python base moves to a Debian bookworm image whose `ca-certificates` is
+  `20250419~deb12u2` (DLA-4845-1, 20 Oct 2026), which removes
+  `emSign ECC Root CA - G3`: eMudhra disclosed compromised private keys for
+  eight intermediates under that root (GHSA-6q48-6c7w-9gw2). The sidecar
+  reaches the engine through Python's default `ssl` context, which trusts
+  the image's own store, so the 0.6.57 image still accepted a certificate
+  chaining to that root. A sidecar installed from the wheel trusts its
+  host's store, which the host's updates move. Nothing in the package
+  itself changes.
+
 ## 0.6.57
 
 ### Fixed
