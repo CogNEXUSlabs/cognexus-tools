@@ -132,7 +132,7 @@ def test_every_command_prints_its_help(capsys, monkeypatch):
     (["gui", "--port", "8123"], "cmd_gui", {"command": "gui", "port": 8123, "no_browser": False}),
     (["audit", "verify", "b.zip", "--json"], "cmd_audit_verify",
      {"command": "audit", "audit_command": "verify", "bundle": "b.zip", "json": True,
-      "root_fingerprint": None}),
+      "verbose": False, "root_fingerprint": None}),
     (["audit", "export", "--from", "2026-01-01"], "cmd_audit_export",
      {"command": "audit", "audit_command": "export", "profile": None, "from_": "2026-01-01",
       "to": None, "out": None}),

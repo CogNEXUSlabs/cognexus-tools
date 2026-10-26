@@ -628,14 +628,19 @@ def _truncated_under_a_digest(tmp: Path, *, signed: bool) -> tuple[Path, _Signer
 
 @_scenario
 def _truncated_log_under_an_unsigned_digest(tmp: Path) -> _Case:
-    # Only a *trusted* manifest's digest makes a seal past the leaves a
-    # boundary seal; an unsigned one leaves the truncation check on.
+    # Only the digest of a manifest signed by a key the bundle carries makes a
+    # seal past the leaves a boundary seal; an unsigned one leaves the
+    # truncation check on.
     d, s = _truncated_under_a_digest(tmp, signed=False)
     return _case(d, signer=s)
 
 
 @_scenario
 def _truncated_log_under_an_unverified_digest(tmp: Path) -> _Case:
+    # Signed by the bundle's key and read without cryptography: read as a
+    # verifier with cryptography reads it, which takes the digest's word that
+    # the window ends at 3 (the seal a boundary seal), and compares the
+    # leaves with it. Same verdict on either install.
     d, s = _truncated_under_a_digest(tmp, signed=True)
     return _case(d, signer=s, stdlib_only=True)
 

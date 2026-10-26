@@ -402,6 +402,7 @@
             [
              "help",
              "json",
+             "verbose",
              "root_fingerprint"
             ]
            ],
@@ -447,6 +448,21 @@
              "type": null,
              "required": false,
              "help": "Emit a JSON result.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--verbose"
+             ],
+             "dest": "verbose",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": "Also list each seq gap, seal chain gap and partly present seal of a filtered export, which the report otherwise counts on one line per kind (--json always carries them, as warning_details).",
              "metavar": null,
              "choices": null
             },
