@@ -31,11 +31,21 @@ is proved against that root through its inclusion proof, when the bundle
 carries them, and a proof that does not reach the root is a failure. A bundle
 without ``proofs.jsonl`` reads as before: such a seal is reported as a
 boundary of a filtered export, root not recomputed.
+A tenant-filtered export has a seq gap between nearly every pair of leaves and
+a partly present seal under nearly every leaf. Each of those kinds of warning
+is one line in ``warnings`` carrying its count; the counts are fields of the
+result, and the per-record lines are kept in ``warning_details``.
 **Signature** verification needs the ``cryptography`` package; install the extra::
 
     pip install 'artzain[verify]'
 
 Without it, signatures are reported as ``skipped`` (everything else still runs).
+A manifest signed by a key the bundle carries is still read: the bundle is
+compared with the record set it commits to, and its ``leaves_digest`` decides
+whether a partly present seal is a boundary of the export or a deleted leaf,
+as when its signature verifies. Only the signature goes unchecked, and the
+report says so. A bundle whose signatures hold gets the same verdict on either
+install.
 
 Three-state result (WS-4).  Integrity (``ok``) and provenance
 (``attestation``) are separate axes:
@@ -68,6 +78,7 @@ import hashlib
 import json
 import math
 import zipfile
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -122,6 +133,21 @@ class VerifyResult:
     first_bad_seq: Optional[int] = None
     error: Optional[str] = None
     warnings: list[str] = field(default_factory=list)
+    #: The warnings a tenant- or range-filtered export repeats once per
+    #: record, counted: gaps in the leaves' seq, seals whose predecessor is not
+    #: in the bundle, and seals only partly present, either with the root not
+    #: recomputed (``partial_seals``) or with every present leaf proved
+    #: included under it (``partial_seals_proved``; the two never count the
+    #: same seal). Each kind found more than once is ONE line in ``warnings``
+    #: carrying its count, and its per-record lines are in
+    #: ``warning_details``, in the order they were found. A kind found once
+    #: keeps its own line in ``warnings`` and adds nothing to the details, so
+    #: the two lists together still hold every per-record line.
+    seq_gaps: int = 0
+    seal_chain_gaps: int = 0
+    partial_seals: int = 0
+    partial_seals_proved: int = 0
+    warning_details: list[str] = field(default_factory=list)
     #: "ATTESTED" | "SELF-ATTESTED" when ``ok``; ``None`` when FAILED.
     attestation: Optional[str] = None
     attestation_reasons: list[str] = field(default_factory=list)
@@ -174,6 +200,50 @@ class VerifyResult:
         if self.error is None:
             self.error = msg
         return self
+
+
+#: What one line says for every warning of a kind a filtered export repeats
+#: once per record, keyed by the ``VerifyResult`` counter of that kind.
+_PER_RECORD_SUMMARIES = {
+    "seq_gaps": "{n} seq gaps (tenant- or range-filtered export; chain linkage "
+                "across the gaps not checkable offline)",
+    "seal_chain_gaps": "{n} seal chain gaps (earlier seals not in this bundle)",
+    "partial_seals": "{n} seals only partially present — boundaries of a "
+                     "filtered export, roots not recomputed",
+    "partial_seals_proved": "{n} seals only partially present — boundaries of a "
+                            "filtered export; every present leaf proved included "
+                            "under its seal's merkle_root",
+}
+
+
+class _PerRecord:
+    """The warnings of :data:`_PER_RECORD_SUMMARIES`, one line per kind.
+
+    One line per record buried the verdict on a hosted export under about
+    10,800 of them. The first of a kind takes its place in ``warnings`` when
+    it is found, so the report keeps its order; :meth:`report` sets the
+    counts and, for a kind found more than once, puts the summary in that
+    place and every line of the kind in ``warning_details``.
+    """
+
+    def __init__(self, res: VerifyResult) -> None:
+        self._res = res
+        self._found: list[tuple[str, str]] = []
+        self._slot: dict[str, int] = {}
+
+    def add(self, kind: str, line: str) -> None:
+        if kind not in self._slot:
+            self._slot[kind] = len(self._res.warnings)
+            self._res.warnings.append(line)
+        self._found.append((kind, line))
+
+    def report(self) -> None:
+        counts = Counter(kind for kind, _ in self._found)
+        for kind, summary in _PER_RECORD_SUMMARIES.items():
+            setattr(self._res, kind, counts[kind])
+            if counts[kind] > 1:
+                self._res.warnings[self._slot[kind]] = summary.format(n=f"{counts[kind]:,}")
+        self._res.warning_details = [line for kind, line in self._found if counts[kind] > 1]
 
 
 # ---------------------------------------------------------------------------
@@ -986,8 +1056,9 @@ def verify_bundle(bundle_path: str | Path,
         overridden = False
     res.evidence_root_fingerprint = effective[-1] if effective else None
     res.root_fingerprint_overridden = overridden
+    per_record = _PerRecord(res)
     try:
-        return _verify_bundle_body(res, path, effective, frozenset(pins[:-1]))
+        return _verify_bundle_body(res, path, effective, frozenset(pins[:-1]), per_record)
     except Exception as exc:  # noqa: BLE001
         # Absolute fail-closed backstop: the verifier's contract is that
         # hostile bundle bytes yield a FAILED result, never a raised
@@ -995,11 +1066,16 @@ def verify_bundle(bundle_path: str | Path,
         # input vectors with precise messages; this catches anything
         # unforeseen (e.g. an unhashable signer_key_id reaching a dict lookup).
         return res._fail(None, f"malformed bundle ({type(exc).__name__})")
+    finally:
+        # Every path, a failure included: what was found before it stays
+        # reported.
+        per_record.report()
 
 
 def _verify_bundle_body(res: VerifyResult, path: Path,
                         root_fingerprints: tuple[str, ...],
-                        retired_roots: frozenset[str]) -> VerifyResult:
+                        retired_roots: frozenset[str],
+                        per_record: _PerRecord) -> VerifyResult:
     if not path.exists():
         return res._fail(None, f"bundle path not found: {path}")
 
@@ -1020,7 +1096,7 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
 
     # 1) Per-leaf hash + signature + 2) chain linkage on contiguous seq runs.
     leaf_by_seq: dict[int, dict[str, Any]] = {}
-    failed = _verify_leaves(res, leaves, pubkeys, leaf_by_seq)
+    failed = _verify_leaves(res, leaves, pubkeys, leaf_by_seq, per_record)
     if failed is not None:
         return failed
 
@@ -1029,16 +1105,24 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
     #    heuristics below defer to a trusted, content-committing manifest: when a
     #    signed leaves_digest binds the exact present set, a seal that reaches
     #    past the present leaves is a legitimate boundary seal of a windowed
-    #    export, not evidence of a deletion.
+    #    export, not evidence of a deletion. Without cryptography, a manifest
+    #    signed by a key the bundle carries is read the same way, its signature
+    #    unchecked (see _verify_manifest_signature).
     manifest = bundle.get("manifest") or {}
-    failed, manifest_trusted, manifest_signer_kid = _verify_manifest_signature(
-        res, manifest, bundle, pubkeys)
+    failed, manifest_trusted, manifest_signer_kid, manifest_unverified = \
+        _verify_manifest_signature(res, manifest, bundle, pubkeys)
     if failed is not None:
         return failed
     # A trusted manifest that commits a content digest binds the exact present
-    # (seq, leaf_hash) set — the flag the seal heuristics and the attestation
-    # gate below both key off.
+    # (seq, leaf_hash) set — the flag the attestation gate below keys off.
     manifest_binds_content = manifest_trusted and manifest.get("leaves_digest") is not None
+    # The seal heuristics key off it too, and without cryptography off the
+    # digest of a manifest signed by a key the bundle carries (step 3): a
+    # bundle whose signatures hold then gets the same verdict on either
+    # install. Its record set is checked in step 5 all the same.
+    seals_defer_to_manifest = (
+        (manifest_trusted or manifest_unverified)
+        and manifest.get("leaves_digest") is not None)
 
     # 3a) The keys the signed manifest commits to, and 3b) the signing-key
     #     handovers (WS-8) it binds.
@@ -1050,13 +1134,16 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
 
     # 4) Seals, and the inclusion proofs of the leaves under them.
     proofs = bundle.get("proofs") or []
-    failed = _verify_seals(res, seals, leaf_by_seq, pubkeys, manifest_binds_content, proofs)
+    failed = _verify_seals(res, seals, leaf_by_seq, pubkeys, seals_defer_to_manifest, proofs,
+                           per_record)
     if failed is not None:
         return failed
 
-    # 5) The record set a trusted signed manifest commits to.
-    if manifest_trusted:
-        failed = _verify_manifest_record_set(res, manifest, leaf_by_seq, leaves, seals, proofs)
+    # 5) The record set a trusted signed manifest commits to, or one signed by
+    #    a bundle key and read without cryptography (step 3).
+    if manifest_trusted or manifest_unverified:
+        failed = _verify_manifest_record_set(res, manifest, leaf_by_seq, leaves, seals, proofs,
+                                             verified=manifest_trusted)
         if failed is not None:
             return failed
 
@@ -1086,9 +1173,11 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
 
 
 def _verify_leaves(res: VerifyResult, leaves: list[dict[str, Any]], pubkeys,
-                   leaf_by_seq: dict[int, dict[str, Any]]) -> Optional[VerifyResult]:
+                   leaf_by_seq: dict[int, dict[str, Any]],
+                   per_record: _PerRecord) -> Optional[VerifyResult]:
     """Steps 1 and 2: every leaf's hash and signature, and the chain linkage
-    on contiguous seq runs. Fills *leaf_by_seq* (seq -> leaf) as it goes.
+    on contiguous seq runs. Fills *leaf_by_seq* (seq -> leaf) as it goes, and
+    gives each seq gap to *per_record*.
 
     Returns the failed result, or ``None`` when every leaf holds.
     """
@@ -1130,7 +1219,8 @@ def _verify_leaves(res: VerifyResult, leaves: list[dict[str, Any]], pubkeys,
             if leaf.get("prev_leaf_hash") != prev_hash:
                 return res._fail(seq, f"chain linkage broken at seq {seq}")
         elif prev_seq is not None and seq != prev_seq + 1:
-            res.warnings.append(
+            per_record.add(
+                "seq_gaps",
                 f"seq gap {prev_seq}->{seq} (range/tenant-filtered export; "
                 "linkage across the gap not checkable offline)"
             )
@@ -1152,19 +1242,38 @@ def _verify_leaves(res: VerifyResult, leaves: list[dict[str, Any]], pubkeys,
 
 def _verify_manifest_signature(
     res: VerifyResult, manifest: dict[str, Any], bundle: dict[str, Any], pubkeys,
-) -> tuple[Optional[VerifyResult], bool, Optional[str]]:
+) -> tuple[Optional[VerifyResult], bool, Optional[str], bool]:
     """Step 3: the signed manifest's custody signature.
 
-    Returns ``(failed, manifest_trusted, manifest_signer_kid)``: the failed
-    result when the signature does not verify, else ``None`` with whether the
-    manifest verified and the key that signed it.
+    Returns ``(failed, manifest_trusted, manifest_signer_kid,
+    manifest_unverified)``: the failed result when the signature does not
+    verify, else ``None`` with whether the manifest verified, the key that
+    signed it, and whether it is signed by a key the bundle carries but was
+    read without ``cryptography``, so its signature could not be checked.
     """
     manifest_trusted = False
     manifest_signer_kid: Optional[str] = None
+    manifest_unverified = False
     if manifest.get("sig"):
         kid = manifest.get("signer_key_id")
         pk = pubkeys.get(kid) if pubkeys is not None else None
-        if pubkeys is None:
+        if pubkeys is None and _names_a_bundle_key(kid, bundle):
+            # Nothing is signature-checked on this install. A manifest signed
+            # by a key the bundle carries is read as a verifier with
+            # cryptography reads it when the signature holds: the bundle is
+            # compared with the records it commits to (step 5), and the seal
+            # checks defer to its leaves_digest (step 4). Not reading it
+            # FAILED every intact tenant export, whose interior seals are
+            # shared with other tenants' absent leaves. The signature is the
+            # one thing left unchecked, as every other one is here.
+            manifest_unverified = True
+            res.warnings.append(
+                "signed manifest present but not verified (cryptography missing): "
+                "the records it commits to are compared with the bundle, but "
+                "nothing proves the server signed them")
+        elif pubkeys is None:
+            # Its key is not in the bundle: a verifier with cryptography
+            # would not trust it either (custody not verified).
             res.warnings.append(
                 "signed manifest present but not verified (cryptography missing)")
         elif pk is None:
@@ -1176,13 +1285,20 @@ def _verify_manifest_signature(
             signed_hash = hashlib.sha256(_canonical(body)).hexdigest()
             if not _verify_sig(pk, signed_hash, manifest.get("sig") or ""):
                 return (res._fail(None, "manifest signature invalid (custody broken)"),
-                        False, None)
+                        False, None, False)
             res.signatures_checked += 1
             manifest_trusted = True
             manifest_signer_kid = kid
     elif (bundle.get("certificates") or {}).get("deployment_certificates"):
         res.warnings.append("certified bundle without a signed manifest")
-    return None, manifest_trusted, manifest_signer_kid
+    return None, manifest_trusted, manifest_signer_kid, manifest_unverified
+
+
+def _names_a_bundle_key(kid: Any, bundle: dict[str, Any]) -> bool:
+    """Whether ``keys.json`` carries a key filed under *kid*. Compared, never
+    hashed: *kid* is bundle bytes and may be any JSON value."""
+    return isinstance(kid, str) and bool(kid) and any(
+        isinstance(k, dict) and k.get("key_id") == kid for k in bundle["keys"])
 
 
 def _verify_key_custody(
@@ -1284,9 +1400,16 @@ def _index_proofs(
 def _verify_seals(res: VerifyResult, seals: list[dict[str, Any]],
                   leaf_by_seq: dict[int, dict[str, Any]], pubkeys,
                   manifest_binds_content: bool,
-                  proofs: list[dict[str, Any]]) -> Optional[VerifyResult]:
+                  proofs: list[dict[str, Any]],
+                  per_record: _PerRecord) -> Optional[VerifyResult]:
     """Step 4: every seal's hash, signature and Merkle root, and the inclusion
-    proof of every present leaf that has one.
+    proof of every present leaf that has one. Seal chain gaps and partly
+    present seals go to *per_record*.
+
+    *manifest_binds_content*: a manifest's leaves_digest binds the present
+    leaves and step 5 checks its record set, so the deletion and truncation
+    heuristics below defer to it. The manifest is trusted, or, without
+    cryptography, signed by a key the bundle carries.
 
     Returns the failed result, or ``None`` when every seal holds.
     """
@@ -1329,7 +1452,8 @@ def _verify_seals(res: VerifyResult, seals: list[dict[str, Any]],
             res.signatures_checked += 1
 
         if prev_seal_hash is not None and seal.get("prev_seal_hash") != prev_seal_hash:
-            res.warnings.append(
+            per_record.add(
+                "seal_chain_gaps",
                 f"seal chain gap before {seal.get('seal_id')} "
                 "(earlier seal not in this bundle)"
             )
@@ -1417,13 +1541,15 @@ def _verify_seals(res: VerifyResult, seals: list[dict[str, Any]],
             # root itself is still not recomputed (the other leaves are not
             # here), and the seal is still only partly present, so this stays
             # in the warnings; what changed is what is known about the leaves.
-            res.warnings.append(
+            per_record.add(
+                "partial_seals_proved",
                 f"seal {seal_id} only partially present "
                 f"({len(covered)}/{expected} leaves) — boundary of a filtered export; "
                 "every present leaf proved included under its merkle_root"
             )
         else:
-            res.warnings.append(
+            per_record.add(
+                "partial_seals",
                 f"seal {seal.get('seal_id')} only partially present "
                 f"({len(covered)}/{expected} leaves) — boundary of a filtered export, "
                 "root not recomputed"
@@ -1436,9 +1562,13 @@ def _verify_manifest_record_set(res: VerifyResult, manifest: dict[str, Any],
                                 leaf_by_seq: dict[int, dict[str, Any]],
                                 leaves: list[dict[str, Any]],
                                 seals: list[dict[str, Any]],
-                                proofs: list[dict[str, Any]]) -> Optional[VerifyResult]:
+                                proofs: list[dict[str, Any]], *,
+                                verified: bool = True) -> Optional[VerifyResult]:
     """Step 5, for a trusted manifest: the record set it commits to against
-    the leaves, seals and inclusion proofs present.
+    the leaves, seals and inclusion proofs present. ``verified=False`` is a
+    manifest signed by a bundle key and read without cryptography: the same
+    check, and a mismatch may then also be the manifest edited, which the
+    failure says.
 
     Returns the failed result, or ``None`` when they match.
     """
@@ -1481,11 +1611,14 @@ def _verify_manifest_record_set(res: VerifyResult, manifest: dict[str, Any],
     if md is not None and md != _leaves_digest(leaves):
         mism.append("leaves_digest mismatch (exported leaf set altered)")
     if mism:
-        return res._fail(
-            exp_first,
-            "signed manifest commits to records that are not present — "
-            "records suppressed or substituted (" + ", ".join(mism) + ")",
-        )
+        if verified:
+            what = ("signed manifest commits to records that are not present — "
+                    "records suppressed or substituted")
+        else:
+            what = ("the manifest (signature not verified) commits to records that "
+                    "are not present — records suppressed or substituted, or the "
+                    "manifest edited")
+        return res._fail(exp_first, what + " (" + ", ".join(mism) + ")")
     # ``proofs_digest`` commits the exact inclusion proof set. Each proof was
     # checked in step 4 (so an altered one has already failed with its seq);
     # what is left to catch is a proof dropped, so that its seal reads as
@@ -1493,7 +1626,9 @@ def _verify_manifest_record_set(res: VerifyResult, manifest: dict[str, Any],
     # export from before proofs existed commits none, and is read as before.
     pd = manifest.get("proofs_digest")
     if pd is not None and pd != _proofs_digest(proofs):
+        manifest_named = ("the signed manifest" if verified
+                          else "the manifest, whose signature was not verified")
         return res._fail(
-            None, "inclusion proof set does not match the signed manifest "
+            None, f"inclusion proof set does not match {manifest_named} "
                   "(proofs_digest mismatch)")
     return None

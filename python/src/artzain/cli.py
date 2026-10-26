@@ -967,6 +967,13 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
             "first_bad_seq": result.first_bad_seq,
             "error": result.error,
             "warnings": result.warnings,
+            # What a filtered export repeats once per record, counted. Each
+            # kind is one line in warnings; its per-record lines are here.
+            "seq_gaps": result.seq_gaps,
+            "seal_chain_gaps": result.seal_chain_gaps,
+            "partial_seals": result.partial_seals,
+            "partial_seals_proved": result.partial_seals_proved,
+            "warning_details": result.warning_details,
             # An ATTESTED verdict under an overridden root attests to THAT
             # root, not the published one — machine consumers gating on
             # attestation must also read this flag.
@@ -993,6 +1000,14 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
               "published CogNEXUS Evidence Root.")
     for w in result.warnings:
         print(f"  ! {w}")
+    if result.warning_details:
+        if getattr(args, "verbose", False):
+            print("  per-record warnings:")
+            for w in result.warning_details:
+                print(f"    - {w}")
+        else:
+            print(f"  (--verbose lists the {len(result.warning_details):,} "
+                  "per-record warnings)")
     print()
     if result.ok:
         state = result.attestation or "SELF-ATTESTED"
@@ -2054,6 +2069,12 @@ def _add_audit_parser(sub: argparse._SubParsersAction) -> None:
     )
     p_verify.add_argument("bundle", help="Path to the bundle directory or .zip file.")
     p_verify.add_argument("--json", action="store_true", help="Emit a JSON result.")
+    p_verify.add_argument(
+        "--verbose", action="store_true",
+        help="Also list each seq gap, seal chain gap and partly present seal "
+             "of a filtered export, which the report otherwise counts on one "
+             "line per kind (--json always carries them, as warning_details).",
+    )
     p_verify.add_argument(
         "--root-fingerprint", metavar="SHA256HEX",
         help="Verify against this Evidence Root fingerprint alone, in place of "

@@ -1664,7 +1664,7 @@ def test_sparse_bundle_with_inclusion_proofs_verifies(tmp_path, signer):
     assert r.leaves_checked == 3 and r.seals_checked == 1
     assert any("seal S0 only partially present (3/8 leaves)" in w and _PROVED in w
                for w in r.warnings), r.warnings
-    assert not any(_NOT_RECOMPUTED in w for w in r.warnings), r.warnings
+    assert r.partial_seals == 0, r.warnings  # none _NOT_RECOMPUTED
 
 
 def test_sparse_bundle_with_inclusion_proofs_attests(tmp_path, signer, authority):
@@ -1694,7 +1694,7 @@ def test_bundle_without_proofs_keeps_the_boundary_warning(tmp_path, signer):
     assert r.seals_checked == 1
     assert any("seal S0 only partially present (3/8 leaves)" in w and _NOT_RECOMPUTED in w
                for w in r.warnings), r.warnings
-    assert not any(_PROVED in w for w in r.warnings)
+    assert r.partial_seals_proved == 0, r.warnings  # none _PROVED
 
 
 def test_proofs_dropped_from_a_committing_bundle_fail(tmp_path, signer):

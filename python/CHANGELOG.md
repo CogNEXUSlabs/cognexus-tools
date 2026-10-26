@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.6.59
+
+### Fixed
+
+- **`artzain audit verify` no longer buries the verdict of a hosted export
+  under one warning per record.** A tenant-filtered bundle has a seq gap
+  between nearly every pair of its leaves and a partly present seal under
+  nearly every leaf, and the report printed a line for each: about 10,800
+  lines before the verdict on a real export. Each kind is now one line
+  carrying its count, at the place its first line was: `10,812 seq gaps
+  (tenant- or range-filtered export; chain linkage across the gaps not
+  checkable offline)`, `N seal chain gaps (earlier seals not in this
+  bundle)`, `N seals only partially present — boundaries of a filtered
+  export, roots not recomputed`, and the seals whose every present leaf was
+  proved included on a line of their own. A kind found once keeps its own
+  line (`seq gap 2->5 …`). The verdict, the exit status, `first_bad_seq`,
+  the failures and every other warning are unchanged, and the warnings found
+  before a failure are still reported.
+- **An intact hosted bundle verifies on the default install.** Without the
+  `cryptography` extra the verifier did not read the signed manifest at all,
+  so the first seal a tenant shares with other tenants, which sits inside
+  the export's range with their leaves absent, read as a deleted leaf and the
+  bundle FAILED. A manifest signed by a key the bundle carries is now read
+  as when its signature verifies: the bundle is compared with the record set
+  it commits to (`leaf_count`, `leaves_digest`, `proofs_digest` and the
+  rest), and the seal checks defer to its `leaves_digest`. The report says
+  the signature was not checked (`signed manifest present but not verified
+  (cryptography missing): the records it commits to are compared with the
+  bundle, but nothing proves the server signed them`), and a mismatch fails
+  with `the manifest (signature not verified) commits to records that are
+  not present — records suppressed or substituted, or the manifest edited`.
+  A bundle whose signatures hold gets the same verdict with and without
+  `cryptography`, so a leaf removed under a boundary seal, which nothing on
+  the default install caught before, now fails. An unsigned manifest, or one
+  whose key the bundle does not carry, is read as before, and attestation
+  is unchanged (`SELF-ATTESTED` without `cryptography`).
+
+### Changed
+
+- **`VerifyResult` counts the repeated warnings and keeps their lines.**
+  New fields `seq_gaps`, `seal_chain_gaps`, `partial_seals` (root not
+  recomputed) and `partial_seals_proved` (every present leaf proved; the two
+  never count the same seal), and `warning_details`, the per-record lines
+  behind each summary in `warnings`, in the order they were found. `audit
+  verify --json` carries all five; `warnings` is the list of lines the
+  report prints.
+- **`artzain audit verify --verbose`** lists those per-record lines under the
+  warnings in the text report. Without it, the report says how many there
+  are.
+
 ## 0.6.58
 
 ### Fixed

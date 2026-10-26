@@ -9,6 +9,13 @@
    "first_bad_seq": 7,
    "error": "inclusion proof for seq 7 does not reach the merkle_root of seal S0 (the leaf is not in the sealed tree, or the proof was altered)",
    "warnings": [
+    "2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)"
+   ],
+   "seq_gaps": 2,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [
     "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
     "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)"
    ],
@@ -27,8 +34,8 @@
    "  leaves checked:     3",
    "  seals checked:      0",
    "  signatures checked: 5",
-   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! 2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
+   "  (--verbose lists the 2 per-record warnings)",
    "",
    "FAILED (first bad seq: 7): inclusion proof for seq 7 does not reach the merkle_root of seal S0 (the leaf is not in the sealed tree, or the proof was altered)"
   ]
@@ -43,6 +50,11 @@
    "first_bad_seq": null,
    "error": "key handover row carries fields outside the allowlist: invoice_reference",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -72,6 +84,11 @@
    "first_bad_seq": 2,
    "error": "bad leaf signature at seq 2",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -101,6 +118,11 @@
    "first_bad_seq": null,
    "error": "bad seal signature for S0",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -130,6 +152,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "leaf seq 1 not covered by a certificate valid at signing time"
@@ -164,6 +191,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "certificate chain malformed — provenance not evaluated"
@@ -197,6 +229,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no certificate chain in bundle"
@@ -230,6 +267,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "ATTESTED",
    "attestation_reasons": [],
    "certificates_checked": 2,
@@ -261,6 +303,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "ATTESTED",
    "attestation_reasons": [],
    "certificates_checked": 2,
@@ -293,6 +340,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no Evidence Root fingerprint pinned (pre-ceremony verifier)"
@@ -325,6 +377,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "ATTESTED",
    "attestation_reasons": [
     "attested under retired root <root> — pinned before the current Evidence Root; this bundle was certified before the re-root"
@@ -360,6 +417,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "root public key fingerprint mismatch — does not chain to the pinned Evidence Root"
@@ -394,6 +456,11 @@
    "warnings": [
     "certified bundle without a signed manifest"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no verifiable signed manifest — the exported record set is not bound to the certified key, so its completeness cannot be attested"
@@ -428,6 +495,11 @@
    "first_bad_seq": 2,
    "error": "chain linkage broken at seq 2",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -457,6 +529,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no certificate chain in bundle"
@@ -491,6 +568,11 @@
    "warnings": [
     "cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no certificate chain in bundle"
@@ -524,6 +606,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no certificate chain in bundle"
@@ -556,6 +643,11 @@
    "first_bad_seq": null,
    "error": "keys.json is missing key(s) the signed manifest commits to: <retiring>",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -585,6 +677,11 @@
    "first_bad_seq": null,
    "error": "keys.json is missing key(s) the signed manifest commits to: <retiring>",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -614,9 +711,16 @@
    "first_bad_seq": 3,
    "error": "signed manifest commits to records that are not present — records suppressed or substituted (leaves_digest mismatch (exported leaf set altered))",
    "warnings": [
-    "seq gap 3->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-    "seq gap 5->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
     "seal S0 only partially present (3/9 leaves) — boundary of a filtered export, root not recomputed"
+   ],
+   "seq_gaps": 2,
+   "seal_chain_gaps": 0,
+   "partial_seals": 1,
+   "partial_seals_proved": 0,
+   "warning_details": [
+    "seq gap 3->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 5->7 (range/tenant-filtered export; linkage across the gap not checkable offline)"
    ],
    "attestation": null,
    "attestation_reasons": [],
@@ -634,9 +738,9 @@
    "  seals checked:      1",
    "  signatures checked: 5",
    "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
-   "  ! seq gap 3->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-   "  ! seq gap 5->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! 2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
    "  ! seal S0 only partially present (3/9 leaves) — boundary of a filtered export, root not recomputed",
+   "  (--verbose lists the 2 per-record warnings)",
    "",
    "FAILED (first bad seq: 3): signed manifest commits to records that are not present — records suppressed or substituted (leaves_digest mismatch (exported leaf set altered))"
   ]
@@ -653,6 +757,11 @@
    "warnings": [
     "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)"
    ],
+   "seq_gaps": 1,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -685,6 +794,11 @@
    "warnings": [
     "seq gap 3->5 (range/tenant-filtered export; linkage across the gap not checkable offline)"
    ],
+   "seq_gaps": 1,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -717,6 +831,11 @@
    "warnings": [
     "seal S0 only partially present (3/9 leaves) — boundary of a filtered export, root not recomputed"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 1,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "ATTESTED",
    "attestation_reasons": [],
    "certificates_checked": 2,
@@ -750,6 +869,11 @@
    "first_bad_seq": 4,
    "error": "truncated log — seal S0 commits to seq 1..9 but leaves end at 3",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -780,6 +904,11 @@
    "first_bad_seq": 5,
    "error": "duplicate leaf_hash at seq 5 (a record was copied into another's slot)",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -812,6 +941,11 @@
    "warnings": [
     "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)"
    ],
+   "seq_gaps": 1,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -843,6 +977,11 @@
    "first_bad_seq": 5,
    "error": "leaf_hash mismatch at seq 5 (record tampered)",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -872,6 +1011,11 @@
    "first_bad_seq": null,
    "error": "manifest signature invalid (custody broken)",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -902,9 +1046,16 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [
-    "seq gap 3->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-    "seq gap 5->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
     "seal S0 only partially present (3/9 leaves) — boundary of a filtered export, root not recomputed"
+   ],
+   "seq_gaps": 2,
+   "seal_chain_gaps": 0,
+   "partial_seals": 1,
+   "partial_seals_proved": 0,
+   "warning_details": [
+    "seq gap 3->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 5->7 (range/tenant-filtered export; linkage across the gap not checkable offline)"
    ],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
@@ -925,9 +1076,9 @@
    "  signatures checked: 5",
    "  certificates:       2 checked",
    "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
-   "  ! seq gap 3->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-   "  ! seq gap 5->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! 2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
    "  ! seal S0 only partially present (3/9 leaves) — boundary of a filtered export, root not recomputed",
+   "  (--verbose lists the 2 per-record warnings)",
    "",
    "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
    "  self-attested because: signed manifest carries no leaves_digest — the exact exported leaf set is not bound to the certified key, so content substitution within a windowed export cannot be ruled out (re-export to attest)"
@@ -943,6 +1094,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no certificate chain in bundle"
@@ -976,10 +1132,15 @@
    "error": null,
    "warnings": [
     "cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'",
-    "signed manifest present but not verified (cryptography missing)",
+    "signed manifest present but not verified (cryptography missing): the records it commits to are compared with the bundle, but nothing proves the server signed them",
     "key handovers present but the manifest is not trusted — they are checked for self-consistency only",
     "key handover <retiring>-><successor> not verified (cryptography missing)"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no certificate chain in bundle"
@@ -998,7 +1159,7 @@
    "  seals checked:      1",
    "  signatures:         SKIPPED (install 'artzain[verify]')",
    "  ! cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'",
-   "  ! signed manifest present but not verified (cryptography missing)",
+   "  ! signed manifest present but not verified (cryptography missing): the records it commits to are compared with the bundle, but nothing proves the server signed them",
    "  ! key handovers present but the manifest is not trusted — they are checked for self-consistency only",
    "  ! key handover <retiring>-><successor> not verified (cryptography missing)",
    "",
@@ -1016,6 +1177,11 @@
    "first_bad_seq": null,
    "error": "invalid retiring signature on a key handover",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -1047,6 +1213,11 @@
    "warnings": [
     "key handover <retiring>-><successor> is internally sound but the bundle carries no public key for <retiring>, so it cannot be tied to a key this bundle uses"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no certificate chain in bundle"
@@ -1080,6 +1251,11 @@
    "first_bad_seq": null,
    "error": "a key handover's public key differs from the one the bundle registers for <retiring>",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -1109,6 +1285,11 @@
    "first_bad_seq": null,
    "error": "key handover row carries fields outside the allowlist: invoice_reference",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -1138,6 +1319,11 @@
    "first_bad_seq": null,
    "error": "key handover set does not match the signed manifest (rotations_digest mismatch)",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -1169,6 +1355,11 @@
    "warnings": [
     "key handovers present but the manifest is not trusted — they are checked for self-consistency only"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no certificate chain in bundle"
@@ -1202,6 +1393,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no certificate chain in bundle"
@@ -1234,6 +1430,11 @@
    "first_bad_seq": 6,
    "error": "truncated log — seal S0 commits to seq 1..1000000000000000 but leaves end at 5",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -1263,6 +1464,13 @@
    "first_bad_seq": 4,
    "error": "inclusion proof for seq 4 does not reach the merkle_root of seal S0 (the leaf is not in the sealed tree, or the proof was altered)",
    "warnings": [
+    "2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)"
+   ],
+   "seq_gaps": 2,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [
     "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
     "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)"
    ],
@@ -1281,8 +1489,8 @@
    "  leaves checked:     3",
    "  seals checked:      0",
    "  signatures checked: 5",
-   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! 2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
+   "  (--verbose lists the 2 per-record warnings)",
    "",
    "FAILED (first bad seq: 4): inclusion proof for seq 4 does not reach the merkle_root of seal S0 (the leaf is not in the sealed tree, or the proof was altered)"
   ]
@@ -1297,6 +1505,13 @@
    "first_bad_seq": 3,
    "error": "inclusion proof for seq 3, but no such leaf is in the bundle",
    "warnings": [
+    "2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)"
+   ],
+   "seq_gaps": 2,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [
     "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
     "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)"
    ],
@@ -1315,8 +1530,8 @@
    "  leaves checked:     3",
    "  seals checked:      0",
    "  signatures checked: 4",
-   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! 2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
+   "  (--verbose lists the 2 per-record warnings)",
    "",
    "FAILED (first bad seq: 3): inclusion proof for seq 3, but no such leaf is in the bundle"
   ]
@@ -1331,6 +1546,13 @@
    "first_bad_seq": 7,
    "error": "malformed inclusion proof for seq 7",
    "warnings": [
+    "2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)"
+   ],
+   "seq_gaps": 2,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [
     "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
     "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)"
    ],
@@ -1349,8 +1571,8 @@
    "  leaves checked:     3",
    "  seals checked:      0",
    "  signatures checked: 4",
-   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! 2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
+   "  (--verbose lists the 2 per-record warnings)",
    "",
    "FAILED (first bad seq: 7): malformed inclusion proof for seq 7"
   ]
@@ -1365,6 +1587,13 @@
    "first_bad_seq": 4,
    "error": "inclusion proof for seq 4 names seal S9, which is not in the bundle",
    "warnings": [
+    "2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)"
+   ],
+   "seq_gaps": 2,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [
     "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
     "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)"
    ],
@@ -1383,8 +1612,8 @@
    "  leaves checked:     3",
    "  seals checked:      0",
    "  signatures checked: 4",
-   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! 2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
+   "  (--verbose lists the 2 per-record warnings)",
    "",
    "FAILED (first bad seq: 4): inclusion proof for seq 4 names seal S9, which is not in the bundle"
   ]
@@ -1399,9 +1628,16 @@
    "first_bad_seq": null,
    "error": "inclusion proof set does not match the signed manifest (proofs_digest mismatch)",
    "warnings": [
-    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
     "seal S0 only partially present (3/8 leaves) — boundary of a filtered export; every present leaf proved included under its merkle_root"
+   ],
+   "seq_gaps": 2,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 1,
+   "warning_details": [
+    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)"
    ],
    "attestation": null,
    "attestation_reasons": [],
@@ -1418,9 +1654,9 @@
    "  leaves checked:     3",
    "  seals checked:      1",
    "  signatures checked: 5",
-   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! 2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
    "  ! seal S0 only partially present (3/8 leaves) — boundary of a filtered export; every present leaf proved included under its merkle_root",
+   "  (--verbose lists the 2 per-record warnings)",
    "",
    "FAILED: inclusion proof set does not match the signed manifest (proofs_digest mismatch)"
   ]
@@ -1435,9 +1671,16 @@
    "first_bad_seq": null,
    "error": "inclusion proof set does not match the signed manifest (proofs_digest mismatch)",
    "warnings": [
-    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
     "seal S0 only partially present (3/8 leaves) — boundary of a filtered export, root not recomputed"
+   ],
+   "seq_gaps": 2,
+   "seal_chain_gaps": 0,
+   "partial_seals": 1,
+   "partial_seals_proved": 0,
+   "warning_details": [
+    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)"
    ],
    "attestation": null,
    "attestation_reasons": [],
@@ -1454,9 +1697,9 @@
    "  leaves checked:     3",
    "  seals checked:      1",
    "  signatures checked: 5",
-   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! 2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
    "  ! seal S0 only partially present (3/8 leaves) — boundary of a filtered export, root not recomputed",
+   "  (--verbose lists the 2 per-record warnings)",
    "",
    "FAILED: inclusion proof set does not match the signed manifest (proofs_digest mismatch)"
   ]
@@ -1471,6 +1714,14 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [
+    "3 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
+    "4 seals only partially present — boundaries of a filtered export, roots not recomputed"
+   ],
+   "seq_gaps": 3,
+   "seal_chain_gaps": 0,
+   "partial_seals": 4,
+   "partial_seals_proved": 0,
+   "warning_details": [
     "seq gap 2->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
     "seq gap 5->8 (range/tenant-filtered export; linkage across the gap not checkable offline)",
     "seq gap 8->11 (range/tenant-filtered export; linkage across the gap not checkable offline)",
@@ -1496,13 +1747,9 @@
    "  signatures checked: 9",
    "  certificates:       2 checked",
    "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
-   "  ! seq gap 2->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-   "  ! seq gap 5->8 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-   "  ! seq gap 8->11 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-   "  ! seal S0 only partially present (1/3 leaves) — boundary of a filtered export, root not recomputed",
-   "  ! seal S1 only partially present (1/3 leaves) — boundary of a filtered export, root not recomputed",
-   "  ! seal S2 only partially present (1/3 leaves) — boundary of a filtered export, root not recomputed",
-   "  ! seal S3 only partially present (1/3 leaves) — boundary of a filtered export, root not recomputed",
+   "  ! 3 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
+   "  ! 4 seals only partially present — boundaries of a filtered export, roots not recomputed",
+   "  (--verbose lists the 7 per-record warnings)",
    "",
    "VERIFIED, ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
    "The signing keys chain to the root you supplied and were certified at signing time."
@@ -1518,6 +1765,13 @@
    "first_bad_seq": 4,
    "error": "deleted leaf — seal S1 expects 3 leaves in seq 4..6, found 1 (missing seq 4)",
    "warnings": [
+    "3 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)"
+   ],
+   "seq_gaps": 3,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [
     "seq gap 2->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
     "seq gap 5->8 (range/tenant-filtered export; linkage across the gap not checkable offline)",
     "seq gap 8->11 (range/tenant-filtered export; linkage across the gap not checkable offline)"
@@ -1537,9 +1791,8 @@
    "  leaves checked:     4",
    "  seals checked:      0",
    "  signatures checked: 6",
-   "  ! seq gap 2->5 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-   "  ! seq gap 5->8 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-   "  ! seq gap 8->11 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! 3 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
+   "  (--verbose lists the 3 per-record warnings)",
    "",
    "FAILED (first bad seq: 4): deleted leaf — seal S1 expects 3 leaves in seq 4..6, found 1 (missing seq 4)"
   ]
@@ -1554,6 +1807,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "leaf seq 1 not covered by a certificate valid at signing time"
@@ -1588,6 +1846,11 @@
    "first_bad_seq": null,
    "error": "could not read bundle: Expecting value: line 1 column 1 (char 0)",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -1617,6 +1880,11 @@
    "first_bad_seq": 1,
    "error": "signed manifest commits to records that are not present — records suppressed or substituted (last_seq 6≠5)",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -1647,6 +1915,11 @@
    "first_bad_seq": 1,
    "error": "signed manifest commits to records that are not present — records suppressed or substituted (leaf_count five≠5)",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -1677,6 +1950,11 @@
    "first_bad_seq": 3,
    "error": "leaf_hash mismatch at seq 3 (record tampered)",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -1706,6 +1984,11 @@
    "first_bad_seq": null,
    "error": "could not read bundle: audit record is not a JSON object",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -1735,6 +2018,11 @@
    "first_bad_seq": null,
    "error": "non-integer leaf seq (malformed record)",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -1767,6 +2055,11 @@
    "warnings": [
     "certified bundle without a signed manifest"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no verifiable signed manifest — the exported record set is not bound to the certified key, so its completeness cannot be attested"
@@ -1801,6 +2094,11 @@
    "first_bad_seq": null,
    "error": "manifest signature invalid (custody broken)",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -1833,6 +2131,11 @@
    "warnings": [
     "key <notary> signed records here and no handover names it — either a second signing process, or a key that was never authorised"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no certificate chain in bundle"
@@ -1868,6 +2171,11 @@
    "first_bad_seq": 1,
    "error": "merkle root mismatch for seal S0",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -1897,6 +2205,11 @@
    "first_bad_seq": 1,
    "error": "no public key <signer> for leaf seq 1",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -1926,6 +2239,11 @@
    "first_bad_seq": null,
    "error": "no public key <other> for seal S0",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -1957,6 +2275,11 @@
    "warnings": [
     "seal S0 only partially present (3/5 leaves) — boundary of a filtered export, root not recomputed"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 1,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -1988,6 +2311,11 @@
    "first_bad_seq": null,
    "error": "bundle path not found: <bundle>",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -2019,6 +2347,11 @@
    "warnings": [
     "seal S0 only partially present (4/5 leaves) — boundary of a filtered export, root not recomputed"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 1,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -2052,6 +2385,11 @@
    "warnings": [
     "seal S0 only partially present (4/5 leaves) — boundary of a filtered export, root not recomputed"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 1,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "signed manifest is not signed by a certified deployment key — the committed record set is not bound to the Evidence Root"
@@ -2087,6 +2425,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "ATTESTED",
    "attestation_reasons": [
     "attested under retired root <root> — pinned before the current Evidence Root; this bundle was certified before the re-root"
@@ -2122,6 +2465,11 @@
    "first_bad_seq": null,
    "error": "key handover set does not match the signed manifest (rotations_digest mismatch)",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -2153,6 +2501,11 @@
    "warnings": [
     "seal chain gap before S1 (earlier seal not in this bundle)"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 1,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no certificate chain in bundle"
@@ -2186,6 +2539,11 @@
    "first_bad_seq": null,
    "error": "seal_hash mismatch for seal S0",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -2215,6 +2573,11 @@
    "first_bad_seq": null,
    "error": "non-integer seal range for seal S0 (malformed record)",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -2247,6 +2610,11 @@
    "warnings": [
     "key <sealer> signed records here and no handover names it — either a second signing process, or a key that was never authorised"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no certificate chain in bundle"
@@ -2282,6 +2650,11 @@
    "first_bad_seq": 1,
    "error": "signed manifest commits to records that are not present — records suppressed or substituted (seal_count 1≠0)",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -2314,6 +2687,11 @@
    "warnings": [
     "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)"
    ],
+   "seq_gaps": 1,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -2346,6 +2724,11 @@
    "warnings": [
     "signed manifest key <stranger> not in the bundle — custody not verified"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no certificate chain in bundle"
@@ -2381,8 +2764,13 @@
    "error": null,
    "warnings": [
     "cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'",
-    "signed manifest present but not verified (cryptography missing)"
+    "signed manifest present but not verified (cryptography missing): the records it commits to are compared with the bundle, but nothing proves the server signed them"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "cryptography not installed — certificate chain not evaluated"
@@ -2402,7 +2790,7 @@
    "  signatures:         SKIPPED (install 'artzain[verify]')",
    "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
    "  ! cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'",
-   "  ! signed manifest present but not verified (cryptography missing)",
+   "  ! signed manifest present but not verified (cryptography missing): the records it commits to are compared with the bundle, but nothing proves the server signed them",
    "",
    "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots are intact.",
    "  self-attested because: cryptography not installed — certificate chain not evaluated"
@@ -2420,6 +2808,11 @@
    "warnings": [
     "key <attacker> signed records here and no handover names it — either a second signing process, or a key that was never authorised"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no certificate chain in bundle"
@@ -2455,9 +2848,16 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [
-    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
     "seal S0 only partially present (3/8 leaves) — boundary of a filtered export; every present leaf proved included under its merkle_root"
+   ],
+   "seq_gaps": 2,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 1,
+   "warning_details": [
+    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)"
    ],
    "attestation": "ATTESTED",
    "attestation_reasons": [],
@@ -2476,9 +2876,9 @@
    "  signatures checked: 5",
    "  certificates:       2 checked",
    "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
-   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! 2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
    "  ! seal S0 only partially present (3/8 leaves) — boundary of a filtered export; every present leaf proved included under its merkle_root",
+   "  (--verbose lists the 2 per-record warnings)",
    "",
    "VERIFIED, ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
    "The signing keys chain to the root you supplied and were certified at signing time."
@@ -2495,10 +2895,17 @@
    "error": null,
    "warnings": [
     "cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'",
-    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-    "signed manifest present but not verified (cryptography missing)",
+    "2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
+    "signed manifest present but not verified (cryptography missing): the records it commits to are compared with the bundle, but nothing proves the server signed them",
     "seal S0 only partially present (3/8 leaves) — boundary of a filtered export; every present leaf proved included under its merkle_root"
+   ],
+   "seq_gaps": 2,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 1,
+   "warning_details": [
+    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)"
    ],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
@@ -2518,10 +2925,10 @@
    "  seals checked:      1",
    "  signatures:         SKIPPED (install 'artzain[verify]')",
    "  ! cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'",
-   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-   "  ! signed manifest present but not verified (cryptography missing)",
+   "  ! 2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
+   "  ! signed manifest present but not verified (cryptography missing): the records it commits to are compared with the bundle, but nothing proves the server signed them",
    "  ! seal S0 only partially present (3/8 leaves) — boundary of a filtered export; every present leaf proved included under its merkle_root",
+   "  (--verbose lists the 2 per-record warnings)",
    "",
    "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots are intact.",
    "  self-attested because: no certificate chain in bundle"
@@ -2537,9 +2944,16 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [
-    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
     "seal S0 only partially present (3/8 leaves) — boundary of a filtered export, root not recomputed"
+   ],
+   "seq_gaps": 2,
+   "seal_chain_gaps": 0,
+   "partial_seals": 1,
+   "partial_seals_proved": 0,
+   "warning_details": [
+    "seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+    "seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)"
    ],
    "attestation": "ATTESTED",
    "attestation_reasons": [],
@@ -2558,9 +2972,9 @@
    "  signatures checked: 5",
    "  certificates:       2 checked",
    "  ! NON-DEFAULT Evidence Root fingerprint supplied on the command line — this attests to YOUR root, not the published CogNEXUS Evidence Root.",
-   "  ! seq gap 2->4 (range/tenant-filtered export; linkage across the gap not checkable offline)",
-   "  ! seq gap 4->7 (range/tenant-filtered export; linkage across the gap not checkable offline)",
+   "  ! 2 seq gaps (tenant- or range-filtered export; chain linkage across the gaps not checkable offline)",
    "  ! seal S0 only partially present (3/8 leaves) — boundary of a filtered export, root not recomputed",
+   "  (--verbose lists the 2 per-record warnings)",
    "",
    "VERIFIED, ATTESTED — all leaf hashes, chain links, Merkle roots and signatures are intact.",
    "The signing keys chain to the root you supplied and were certified at signing time."
@@ -2576,6 +2990,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "leaf seq 1 not covered by a certificate valid at signing time"
@@ -2610,6 +3029,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "ATTESTED",
    "attestation_reasons": [
     "issuing certificate ISS-TAMPERED signature invalid"
@@ -2646,6 +3070,11 @@
    "first_bad_seq": 4,
    "error": "truncated log — seal S0 commits to seq 1..5 but leaves end at 3",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -2675,6 +3104,11 @@
    "first_bad_seq": 4,
    "error": "truncated log — seal S0 commits to seq 1..5 but leaves end at 3",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -2696,19 +3130,27 @@
  },
  "truncated_log_under_an_unverified_digest": {
   "result": {
-   "ok": false,
+   "ok": true,
    "leaves_checked": 3,
-   "seals_checked": 0,
+   "seals_checked": 1,
    "signatures_checked": 0,
    "signatures_skipped": true,
-   "first_bad_seq": 4,
-   "error": "truncated log — seal S0 commits to seq 1..5 but leaves end at 3",
+   "first_bad_seq": null,
+   "error": null,
    "warnings": [
     "cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'",
-    "signed manifest present but not verified (cryptography missing)"
+    "signed manifest present but not verified (cryptography missing): the records it commits to are compared with the bundle, but nothing proves the server signed them",
+    "seal S0 only partially present (3/5 leaves) — boundary of a filtered export, root not recomputed"
    ],
-   "attestation": null,
-   "attestation_reasons": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 1,
+   "partial_seals_proved": 0,
+   "warning_details": [],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
    "certificates_checked": 0,
    "rotations_checked": 0,
    "unexplained_key_ids": [],
@@ -2716,16 +3158,18 @@
    "root_fingerprint_overridden": false,
    "evidence_root_retired": false
   },
-  "exit": 1,
+  "exit": 0,
   "report": [
    "Audit bundle: <bundle>",
    "  leaves checked:     3",
-   "  seals checked:      0",
+   "  seals checked:      1",
    "  signatures:         SKIPPED (install 'artzain[verify]')",
    "  ! cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'",
-   "  ! signed manifest present but not verified (cryptography missing)",
+   "  ! signed manifest present but not verified (cryptography missing): the records it commits to are compared with the bundle, but nothing proves the server signed them",
+   "  ! seal S0 only partially present (3/5 leaves) — boundary of a filtered export, root not recomputed",
    "",
-   "FAILED (first bad seq: 4): truncated log — seal S0 commits to seq 1..5 but leaves end at 3"
+   "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots are intact.",
+   "  self-attested because: no certificate chain in bundle"
   ]
  },
  "unhashable_leaf_signer": {
@@ -2738,6 +3182,11 @@
    "first_bad_seq": null,
    "error": "malformed bundle (TypeError)",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -2770,6 +3219,11 @@
    "warnings": [
     "cryptography not installed — signatures NOT verified. Install with: pip install 'artzain[verify]'"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -2800,6 +3254,11 @@
    "first_bad_seq": null,
    "error": "malformed bundle (TypeError)",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -2830,6 +3289,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no certificate chain in bundle"
@@ -2864,6 +3328,11 @@
    "warnings": [
     "seal S0 only partially present (0/5 leaves) — boundary of a filtered export, root not recomputed"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 1,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -2897,6 +3366,11 @@
    "warnings": [
     "seal S0 only partially present (3/5 leaves) — boundary of a filtered export, root not recomputed"
    ],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 1,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "ATTESTED",
    "attestation_reasons": [],
    "certificates_checked": 2,
@@ -2930,6 +3404,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "signed manifest carries no leaves_digest — the exact exported leaf set is not bound to the certified key, so content substitution within a windowed export cannot be ruled out (re-export to attest)"
@@ -2964,6 +3443,11 @@
    "first_bad_seq": 1,
    "error": "bad leaf signature at seq 1",
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": null,
    "attestation_reasons": [],
    "certificates_checked": 0,
@@ -2993,6 +3477,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "root public key fingerprint mismatch — does not chain to the pinned Evidence Root"
@@ -3026,6 +3515,11 @@
    "first_bad_seq": null,
    "error": null,
    "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
    "attestation": "SELF-ATTESTED",
    "attestation_reasons": [
     "no certificate chain in bundle"
