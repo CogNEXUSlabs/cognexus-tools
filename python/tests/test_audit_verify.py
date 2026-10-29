@@ -389,7 +389,8 @@ def test_substituted_keypair_reports_self_attested_not_attested(
     assert r.ok, r.error  # internally consistent — that is the whole point
     assert r.attestation == "SELF-ATTESTED"
     assert r.attestation != "ATTESTED"
-    assert any("not covered" in w or "no valid certificate" in w
+    assert any("lacks a certificate valid at signing time" in w
+               or "no valid certificate" in w
                for w in r.attestation_reasons)
 
 
@@ -835,8 +836,8 @@ def test_bundle_certified_under_a_retired_root_still_attests(
     assert r.evidence_root_retired is True
     assert r.root_fingerprint_overridden is False
     assert r.attestation_reasons == [
-        f"attested under retired root {authority.root_fingerprint[:16]} — pinned "
-        "before the current Evidence Root; this bundle was certified before the re-root"]
+        f"attested under retired root {authority.root_fingerprint[:16]}, "
+        "certified before the re-root"]
 
 
 def test_bundle_certified_under_the_current_root_is_not_retired(
@@ -861,8 +862,7 @@ def test_bundle_under_a_root_no_longer_pinned_caps_at_self_attested(
     r = verify_bundle(d)
     assert r.ok and r.attestation == "SELF-ATTESTED"
     assert r.attestation_reasons == [
-        "root public key fingerprint mismatch — does not chain to the pinned "
-        "Evidence Root"]
+        "root public key fingerprint mismatch for the pinned Evidence Root"]
     assert r.evidence_root_fingerprint == newer.root_fingerprint
     assert r.evidence_root_retired is False
 
@@ -882,7 +882,7 @@ def test_a_capped_bundle_under_a_retired_root_names_it_without_the_attested_note
     assert r.evidence_root_fingerprint == authority.root_fingerprint
     assert r.evidence_root_retired is True
     assert r.attestation_reasons == [
-        "leaf seq 1 not covered by a certificate valid at signing time"]
+        "leaf seq 1 lacks a certificate valid at signing time"]
 
 
 def test_a_failed_bundle_names_the_current_pin(tmp_path, signer, authority, monkeypatch):
@@ -1653,7 +1653,7 @@ def _sparse_sealed_bundle(tmp_path, signer, authority=None, *, present=(2, 4, 7)
     return d
 
 
-_PROVED = "every present leaf proved included under its merkle_root"
+_PROVED = "proved by inclusion"
 _NOT_RECOMPUTED = "root not recomputed"
 
 
@@ -1662,7 +1662,7 @@ def test_sparse_bundle_with_inclusion_proofs_verifies(tmp_path, signer):
     r = verify_bundle(d)
     assert r.ok, r.error
     assert r.leaves_checked == 3 and r.seals_checked == 1
-    assert any("seal S0 only partially present (3/8 leaves)" in w and _PROVED in w
+    assert any("seal S0: 3/8 leaves present" in w and _PROVED in w
                for w in r.warnings), r.warnings
     assert r.partial_seals == 0, r.warnings  # none _NOT_RECOMPUTED
 
@@ -1684,7 +1684,7 @@ def test_altered_inclusion_proof_fails_naming_the_seq(tmp_path, signer):
     r = verify_bundle(d)
     assert not r.ok
     assert r.first_bad_seq == 4
-    assert "inclusion proof for seq 4" in r.error and "seal S0" in r.error, r.error
+    assert r.error == "proof does not reach merkle_root of seal S0", r.error
 
 
 def test_bundle_without_proofs_keeps_the_boundary_warning(tmp_path, signer):
@@ -1692,7 +1692,7 @@ def test_bundle_without_proofs_keeps_the_boundary_warning(tmp_path, signer):
     r = verify_bundle(d)
     assert r.ok, r.error
     assert r.seals_checked == 1
-    assert any("seal S0 only partially present (3/8 leaves)" in w and _NOT_RECOMPUTED in w
+    assert any("seal S0: 3/8 leaves present" in w and _NOT_RECOMPUTED in w
                for w in r.warnings), r.warnings
     assert r.partial_seals_proved == 0, r.warnings  # none _PROVED
 

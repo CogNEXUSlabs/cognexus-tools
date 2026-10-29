@@ -932,6 +932,186 @@ def cmd_quickstart(_args: argparse.Namespace) -> None:
     run_quickstart_demo(key, base_url=base_url)
 
 
+def failure_lines(seq, error: str) -> list[str]:
+    """The FAILED lines, each within 90 columns.
+
+    A short error is ``FAILED at seq N: <error>`` (or ``FAILED: <error>``
+    when no seq was recorded). A record-set mismatch lists each differing
+    field after the summary, because the joined sentence does not fit.
+    """
+    head = f"FAILED at seq {seq}: " if seq is not None else "FAILED: "
+    text = error or ""
+    full = head + text
+    if len(full) <= 90 or " (" not in text or not text.endswith(")"):
+        return [full]
+    summary, rest = text.split(" (", 1)
+    return [head + summary, *[f"  {part}" for part in rest[:-1].split("; ")]]
+
+
+def verified_line(state: str, signatures_skipped: bool) -> str:
+    signatures = "" if signatures_skipped else " and signatures"
+    return (f"VERIFIED, {state}: leaf hashes, chain links, Merkle roots"
+            f"{signatures} intact.")
+
+
+def _signing_keys_line(root: str) -> str:
+    return f"The signing keys chain to {root}, certified at signing time."
+
+
+_ROOT_OVERRIDE_LINE = (
+    "  ! This attests to your root, not the published CogNEXUS Evidence Root."
+)
+
+
+def audit_verify_sample_lines() -> list[str]:
+    """Every text line of ``artzain audit verify``, at its widest realistic
+    values: a 6-digit seq, a 26-character seal id, a 16-character key id, and
+    a count of 12,105. The width test renders this list."""
+    from artzain.audit_verify import (
+        _PER_RECORD_SUMMARIES,
+        _SEAL_CHAIN_GAPS_COVERING,
+        _handover_unregistered_warning,
+        _partial_seal_detail,
+        _record_set_error,
+        _retired_root_note,
+        _seal_chain_gap_detail,
+        _seq_gap_detail,
+    )
+
+    seal = "S" * 26
+    key = "k" * 16
+    seq = 123456
+    prev = 123455
+    other = 654321
+    count = "12,105"
+    n = 123456
+    lines = [
+        "Audit bundle: evidence.zip",
+        "  leaves checked:     12105",
+        "  seals checked:      12105",
+        "  signatures:         SKIPPED (install 'artzain[verify]')",
+        "  signatures checked: 12105",
+        "  certificates:       12105 checked",
+        _ROOT_OVERRIDE_LINE,
+    ]
+    warnings = [
+        f"key handover {key}->{key} not verified (cryptography missing)",
+        _handover_unregistered_warning(key, key, [key]),
+        _handover_unregistered_warning(key, key, [key, key]),
+        "cryptography not installed; signatures not verified "
+        "(pip install 'artzain[verify]')",
+        "signed manifest not verified (cryptography missing); "
+        "its records are still compared",
+        "signed manifest present but not verified (cryptography missing)",
+        f"signed manifest key {key} is not in the bundle, so custody "
+        "is not verified",
+        "certified bundle without a signed manifest",
+        "key handovers are checked for self-consistency only; "
+        "the manifest is not trusted",
+        f"key {key}: no handover names it (second process, or not authorized)",
+    ]
+    warnings.extend(summary.format(n=count) for summary in _PER_RECORD_SUMMARIES.values())
+    warnings.append(_SEAL_CHAIN_GAPS_COVERING.format(n=count))
+    lines.extend(f"  ! {warning}" for warning in warnings)
+    lines.append("  per-record warnings:")
+    details = [
+        _seq_gap_detail(prev, seq),
+        _seal_chain_gap_detail(seal),
+        _seal_chain_gap_detail(seal, covering=True),
+        _partial_seal_detail(seal, n, n, proved=True),
+        _partial_seal_detail(seal, n, n, proved=False),
+    ]
+    lines.extend(f"    - {detail}" for detail in details)
+    lines.append(f"  (--verbose lists the {count} per-record warnings)")
+    lines.append("")
+    for state in ("SELF-ATTESTED", "ATTESTED"):
+        lines.append(verified_line(state, signatures_skipped=False))
+        lines.append(verified_line(state, signatures_skipped=True))
+    lines.append("Notes on the certificate chain:")
+    reasons = [
+        "no certificate chain in bundle",
+        "cryptography not installed, chain not checked",
+        "no verifiable signed manifest, so the record set is not attested",
+        "no Evidence Root fingerprint pinned (pre-ceremony verifier)",
+        "no Evidence Root public key supplied",
+        "root public key fingerprint mismatch for the pinned Evidence Root",
+        "no valid issuing certificate chains to the root",
+        "no valid deployment certificate (bad signature or validity)",
+        f"leaf seq {seq} lacks a certificate valid at signing time",
+        f"seal {seal} was not certified at signing time",
+        "manifest signer is not a certified deployment key",
+        "no leaves_digest, so the exact leaf set is not bound",
+        "certificate chain is malformed, so provenance was not checked",
+        f"issuing certificate {'C' * 16} signature invalid",
+    ]
+    for reason in reasons:
+        lines.append(f"  self-attested because: {reason}")
+        lines.append(f"  - {reason}")
+    lines.append("  - " + _retired_root_note("ab" * 32))
+    for root in (
+        "the root you supplied",
+        "a retired CogNEXUS Evidence Root",
+        "the CogNEXUS Evidence Root",
+    ):
+        lines.append(_signing_keys_line(root))
+    clauses = [
+        f"first_seq {prev}, expected {seq}",
+        f"last_seq {seq}, expected {other}",
+        f"leaf_count {n}, expected {n - 1}",
+        f"seal_count {n}, expected {n - 1}",
+        "leaves_digest mismatch (exported leaf set altered)",
+    ]
+    errors_at_seq = [
+        "leaf_hash mismatch (record tampered)",
+        "duplicate leaf_hash (record copied into another slot)",
+        f"duplicate leaf seq {seq} (record set padded)",
+        "chain linkage broken",
+        "bad leaf signature",
+        f"no public key {key} for leaf seq {seq}",
+        f"proof names seal {seal} not in the bundle",
+        f"inclusion proof for seq {seq}, but no such leaf is in the bundle",
+        f"duplicate inclusion proof under seal {seal}",
+        f"malformed inclusion proof for seq {seq}",
+        f"seal {seal} commits {prev}..{other}, not this seq",
+        f"proof does not reach merkle_root of seal {seal}",
+        f"deleted leaf, seal {seal} lacks seq {seq}",
+        f"truncated log, seal {seal}, leaves end at {prev}",
+        f"merkle root mismatch for seal {seal}",
+        _record_set_error(True, clauses),
+        _record_set_error(False, clauses),
+    ]
+    for error in errors_at_seq:
+        lines.extend(failure_lines(seq, error))
+    errors_plain = [
+        f"no public key {key} for seal {seal}",
+        f"bad seal signature for {seal}",
+        f"seal_hash mismatch for seal {seal}",
+        f"non-integer seal range for seal {seal} (malformed record)",
+        "non-integer leaf seq (malformed record)",
+        "non-integer inclusion proof seq (malformed record)",
+        "key handovers do not match the signed manifest "
+        "(rotations_digest mismatch)",
+        "inclusion proof set does not match the signed manifest "
+        "(proofs_digest mismatch)",
+        "inclusion proofs differ (proofs_digest mismatch, signature not verified)",
+        "seal set does not match the signed manifest (seals_digest mismatch)",
+        "seals differ (seals_digest mismatch, signature not verified)",
+        "missing key(s) the signed manifest commits to: " + key,
+        "missing key(s) the signed manifest commits to: " + key + ", " + key,
+        "public key differs from bundle key for " + key,
+        "public key differs from bundle key for " + key + ", " + key,
+        "manifest signature invalid (custody broken)",
+        "successor public key does not hash to its key id",
+        "key handover row carries fields outside the allowlist: "
+        "invoice_reference",
+        "key handover carries fields outside the allowlist: invoice_reference",
+        "invalid successor signature on a key handover",
+    ]
+    for error in errors_plain:
+        lines.extend(failure_lines(None, error))
+    return lines
+
+
 def cmd_audit_verify(args: argparse.Namespace) -> None:
     """Verify an audit evidence bundle offline, with no network.
 
@@ -995,9 +1175,7 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
     if result.certificates_checked:
         print(f"  certificates:       {result.certificates_checked} checked")
     if result.root_fingerprint_overridden:
-        print("  ! NON-DEFAULT Evidence Root fingerprint supplied on the "
-              "command line — this attests to YOUR root, not the "
-              "published CogNEXUS Evidence Root.")
+        print(_ROOT_OVERRIDE_LINE)
     for w in result.warnings:
         print(f"  ! {w}")
     if result.warning_details:
@@ -1011,9 +1189,7 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
     print()
     if result.ok:
         state = result.attestation or "SELF-ATTESTED"
-        print(f"VERIFIED, {state} — all leaf hashes, chain links, Merkle roots"
-              + ("" if result.signatures_skipped else " and signatures")
-              + " are intact.")
+        print(verified_line(state, result.signatures_skipped))
         if state == "ATTESTED":
             if result.attestation_reasons:
                 # A tampered issuing certificate beside a valid one is recorded
@@ -1031,14 +1207,13 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
                 root = "a retired CogNEXUS Evidence Root"
             else:
                 root = "the CogNEXUS Evidence Root"
-            print(f"The signing keys chain to {root} and were certified at "
-                  "signing time.")
+            print(_signing_keys_line(root))
         else:
             for reason in result.attestation_reasons:
                 print(f"  self-attested because: {reason}")
         raise SystemExit(0)
-    where = f" (first bad seq: {result.first_bad_seq})" if result.first_bad_seq is not None else ""
-    print(f"FAILED{where}: {result.error}")
+    for line in failure_lines(result.first_bad_seq, result.error or ""):
+        print(line)
     raise SystemExit(1)
 
 

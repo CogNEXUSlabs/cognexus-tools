@@ -46,23 +46,19 @@ _BATCHES = 8
 #: not recomputed".
 _PROVED = (0, 1, 2)
 
-_GAP = ("seq gap {}->{} (range/tenant-filtered export; linkage across the gap "
-        "not checkable offline)")
-_CHAIN_GAP = "seal chain gap before {} (earlier seal not in this bundle)"
-_PARTIAL = ("seal {} only partially present ({}/{} leaves) — boundary of a "
-            "filtered export, root not recomputed")
-_PARTIAL_PROVED = ("seal {} only partially present ({}/{} leaves) — boundary of a "
-                   "filtered export; every present leaf proved included under its "
-                   "merkle_root")
+_GAP = ("seq gap {}->{} (filtered export; linkage across the gap "
+        "not checked offline)")
+_CHAIN_GAP = "seal chain gap before {} (earlier seal not in bundle)"
+_PARTIAL = "seal {}: {}/{} leaves present, root not recomputed"
+_PARTIAL_PROVED = "seal {}: {}/{} leaves present, proved by inclusion"
 
-_SEQ_GAPS = ("{} seq gaps (tenant- or range-filtered export; chain linkage across "
-             "the gaps not checkable offline)")
+_SEQ_GAPS = ("{} seq gaps (filtered export; linkage across gaps not "
+             "checked offline)")
 _SEAL_CHAIN_GAPS = "{} seal chain gaps (earlier seals not in this bundle)"
-_PARTIAL_SEALS = ("{} seals only partially present — boundaries of a filtered "
-                  "export, roots not recomputed")
-_PARTIAL_SEALS_PROVED = ("{} seals only partially present — boundaries of a filtered "
-                         "export; every present leaf proved included under its "
-                         "seal's merkle_root")
+_PARTIAL_SEALS = ("{} seals partly present (filtered export; roots not "
+                  "recomputed)")
+_PARTIAL_SEALS_PROVED = ("{} seals partly present (filtered export; every "
+                         "present leaf proved by inclusion)")
 
 
 @pytest.fixture()
@@ -182,7 +178,7 @@ def test_each_repeated_kind_is_one_line_with_its_count(tmp_path, signer):
     assert _count(r.warnings, "seal chain gap") == 1
     assert _count(r.warnings, "root not recomputed") == 0
     assert _count(r.warnings, "roots not recomputed") == 1
-    assert _count(r.warnings, "proved included") == 1
+    assert _count(r.warnings, "proved by inclusion") == 1
 
 
 def test_the_counts_are_fields_and_the_per_record_lines_are_kept(tmp_path, signer):
@@ -252,7 +248,7 @@ def test_a_failure_still_reports_the_gaps_before_it(tmp_path, signer):
     r = verify_bundle(d)
     assert not r.ok
     assert r.first_bad_seq == 27
-    assert r.error == "leaf_hash mismatch at seq 27 (record tampered)"
+    assert r.error == "leaf_hash mismatch (record tampered)"
     assert r.attestation is None
     # 2->4, 4->6, 6->11, 11->18, 18->20; seq 27 fails before its own gap.
     assert r.warnings == [_SEQ_GAPS.format(5)]
@@ -317,5 +313,5 @@ def test_cli_failure_exit_status_is_unchanged(tmp_path, signer, capsys):
     assert code == 1
     assert _bang_lines(out) == [_SEQ_GAPS.format(5)]
     assert out.rstrip().endswith(
-        "FAILED (first bad seq: 27): leaf_hash mismatch at seq 27 (record tampered)")
+        "FAILED at seq 27: leaf_hash mismatch (record tampered)")
 

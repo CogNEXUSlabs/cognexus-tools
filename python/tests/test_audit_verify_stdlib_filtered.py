@@ -44,9 +44,8 @@ from .test_audit_verify_warning_summary import _tenant_bundle  # noqa: TID252
 
 pytestmark = pytest.mark.skipif(not _HAVE_CRYPTO, reason="cryptography not installed")
 
-_UNVERIFIED = ("signed manifest present but not verified (cryptography missing): the "
-               "records it commits to are compared with the bundle, but nothing "
-               "proves the server signed them")
+_UNVERIFIED = ("signed manifest not verified (cryptography missing); "
+               "its records are still compared")
 
 
 @pytest.fixture()
@@ -168,16 +167,14 @@ def test_an_intact_tenant_export_verifies_without_cryptography(tmp_path, signer,
     assert r.attestation == "SELF-ATTESTED"
     assert (r.leaves_checked, r.seals_checked, r.signatures_checked) == (8, 6, 0)
     assert r.warnings == [
-        "cryptography not installed — signatures NOT verified. "
-        "Install with: pip install 'artzain[verify]'",
-        "7 seq gaps (tenant- or range-filtered export; chain linkage across the "
-        "gaps not checkable offline)",
+        "cryptography not installed; signatures not verified "
+        "(pip install 'artzain[verify]')",
+        "7 seq gaps (filtered export; linkage across gaps not checked offline)",
         _UNVERIFIED,
-        "3 seals only partially present — boundaries of a filtered export; every "
-        "present leaf proved included under its seal's merkle_root",
+        "3 seals partly present (filtered export; every present leaf proved "
+        "by inclusion)",
         "2 seal chain gaps (earlier seals not in this bundle)",
-        "3 seals only partially present — boundaries of a filtered export, roots "
-        "not recomputed",
+        "3 seals partly present (filtered export; roots not recomputed)",
     ]
 
 
@@ -187,9 +184,9 @@ def test_a_removed_leaf_fails_on_the_unverified_manifest(tmp_path, signer, monke
     assert not r.ok
     assert r.first_bad_seq == 2
     assert r.error == (
-        "the manifest (signature not verified) commits to records that are not "
-        "present — records suppressed or substituted, or the manifest edited "
-        "(leaf_count 8≠7, leaves_digest mismatch (exported leaf set altered))")
+        "signature not verified: records suppressed, substituted, or edited "
+        "(leaf_count 8, expected 7; leaves_digest mismatch "
+        "(exported leaf set altered))")
 
 
 def test_a_leaf_removed_under_a_boundary_seal_is_now_caught(tmp_path, signer, monkeypatch):
@@ -207,8 +204,8 @@ def test_dropped_proofs_fail_on_the_unverified_manifest(tmp_path, signer, monkey
     (d / "proofs.jsonl").unlink()
     r = _stdlib(monkeypatch, d)
     assert not r.ok
-    assert r.error == ("inclusion proof set does not match the manifest, whose signature "
-                       "was not verified (proofs_digest mismatch)")
+    assert r.error == ("inclusion proofs differ (proofs_digest mismatch, "
+                       "signature not verified)")
 
 
 def test_a_manifest_the_bundle_has_no_key_for_relaxes_nothing(tmp_path, signer, monkeypatch):
@@ -216,7 +213,7 @@ def test_a_manifest_the_bundle_has_no_key_for_relaxes_nothing(tmp_path, signer, 
     d = _tenant_export_signed_by_a_key_not_in_the_bundle(tmp_path, signer)
     r = _stdlib(monkeypatch, d)
     assert not r.ok
-    assert r.error.startswith("deleted leaf — seal S1"), r.error
+    assert r.error.startswith("deleted leaf, seal S1"), r.error
     assert "signed manifest present but not verified (cryptography missing)" in r.warnings
     assert _UNVERIFIED not in r.warnings
 
@@ -225,7 +222,7 @@ def test_an_unsigned_manifest_relaxes_nothing(tmp_path, signer, monkeypatch):
     d = _tenant_export_under_an_unsigned_manifest(tmp_path, signer)
     r = _stdlib(monkeypatch, d)
     assert not r.ok
-    assert r.error.startswith("deleted leaf — seal S1"), r.error
+    assert r.error.startswith("deleted leaf, seal S1"), r.error
     assert not any("manifest" in w for w in r.warnings), r.warnings
 
 
@@ -240,7 +237,8 @@ def test_a_forged_manifest_signature_is_what_this_install_cannot_see(
     assert av.verify_bundle(d).error == "manifest signature invalid (custody broken)"
     r = _stdlib(monkeypatch, d)
     assert r.ok and r.signatures_skipped
-    assert r.warnings[0].startswith("cryptography not installed — signatures NOT verified")
+    assert r.warnings[0].startswith(
+        "cryptography not installed; signatures not verified")
     assert _UNVERIFIED in r.warnings
 
 
@@ -252,8 +250,8 @@ def test_attestation_is_unchanged_without_cryptography(tmp_path, signer, monkeyp
     r = _stdlib(monkeypatch, d, root_fingerprint=a.root_fingerprint)
     assert r.ok, r.error
     assert r.attestation == "SELF-ATTESTED"
-    assert r.attestation_reasons == ["cryptography not installed — certificate chain "
-                                     "not evaluated"]
+    assert r.attestation_reasons == [
+        "cryptography not installed, chain not checked"]
 
 
 def test_cli_verifies_an_intact_tenant_export_without_cryptography(
@@ -264,4 +262,5 @@ def test_cli_verifies_an_intact_tenant_export_without_cryptography(
     assert code == 0, out
     assert "  signatures:         SKIPPED (install 'artzain[verify]')" in out
     assert f"  ! {_UNVERIFIED}" in out
-    assert "VERIFIED, SELF-ATTESTED — all leaf hashes, chain links, Merkle roots are intact." in out
+    assert ("VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots "
+            "intact.") in out

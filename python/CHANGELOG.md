@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.60
+
+### Changed
+
+- **`artzain audit verify` rewords its text report and the `--json`
+  `warnings`, `warning_details` and `error` strings.** Every printed line
+  fits in 90 columns and is ASCII, so a `FAILED` verdict still prints when
+  stdout is a Windows console code page. The keys and the counts are
+  unchanged, and `first_bad_seq` stays its own field. A failure prints
+  `FAILED at seq N: <error>` (or `FAILED: <error>`).
+- **An evidence export ships only the seals that cover an exported leaf.**
+  A sealed batch whose leaves were all deleted no longer rides along as a
+  seal with 0 leaves present. The signed manifest sets `seal_scope` to
+  `covering` and commits `seals_digest` (the digest of an empty list when
+  no seal ships). `artzain audit verify` fails when that digest does not
+  match, and a bundle without the field verifies as before. A covering
+  bundle reports a seal chain gap as `N seal chain gaps (bundle carries
+  only seals over these records)`.
+
 ## 0.6.59
 
 ### Fixed
