@@ -268,7 +268,7 @@ def test_a_handover_naming_an_unregistered_key_does_not_fail_the_bundle(tmp_path
     r = verify_bundle(d)
     assert r.ok, r.error
     assert r.rotations_checked == 1, "the signatures did verify"
-    assert any("carries no public key for" in w for w in r.warnings), r.warnings
+    assert any("no public key for" in w for w in r.warnings), r.warnings
     # The successor signed the leaves and a sound handover names it, so it is
     # accounted for. Accusing it here would be the false positive that made a
     # stdlib-only install shout at every rotated bundle.
@@ -480,4 +480,4 @@ def test_a_record_pem_that_disagrees_with_the_registry_fails(tmp_path):
     (d / "keys.json").write_text(json.dumps(keys), encoding="utf-8")
     r = verify_bundle(d)
     assert not r.ok
-    assert "differs from the one the bundle registers" in (r.error or ""), r.error
+    assert "public key differs from bundle key" in (r.error or ""), r.error
