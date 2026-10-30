@@ -24,6 +24,7 @@ from __future__ import annotations
 import atexit
 import base64
 import http.client
+import io
 import json
 import logging
 import os
@@ -37,6 +38,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import urllib.response
 from typing import Any, NamedTuple, Optional
 
 from artzain._surrogates import replace_unpaired_surrogates, without_unpaired_surrogates
@@ -384,8 +386,34 @@ def _urlopen(req: urllib.request.Request, *, timeout: float) -> Any:
     key or a session token goes through here: ``decide()``, the key check and
     the policy-rules fetch in this module, the CLI's and ``artzain gui``'s.
     The event and policy-decision posts go through :class:`_CloudTransport`,
-    which follows no redirect either."""
+    which follows no redirect either.
+
+    A request :func:`_keep_connection` marked (``decide()``'s) goes on a kept
+    connection (:class:`_KeptConnections`) instead, answered the same way: a
+    response for a 2xx status, ``urllib.error.HTTPError`` for any other."""
+    if getattr(req, _KEEP_MARK, False):
+        answer = _KEPT.open(req, timeout)
+        if answer is not None:
+            return answer
     return _api_opener().open(req, timeout=timeout)
+
+
+#: The attributes :func:`_keep_connection` sets on a request.
+_KEEP_MARK = "_artzain_keep_connection"
+_RESEND_MARK = "_artzain_resend_after_send"
+
+
+def _keep_connection(req: urllib.request.Request, *,
+                     resend_after_send: bool = False) -> urllib.request.Request:
+    """Mark *req* for a kept connection (:class:`_KeptConnections`).
+
+    With *resend_after_send*, a request a kept connection lost before any
+    answer came is sent once more, on a new connection, although the server
+    may have read it. Only for a request the server answers a second copy of
+    with the first's answer: a decision with a ``request_id`` it replays."""
+    setattr(req, _KEEP_MARK, True)
+    setattr(req, _RESEND_MARK, bool(resend_after_send))
+    return req
 
 
 def _probe_api_key_via_events(*, timeout_sec: float = 8.0) -> dict[str, Any]:
@@ -627,6 +655,26 @@ class _QueuedPost(NamedTuple):
     base_source: str
 
 
+def _https_through_proxy(proxy: str, host: str, port: Optional[int], timeout_sec: float,
+                         context: Optional[ssl.SSLContext] = None) -> http.client.HTTPSConnection:
+    """An HTTPS connection to *host* through the HTTP proxy at *proxy*, which
+    is asked to ``CONNECT``: it carries the TLS session and does not see
+    inside it. The proxy URL's credentials go to the proxy as
+    ``Proxy-Authorization: Basic``, never to *host*."""
+    pp = urllib.parse.urlsplit(proxy)
+    conn = http.client.HTTPSConnection(pp.hostname or proxy, pp.port, timeout=timeout_sec,
+                                       context=context)
+    tunnel_headers: dict[str, str] = {}
+    if pp.username is not None:
+        cred = urllib.parse.unquote(pp.username)
+        if pp.password is not None:
+            cred += ":" + urllib.parse.unquote(pp.password)
+        token = base64.b64encode(cred.encode("utf-8")).decode("ascii")
+        tunnel_headers["Proxy-Authorization"] = "Basic " + token
+    conn.set_tunnel(host, port, headers=tunnel_headers)
+    return conn
+
+
 class _CloudTransport:
     """One keep-alive ``http.client`` connection reused across telemetry POSTs.
 
@@ -657,19 +705,7 @@ class _CloudTransport:
         if scheme == "https":
             proxy = urllib.request.getproxies().get("https")
             if proxy and not urllib.request.proxy_bypass(host):
-                pp = urllib.parse.urlsplit(proxy)
-                conn = http.client.HTTPSConnection(
-                    pp.hostname or proxy, pp.port, timeout=timeout_sec
-                )
-                tunnel_headers: dict[str, str] = {}
-                if pp.username is not None:
-                    cred = urllib.parse.unquote(pp.username)
-                    if pp.password is not None:
-                        cred += ":" + urllib.parse.unquote(pp.password)
-                    token = base64.b64encode(cred.encode("utf-8")).decode("ascii")
-                    tunnel_headers["Proxy-Authorization"] = "Basic " + token
-                conn.set_tunnel(host, port, headers=tunnel_headers)
-                return conn
+                return _https_through_proxy(proxy, host, port, timeout_sec)
             return http.client.HTTPSConnection(host, port, timeout=timeout_sec)
         if scheme == "http":
             return http.client.HTTPConnection(host, port, timeout=timeout_sec)
@@ -758,6 +794,209 @@ def _server_closed(conn: Any) -> bool:
         return bool(readable)
     except (OSError, ValueError):
         return True
+
+
+#: Errors that say a kept connection was closed under a request before any
+#: answer came: the server's idle close crossing the request on the wire.
+_LOST_BEFORE_ANSWER = (ConnectionResetError, BrokenPipeError, ConnectionAbortedError,
+                       ssl.SSLEOFError, ssl.SSLZeroReturnError)
+
+
+class _KeptConnections:
+    """Kept-alive connections for the requests :func:`_keep_connection`
+    marks (``decide()``'s), shared by the process's threads.
+
+    urllib asks for ``Connection: close`` and opens a new connection for each
+    request, so every decision paid the DNS lookup and the TCP and TLS
+    handshakes before its request: from Frankfurt, about 480 ms of a 690 ms
+    decision (decide-latency plan, step 3.1). Here a connection is kept for
+    the next request, from any thread, one request at a time.
+
+    What :func:`_api_opener` promises holds here too. Nothing is followed: a
+    3xx is an ``HTTPError`` like any other status that is not 2xx. The
+    proxies are the environment's (or the system's), ``https`` through
+    ``CONNECT`` (:func:`_https_through_proxy`); a request for an ``http`` URL
+    that a proxy would carry goes to urllib, as before. A change to the
+    proxies, or to what a TLS context is made from, retires what is kept.
+
+    A kept connection the server has closed, or one idle for longer than
+    :data:`_CONNECTION_IDLE_LIMIT_SEC`, is not used. A request is sent again,
+    once and on a new connection, when sending it failed on a kept
+    connection; and, for a request marked so, when a kept connection was
+    closed under it before any answer came. Never after a timeout: the
+    server may be deciding it. A child process after ``fork`` does not use
+    its parent's connections.
+    """
+
+    MAX_IDLE = 4
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        #: ``(scheme, host, port, setting)`` -> ``[(connection, idle since)]``,
+        #: the youngest last.
+        self._idle: dict[tuple[Any, ...], list[tuple[Any, float]]] = {}
+        self._setting: Optional[tuple[Any, ...]] = None
+        self._context: Optional[ssl.SSLContext] = None
+        self._pid = os.getpid()
+
+    def after_fork_in_child(self) -> None:
+        """Forget the parent's connections, unclosed: the sockets are the
+        parent's too. A lock another thread held at the fork stays held in
+        the child, so the lock is a new one."""
+        self._lock = threading.Lock()
+        self._idle = {}
+        self._pid = os.getpid()
+
+    def close(self) -> None:
+        with self._lock:
+            kept, self._idle = self._idle, {}
+        for pairs in kept.values():
+            for conn, _since in pairs:
+                conn.close()
+
+    def _refresh(self) -> tuple[dict[str, str], tuple[Any, ...]]:
+        """The proxies for this request, and the setting it is kept under.
+        Connections kept under another setting, or by another process, are
+        retired."""
+        proxies = {
+            scheme.lower(): url
+            for scheme, url in urllib.request.getproxies().items()
+            if scheme.lower() in ("http", "https")
+        }
+        setting = (
+            tuple(sorted(proxies.items())),
+            ssl._create_default_https_context,
+            os.environ.get("SSL_CERT_FILE"),
+            os.environ.get("SSL_CERT_DIR"),
+        )
+        retired: list[Any] = []
+        with self._lock:
+            if os.getpid() != self._pid:
+                self._idle, self._pid = {}, os.getpid()
+            if setting != self._setting:
+                retired = [conn for pairs in self._idle.values() for conn, _since in pairs]
+                self._idle, self._setting, self._context = {}, setting, None
+        for conn in retired:
+            conn.close()
+        return proxies, setting
+
+    def _tls(self) -> ssl.SSLContext:
+        """One context for the connections made under the current setting,
+        as ``http.client`` makes one for each: building one loads the
+        certificate store."""
+        with self._lock:
+            context = self._context
+        if context is None:
+            context = ssl._create_default_https_context()
+            context.set_alpn_protocols(["http/1.1"])
+            with self._lock:
+                self._context = self._context or context
+                context = self._context
+        return context
+
+    def _take(self, key: tuple[Any, ...]) -> Any:
+        """The youngest kept connection for *key* that can still be used."""
+        while True:
+            with self._lock:
+                pairs = self._idle.get(key)
+                if not pairs:
+                    return None
+                conn, since = pairs.pop()
+            if (getattr(conn, "sock", None) is not None
+                    and time.monotonic() - since <= _CONNECTION_IDLE_LIMIT_SEC
+                    and not _server_closed(conn)):
+                return conn
+            conn.close()
+
+    def _keep(self, key: tuple[Any, ...], conn: Any) -> None:
+        """Keep *conn* for the next request under *key*, unless the setting
+        it was made under has been retired while it carried this one."""
+        surplus = []
+        with self._lock:
+            if key[3] != self._setting:
+                surplus.append(conn)
+            else:
+                pairs = self._idle.setdefault(key, [])
+                pairs.append((conn, time.monotonic()))
+                while len(pairs) > self.MAX_IDLE:
+                    surplus.append(pairs.pop(0)[0])
+        for old in surplus:
+            old.close()
+
+    def open(self, req: urllib.request.Request, timeout: float) -> Any:
+        """*req*'s answer, as :func:`_urlopen` gives one; None when urllib
+        is to send it instead (a URL this does not take, or an ``http`` one
+        a proxy would carry)."""
+        try:
+            parts = urllib.parse.urlsplit(req.full_url)
+            port = parts.port
+        except ValueError:
+            return None
+        scheme, host = parts.scheme, parts.hostname
+        if scheme not in ("http", "https") or not host:
+            return None
+        proxies, setting = self._refresh()
+        proxy = proxies.get(scheme)
+        if proxy and urllib.request.proxy_bypass(host):
+            proxy = None
+        if proxy and scheme == "http":
+            return None
+        key = (scheme, host, port, setting)
+        method, path, body = req.get_method(), req.selector, req.data
+        headers = dict(req.header_items())
+        resend_after_send = bool(getattr(req, _RESEND_MARK, False))
+        for attempt in (1, 2):
+            conn = self._take(key) if attempt == 1 else None
+            reused = conn is not None
+            if conn is None:
+                if scheme == "https":
+                    conn = (_https_through_proxy(proxy, host, port, timeout, self._tls()) if proxy
+                            else http.client.HTTPSConnection(host, port, timeout=timeout,
+                                                             context=self._tls()))
+                else:
+                    conn = http.client.HTTPConnection(host, port, timeout=timeout)
+            conn.timeout = timeout
+            if conn.sock is not None:
+                conn.sock.settimeout(timeout)
+            try:
+                conn.request(method, path, body=body, headers=headers)
+            except Exception as exc:
+                conn.close()
+                # Not sent whole, so not acted on: once more, on a new
+                # connection. A send that timed out met a slow server.
+                if (attempt == 1 and reused and not isinstance(exc, TimeoutError)
+                        and isinstance(exc, (http.client.HTTPException, OSError))):
+                    continue
+                if isinstance(exc, OSError):
+                    # As urllib raises one, so a certificate that does not
+                    # verify (an OSError and a ValueError) is not taken for a
+                    # setting no request can carry.
+                    raise urllib.error.URLError(exc) from exc
+                raise
+            try:
+                answer = conn.getresponse()
+                data = answer.read()
+            except Exception as exc:
+                conn.close()
+                if (attempt == 1 and reused and resend_after_send
+                        and isinstance(exc, _LOST_BEFORE_ANSWER)):
+                    continue
+                raise
+            if conn.sock is not None:  # http.client closes one the answer said it would
+                self._keep(key, conn)
+            else:
+                conn.close()
+            if 200 <= answer.status < 300:
+                return urllib.response.addinfourl(io.BytesIO(data), answer.msg, req.full_url,
+                                                  answer.status)
+            raise urllib.error.HTTPError(req.full_url, answer.status, answer.reason, answer.msg,
+                                         io.BytesIO(data))
+        raise RuntimeError("unreachable")  # pragma: no cover
+
+
+_KEPT = _KeptConnections()
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_KEPT.after_fork_in_child)
 
 
 class _CloudWorker:

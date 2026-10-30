@@ -61,6 +61,21 @@ a dashboard JWT and **not** an envelope `cnxe_…` key). Optional:
 | HTTP 503 / 401 / 422 / missing key | `{ block: true }` (fail closed) |
 | a redirect (HTTP 3xx) | `{ block: true }`: not followed, so the key stays with the configured host |
 
+## Kept connection (v0.2.8, default on)
+
+The plugin keeps its connection to the Decision API open for 60 s between
+gated calls, as the Python SDK does. Node's `fetch` keeps one for 4 s, so a
+tool call more than 4 s after the last one paid for a new connection, a DNS
+lookup and the TCP and TLS handshakes, before its decision: far from the
+engine, most of the decision's time. The timeout, the redirects that are not
+followed and the certificate checks are unchanged.
+
+It applies while the Gateway runs on Node's own connection settings. A
+Gateway that set its own keeps them, and the plugin's requests use them as
+before: a proxy (`NODE_USE_ENV_PROXY`, undici's `ProxyAgent`) or a
+certificate authority set in code. `NODE_EXTRA_CA_CERTS` works either way.
+Set `COGNEXUS_KEEP_ALIVE=0` on the Gateway to turn it off.
+
 ## Instance announce (v0.2, opt-in)
 
 Instances no scanner can reach (laptops, home labs) can self-register with

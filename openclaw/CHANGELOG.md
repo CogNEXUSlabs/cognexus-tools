@@ -4,6 +4,19 @@ All notable changes to `@cognexuslabs/openclaw-artzain`. Headings are the
 bare version (`## 0.2.2`): the mirror's `publish-npm.yml` cuts the GitHub
 release notes for tag `openclaw-v<version>` from the matching section.
 
+## 0.2.8
+
+### Changed
+
+- **A tool call after a quiet spell no longer opens a new connection.** Node's
+  `fetch` keeps an idle connection for 4 s, so a tool call more than 4 s
+  after the last one paid for the DNS lookup and the TCP and TLS handshakes
+  before its decision: far from the engine, most of the decision's time. The
+  plugin now keeps the connection for 60 s, as the Python SDK does, while the
+  Gateway runs on Node's own connection settings. A Gateway that set its own,
+  a proxy or a certificate authority set in code, keeps them, and the
+  requests go out on them as before. `COGNEXUS_KEEP_ALIVE=0` turns it off.
+
 ## 0.2.7
 
 ### Changed

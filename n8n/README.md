@@ -36,6 +36,21 @@ id — `n8n-<uuid>-<item>` — so the key is still unique per call. Either way
 the value is cut to the server's cap of 64 characters before it is sent as
 `request_id`.
 
+## Kept connection (0.1.7)
+
+Both nodes keep their connection to the engine open for 60 s between
+requests, as the Python SDK does. Node's `fetch` keeps one for 4 s, so an
+item more than 4 s after the last request paid for a new connection, a DNS
+lookup and the TCP and TLS handshakes, before its answer: far from the
+engine, most of a decision's time. The timeout, the redirects that are not
+followed and the certificate checks are unchanged.
+
+It applies while n8n runs on Node's own connection settings. An n8n that set
+its own keeps them, and the nodes' requests use them as before: a proxy
+(`NODE_USE_ENV_PROXY`, undici's `ProxyAgent`) or a certificate authority set
+in code. `NODE_EXTRA_CA_CERTS` works either way. Set `COGNEXUS_KEEP_ALIVE=0`
+in n8n's environment to turn it off.
+
 ## What this is not
 
 - Not a Connectors-panel card named n8n.

@@ -1415,9 +1415,15 @@ def warm() -> bool:
     inside a governed write, both eat into the gateway's timeout. Raises
     :class:`transport.SettingsError` for a setting that cannot be
     honoured; an engine that cannot be reached is not an error here.
+
+    The warm request (:meth:`transport.EngineClient.warm`) says who sends
+    it, as every request to the engine does, and carries no key: the edge
+    in front of the hosted engine allowlists the SDK's User-Agent.
     """
+    from artzain import cloud
+
     client = _client()
-    return client.warm() if client is not None else False
+    return client.warm(headers=cloud._api_request_headers(None)) if client is not None else False
 
 
 class Housekeeper:
