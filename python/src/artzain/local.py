@@ -708,16 +708,20 @@ def run_status(manifest_src: str | None, out=None) -> None:
         print(f"Engine    : {payload.get('status')} "
               f"(profile={payload.get('profile')})", file=out)
         trial = payload.get("trial") or {}
+        # The end date is what an operator checks after applying a trial
+        # extension: /health carries it, the days added need a signed-in read.
+        ends = str(trial.get("expires_at") or "")[:10]
         if trial.get("applies"):
             if trial.get("expired"):
-                print("Trial     : EXPIRED — new connectors/agents/keys are "
-                      "paused; decisions keep sealing. Import a licence "
-                      "certificate: artzain local activate <cert.json> "
-                      "(it can sign you in with your dashboard email — no "
-                      "API key needed).", file=out)
+                print("Trial     : EXPIRED" + (f" (ended {ends})" if ends else "") +
+                      " — new connectors/agents/keys are paused; decisions "
+                      "keep sealing. Import a licence certificate or a trial "
+                      "extension file from CogNEXUS: artzain local activate "
+                      "<file.json> (it can sign you in with your dashboard "
+                      "email — no API key needed).", file=out)
             else:
                 print(f"Trial     : {trial.get('days_remaining')} day(s) "
-                      "remaining", file=out)
+                      "remaining" + (f", ends {ends}" if ends else ""), file=out)
         print(f"Dashboard : {base_url()}/dashboard.html", file=out)
     if pins:
         try:

@@ -781,7 +781,7 @@
          },
          {
           "name": "install",
-          "help": "Verify a certificate to the Evidence Root and install it.",
+          "help": "Verify a certificate to the Evidence Root and install it, or apply a signed trial extension.",
           "parser": {
            "prog": "artzain licence install",
            "usage": null,
@@ -835,7 +835,7 @@
              "default": null,
              "type": null,
              "required": true,
-             "help": "Path to the certificate JSON.",
+             "help": "Path to the certificate JSON, or to a trial extension file from CogNEXUS.",
              "metavar": null,
              "choices": null
             },
@@ -2973,7 +2973,7 @@
          },
          {
           "name": "activate",
-          "help": "Verify and install a licence certificate into the local engine (alias for `licence install`; signs in with your dashboard email if no API key is configured).",
+          "help": "Verify and install a licence certificate, or apply a trial extension, in the local engine (alias for `licence install`; signs in with your dashboard email if no API key is configured).",
           "parser": {
            "prog": "artzain local activate",
            "usage": null,
@@ -3023,7 +3023,7 @@
              "default": null,
              "type": null,
              "required": true,
-             "help": "Path to the certificate JSON.",
+             "help": "Path to the certificate JSON, or to a trial extension file from CogNEXUS.",
              "metavar": null,
              "choices": null
             },
