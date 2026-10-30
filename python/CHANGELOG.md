@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.62
+
+### Added
+
+- **`artzain licence install` and `artzain local activate` apply a trial
+  extension.** CogNEXUS lengthens a self-hosted trial with a signed
+  `cognexus-trial-extension` file, because a certificate would end the trial
+  for good. Both commands read the file's format: an extension, as the bundle
+  `issue_trial_extension.py` writes or as a bare record, goes to the engine's
+  `POST /api/v1/licence/trial-extension`, which checks it to the Evidence Root
+  and applies it once; a certificate takes its own path as before. Success
+  prints the extension, the days added and the new end date, and says when
+  the Evidence Root in the file is not pinned by the install. Each refusal the
+  engine names (already applied, another install, apply-by passed, already
+  certified, over the 180-day total, altered, not chained, issuer expired,
+  root not pinned) prints its message and what to do, and exits 1.
+  `--offline-only` has nothing to write for an extension and exits 2.
+
+### Changed
+
+- **`artzain local status` shows when the trial ends**, next to the days
+  left, so an operator can see that an extension took effect. Its
+  expired-trial hint names a trial extension file as well as a certificate.
+
 ## 0.6.61
 
 ### Changed

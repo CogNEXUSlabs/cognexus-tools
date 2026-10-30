@@ -1354,6 +1354,86 @@ def cmd_licence_request(args: argparse.Namespace) -> None:
     print("no private key ever leaves this deployment.")
 
 
+#: A signed trial extension (``scripts/issue_trial_extension.py``): it moves
+#: the trial's end date and nothing else, because a certificate would end the
+#: trial for good. The engine checks it; there is no offline verifier here.
+_TRIAL_EXTENSION_FORMAT = "cognexus-trial-extension"
+_TRIAL_EXTENSION_BUNDLE_FORMAT = "cognexus-trial-extension-bundle"
+
+#: What to do about each refusal the engine names (``detail.error`` from
+#: ``POST /api/v1/licence/trial-extension``).
+_TRIAL_EXTENSION_FIXES = {
+    "already_applied": "Nothing to do: this extension is already in effect.",
+    "wrong_install": ("This file was issued for a different install. Send CogNEXUS this "
+                      "install's id (the licence card's Install id row)."),
+    "apply_by_passed": "Its apply-by date has passed. Ask CogNEXUS to issue a new one.",
+    "install_certified": ("This install holds a licence certificate, so it is no longer on "
+                          "trial and an extension changes nothing."),
+    "cap_exceeded": ("This install has used its 180 days of trial extensions. Ask CogNEXUS "
+                     "about a licence certificate."),
+    "bad_signature": "The file was altered or damaged. Ask CogNEXUS to send it again.",
+    "issuer_not_chained": "The file does not chain to the Evidence Root. Ask CogNEXUS for a new file.",
+    "issuer_expired": ("The issuing certificate was not valid when the file was signed. Ask "
+                       "CogNEXUS for a new file."),
+    "root_not_pinned": ("The file's Evidence Root is not one this install trusts. Ask CogNEXUS "
+                        "for a new file."),
+    "malformed": "This is not a usable trial-extension file. Ask CogNEXUS to send it again.",
+    "trial_exempt": "The trial does not apply to this installation.",
+}
+
+
+def _apply_trial_extension(args: argparse.Namespace, loaded: dict) -> None:
+    """Send a trial extension to the engine, which checks and applies it once."""
+    if getattr(args, "offline_only", False):
+        print("A trial extension is checked and applied by the deployment; "
+              "--offline-only has nothing to write. Run without it.", file=sys.stderr)
+        raise SystemExit(2)
+    if loaded.get("format") == _TRIAL_EXTENSION_BUNDLE_FORMAT:
+        body = {"trial_extension": loaded.get("trial_extension")}
+        for key in ("issuing_certificates", "root_public_key_pem"):
+            if loaded.get(key):
+                body[key] = loaded[key]
+    else:
+        body = {"trial_extension": loaded}
+    if getattr(args, "root_key", None):
+        body["root_public_key_pem"] = Path(args.root_key).read_text(encoding="utf-8")
+    if getattr(args, "issuing", None):
+        issued = _licence_read_json(args.issuing)
+        body["issuing_certificates"] = (issued if isinstance(issued, list)
+                                        else issued.get("issuing_certificates") or [issued])
+
+    base = _licence_base_url(args)
+    status, payload = _http_json("POST", f"{base}/api/v1/licence/trial-extension",
+                                 headers=_licence_auth_headers(args), body=body,
+                                 timeout_sec=120.0)
+    if not 200 <= status < 300:
+        detail = payload.get("detail") if isinstance(payload, dict) else payload
+        if isinstance(detail, dict) and detail.get("message"):
+            print(f"REFUSED: {detail['message']}", file=sys.stderr)
+            fix = _TRIAL_EXTENSION_FIXES.get(str(detail.get("error") or ""))
+            if fix:
+                print(f"  {fix}", file=sys.stderr)
+        else:
+            _print_licence_refusal(base, status, detail)
+        print("Nothing was applied.", file=sys.stderr)
+        raise SystemExit(1)
+
+    result = payload if isinstance(payload, dict) else {}
+    trial = result.get("trial") if isinstance(result.get("trial"), dict) else {}
+    ends = str(result.get("expires_at") or trial.get("expires_at") or "")[:10]
+    print(f"Trial extension {result.get('extension_id')} applied: "
+          f"+{result.get('extra_days')} days.")
+    if ends:
+        left = trial.get("days_remaining")
+        print(f"  Trial now ends: {ends}" + (f" ({left} days left)." if left is not None else "."))
+    if result.get("pinned") is False:
+        # As for a certificate: "checked to the Evidence Root" would be a
+        # claim about CogNEXUS that the check did not make.
+        print("  ! The Evidence Root in the file is not pinned by this install, so it")
+        print("    was checked against the root it carries: a statement about internal")
+        print("    consistency, not about CogNEXUS.")
+
+
 def cmd_licence_install(args: argparse.Namespace) -> None:
     """Verify a certificate to the Evidence Root, then install it.
 
@@ -1362,6 +1442,9 @@ def cmd_licence_install(args: argparse.Namespace) -> None:
     what this install is entitled to, so it is checked before it is believed -
     printing an unverified validity window back to the operator as fact is
     worse than having no command at all.
+
+    A trial extension file goes to the engine instead (``_apply_trial_extension``):
+    the engine checks it and applies it once.
     """
     from artzain.licence import verify_certificate_offline
 
@@ -1370,6 +1453,9 @@ def cmd_licence_install(args: argparse.Namespace) -> None:
         print(f"{args.certificate} is not a certificate or a certificate "
               "bundle.", file=sys.stderr)
         raise SystemExit(2)
+    if loaded.get("format") in (_TRIAL_EXTENSION_FORMAT, _TRIAL_EXTENSION_BUNDLE_FORMAT):
+        _apply_trial_extension(args, loaded)
+        return
     # `issue_deployment_cert.py --csr` hands the customer a bundle: the
     # certificate, the issuing certificates that signed it, and the Evidence
     # Root public key. Taking only the bare certificate here meant the file
@@ -2118,7 +2204,8 @@ def _local_flags(parser: argparse.ArgumentParser) -> None:
 def _licence_cert_flags(parser_: argparse.ArgumentParser) -> None:
     """Shared by `licence install` and its alias `local activate` — one
     flag set, so an addition to either cannot silently miss the other."""
-    parser_.add_argument("certificate", help="Path to the certificate JSON.")
+    parser_.add_argument("certificate", help="Path to the certificate JSON, or to a trial "
+                                              "extension file from CogNEXUS.")
     parser_.add_argument("--chain", default=None,
                          help="Certificate chain JSON (root key + issuing certs).")
     parser_.add_argument("--root-key", default=None,
@@ -2301,7 +2388,8 @@ def _add_licence_parser(sub: argparse._SubParsersAction) -> None:
     p_lreq.set_defaults(func=cmd_licence_request)
 
     p_lins = licence_sub.add_parser(
-        "install", help="Verify a certificate to the Evidence Root and install it.")
+        "install", help="Verify a certificate to the Evidence Root and install it, "
+                        "or apply a signed trial extension.")
     _licence_cert_flags(p_lins)
     p_lins.add_argument("--offline-only", action="store_true",
                         help="Verify and write the file, but do not install.")
@@ -2527,8 +2615,9 @@ def _add_local_parser(sub: argparse._SubParsersAction) -> None:
     lc.set_defaults(func=cmd_local_create_admin)
 
     la = local_sub.add_parser(
-        "activate", help="Verify and install a licence certificate into the "
-                         "local engine (alias for `licence install`; signs "
+        "activate", help="Verify and install a licence certificate, or apply a "
+                         "trial extension, in the local engine (alias for "
+                         "`licence install`; signs "
                          "in with your dashboard email if no API key is "
                          "configured).")
     _licence_cert_flags(la)
