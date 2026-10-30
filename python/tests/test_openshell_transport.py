@@ -724,31 +724,75 @@ def test_a_refusals_body_is_a_detail_and_its_status_stands(servers):
 # ---------------------------------------------------------------------------
 
 
-def test_warm_opens_a_connection_and_the_next_request_uses_it(servers):
+def test_warm_sends_a_health_request_and_the_next_request_uses_its_connection(servers):
+    # A connection that only opened is warm to the nearest edge. One that
+    # carried a request is warm all the way: a CDN in front of the engine
+    # keeps its own connection to the engine for the next request from that
+    # edge server (decide-latency plan, step 3.2).
     engine = servers(_Engine)
     client = _client(engine.url)
     assert client.warm() is True
-    assert (_connections(engine, 1), client.idle, engine.requests) == (1, 1, [])
+    assert (_connections(engine, 1), client.idle) == (1, 1)
+    assert [(r["method"], r["path"]) for r in engine.requests] == [("GET", "/health")]
+    assert "X-Api-Key" not in engine.requests[0]["headers"], "a health request carries no key"
     assert _get(client, engine.url)[0] == 200
     assert engine.connections == 1
 
 
-def test_warm_renews_a_connection_that_has_waited_and_leaves_a_young_one(servers):
+def test_warm_sends_down_a_connection_that_has_waited_and_leaves_a_young_one(servers):
     now = [1000.0]
     engine = servers(_Engine)
     client = transport.EngineClient(transport.Settings(*transport._origin(engine.url)),
                                     clock=lambda: now[0])
     client.warm()
     now[0] += transport.RENEW_SECONDS
-    assert client.warm() is True and _connections(engine, 1) == 1  # young enough
+    assert client.warm() is True and len(engine.requests) == 1  # young enough
     now[0] += 0.1
     assert client.warm() is True
-    assert (_connections(engine, 2), client.idle) == (2, 1)
+    # The same connection, kept by the request it carried, not a new one.
+    assert (_connections(engine, 1), client.idle, len(engine.requests)) == (1, 1, 2)
+
+
+def test_warm_sends_nothing_when_a_request_used_the_connection_lately(servers):
+    now = [1000.0]
+    engine = servers(_Engine)
+    client = transport.EngineClient(transport.Settings(*transport._origin(engine.url)),
+                                    clock=lambda: now[0])
+    assert _get(client, engine.url)[0] == 200  # a decision, say
+    now[0] += transport.RENEW_SECONDS
+    assert client.warm() is True
+    assert [r["path"] for r in engine.requests] == ["/x"]
+
+
+def test_warm_keeps_one_connection_and_closes_the_spares_that_waited(servers):
+    now = [1000.0]
+    engine = servers(_Engine)
+    client = transport.EngineClient(transport.Settings(*transport._origin(engine.url)),
+                                    clock=lambda: now[0])
+    for _ in range(2):  # two kept after a burst of writes
+        client._keep(client._open(1.0))
+    assert (_connections(engine, 2), client.idle) == (2, 2)
+    now[0] += transport.RENEW_SECONDS + 0.1
+    assert client.warm() is True
+    assert client.idle == 1 and len(engine.requests) == 1
+
+
+def test_warm_passes_on_the_headers_it_is_given(servers):
+    engine = servers(_Engine)
+    client = _client(engine.url)
+    assert client.warm(headers={"User-Agent": "artzain-test/1"}) is True
+    assert engine.requests[0]["headers"]["User-Agent"] == "artzain-test/1"
+
+
+def test_a_warm_request_the_engine_answers_with_an_error_still_leaves_the_connection_warm(servers):
+    engine = servers(_Engine, [("answer", 503, [], b'{"status": "degraded"}')])
+    client = _client(engine.url)
+    assert client.warm() is True and client.idle == 1
 
 
 def test_a_warm_connection_never_outlives_what_a_load_balancer_allows():
-    # Renewed every 30 s once it is 25 s old, a waiting connection is at most
-    # 55 s old when a request takes it, and one older than 50 s is not taken.
+    # Sent down every 30 s once it is 25 s old, a waiting connection is at
+    # most 55 s old when a request takes it, and one older than 50 s is not.
     assert transport.RENEW_SECONDS < transport.WARM_EVERY_SECONDS
     assert transport.IDLE_SECONDS < 60.0
     assert transport.WARM_EVERY_SECONDS <= transport.IDLE_SECONDS
@@ -1011,6 +1055,19 @@ def test_the_client_is_built_again_only_when_a_setting_changes(servers, monkeypa
     monkeypatch.delenv("ARTZAIN_DECISION_URL")
     assert sidecar._client() is None and sidecar.warm() is False
     assert other.idle == 0
+
+
+def test_the_sidecars_warm_request_says_who_it_is_and_carries_no_key(servers, monkeypatch):
+    # The edge in front of the hosted engine allowlists the SDK's
+    # User-Agent; a warm request it challenged would warm nothing behind it.
+    engine = servers(_Engine)
+    monkeypatch.setenv("ARTZAIN_DECISION_URL", engine.url)
+    monkeypatch.setenv("COGNEXUS_API_KEY", KEY)
+    assert sidecar.warm() is True
+    [health] = engine.requests
+    assert (health["method"], health["path"]) == ("GET", "/health")
+    assert health["headers"]["User-Agent"].startswith("artzain-python-sdk/")
+    assert "X-Api-Key" not in health["headers"]
 
 
 def test_after_a_bundle_that_could_not_be_loaded_the_client_is_a_new_one(

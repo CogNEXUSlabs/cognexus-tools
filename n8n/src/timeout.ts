@@ -1,6 +1,7 @@
 /** Request timeout shared by both nodes. */
 
 import { failureKind } from "./failure.js";
+import { keptFetch } from "./keep-alive.js";
 
 export const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -31,6 +32,9 @@ export function resolveTimeoutMs(raw: unknown): number {
  * is, with its body, the redirecting server's page, left unread (`text` is
  * empty).
  *
+ * The request goes out on a connection kept between requests, when Node's
+ * own connection settings allow it (see `keep-alive.ts`).
+ *
  * A request that fails, or a body that cannot be read, is reported by the
  * failure's kind (see `failureKind`), with `label.baseSource` when no answer
  * came back, and by an error of this function's own: fetch's error can quote
@@ -54,7 +58,7 @@ export async function fetchWithTimeout(
   try {
     let resp: Response;
     try {
-      resp = await fetch(url, { ...init, redirect: "manual", signal: controller.signal });
+      resp = await keptFetch(url, { ...init, redirect: "manual", signal: controller.signal });
     } catch (err) {
       throw new Error(
         `${label.what} unreachable: ${failureKind(err, controller.signal)} ` +

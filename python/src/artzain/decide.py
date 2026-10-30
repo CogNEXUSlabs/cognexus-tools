@@ -12,7 +12,10 @@ with zero server setup. The policy guard screens the rules
 :func:`artzain.load_client_policy_rules` loads, as
 :func:`artzain.screen_client_policy` does, without fetching any.
 
-Uses only the standard library (``urllib``) — no new dependencies.
+Uses only the standard library (``urllib`` and ``http.client``) — no new
+dependencies. The connection is kept for the next decision, shared by the
+process's threads (:class:`artzain.cloud._KeptConnections`), so only the first
+decision pays for the TCP and TLS handshakes.
 """
 
 from __future__ import annotations
@@ -105,7 +108,11 @@ def decide(
             ``model_output``, ``tool_call``.
         agent_did: Caller's agent identity (DID or stable name).
         surface: Where the request came from.
-        request_id: Optional idempotency / correlation key.
+        request_id: Optional idempotency / correlation key. With one the
+            API replays, a decision whose kept connection is lost before the
+            answer is sent once more, and the API answers with the first
+            decision. Without one it raises :class:`DecisionError` instead,
+            rather than risk sealing it twice.
         product: FR-11 product identifier (``"name"`` or ``"name@version"``).
             Validated at the server boundary against negotiated product
             schemas — unknown products/versions are rejected with a 422.
@@ -203,6 +210,11 @@ def decide(
     failure: Optional[DecisionError] = None
     try:
         req = urllib.request.Request(url, data=data, method="POST", headers=headers)
+        # On a kept connection, shared by the process's threads, so only the
+        # first decision pays for the handshakes (decide-latency plan, step
+        # 3.1). One the engine replays is asked again when the connection is
+        # lost before its answer.
+        cloud._keep_connection(req, resend_after_send=_replayed(request_id))
         # A redirect is not followed: its status is the error, and the key
         # stays with the host it was issued with.
         with cloud._urlopen(req, timeout=timeout_sec) as resp:
@@ -243,6 +255,16 @@ def decide(
             raw[:240].decode("utf-8", errors="replace"),
         )
     raise DecisionError("decision API answered with a body that is not JSON")
+
+
+def _replayed(request_id: Optional[str]) -> bool:
+    """Whether the engine answers a second copy of a decision with this
+    *request_id* with the first decision, so that sending it twice seals it
+    once. The engine strips a request_id, and keys none that is left empty
+    or holds U+001F (``services/decision_engine.py``, ``_idempotency_key``):
+    such a decision is decided and sealed on every copy."""
+    key = (request_id or "").strip()
+    return bool(key) and "\x1f" not in key
 
 
 _DECISION_ID = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")

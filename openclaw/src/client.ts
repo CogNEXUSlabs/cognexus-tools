@@ -15,6 +15,8 @@
  * fails when a copy drifts from its source.
  */
 
+import { keptFetch } from "./keep-alive.js";
+
 export const DEFAULT_BASE_URL = "https://app.cognexuslabs.ai";
 export const DECIDE_TIMEOUT_MS = 12_000;
 
@@ -187,8 +189,10 @@ export function resolveBaseUrlSetting(pluginBase?: string): { url: string; sourc
 export async function postDecision(
   options: PostDecisionOptions,
 ): Promise<DecisionResponse> {
-  const fetchImpl: FetchLike =
-    options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
+  // The global fetch, on a connection kept between decisions (keep-alive.ts).
+  const fetchImpl: FetchLike | undefined =
+    options.fetchImpl ??
+    (typeof globalThis.fetch === "function" ? (keptFetch as unknown as FetchLike) : undefined);
   if (!fetchImpl) {
     throw new DecisionError("No fetch implementation available (Node >= 18 required).");
   }

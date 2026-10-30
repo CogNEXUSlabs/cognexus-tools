@@ -18,9 +18,11 @@ this client does three things the SDK's general one does not:
   always checked; there is no setting that turns that off.
 * **It keeps connections.** A decision on a kept connection costs one round
   trip; on a new one it costs the TCP and TLS handshakes first. One
-  connection is opened before the first request and renewed every 30 s
+  connection is opened before the first request and kept warm every 30 s
   (:meth:`EngineClient.warm`), so the first write after a quiet spell does
-  not pay for the handshakes inside the gateway's timeout.
+  not pay for the handshakes inside the gateway's timeout. Warm means a
+  request went down it: a CDN in front of the engine keeps its own
+  connection to the engine only for the edge server that carried one.
 
 Settings (environment):
 
@@ -59,15 +61,21 @@ MAX_ANSWER_BYTES = 256 * 1024
 _READ_CHUNK = 16 * 1024
 #: Connections kept for the next request.
 MAX_IDLE = 4
-#: A kept connection idle for longer than this is not used again: the
-#: engine's load balancer closes one it has not heard from in 60 s.
+#: A kept connection idle for longer than this is not used again: a load
+#: balancer in front of an engine may close one it has not heard from in 60 s
+#: (an AWS ALB's default; Cloudflare, in front of the hosted engine, waits
+#: 400 s).
 IDLE_SECONDS = 50.0
-#: :meth:`EngineClient.warm` renews a kept connection older than this, so
-#: with a call every :data:`WARM_EVERY_SECONDS` there is always a young one.
+#: :meth:`EngineClient.warm` sends a request down a kept connection idle for
+#: longer than this, so with a call every :data:`WARM_EVERY_SECONDS` there is
+#: always a young one.
 RENEW_SECONDS = 25.0
 WARM_EVERY_SECONDS = 30.0
-#: How long opening the warm connection may take.
+#: How long the warm request may take.
 WARM_TIMEOUT_SECONDS = 5.0
+#: What :meth:`EngineClient.warm` asks for: every engine answers it, with no
+#: key, and a CDN does not cache it (``Cache-Control: no-store``).
+WARM_PATH = "/health"
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
@@ -273,30 +281,46 @@ class EngineClient:
         with self._lock:
             return len(self._idle)
 
-    def warm(self, timeout: float = WARM_TIMEOUT_SECONDS) -> bool:
-        """Make sure a young connection is waiting. True when one is.
+    def warm(self, timeout: float = WARM_TIMEOUT_SECONDS, *,
+             headers: Optional[Mapping[str, str]] = None) -> bool:
+        """Make sure a warm connection is waiting. True when one is.
 
-        Kept connections older than :data:`RENEW_SECONDS` are closed, and if
-        none is left a new one is opened. Never raises: an engine that
-        cannot be reached now is reached, or not, by the next request.
+        A connection a request used within :data:`RENEW_SECONDS` is warm as
+        it is. Otherwise ``GET`` :data:`WARM_PATH` goes down the youngest
+        kept connection, or a new one, with *headers* and no key, and the
+        connection is kept; the other kept connections, which have waited
+        longer, are closed. A connection that only opened was warm to the
+        nearest edge; one that carried a request is warm to the engine, so a
+        CDN in front keeps its own connection to the engine for the edge
+        server the next write reaches (decide-latency plan, step 3.2). Any
+        status leaves the connection warm.
+
+        Never raises: an engine that cannot be reached now is reached, or
+        not, by the next request.
         """
         now = self._clock()
         with self._lock:
-            old = [pair for pair in self._idle if now - pair[1] > RENEW_SECONDS]
-            for pair in old:
-                self._idle.remove(pair)
-            waiting = len(self._idle)
-        for conn, _since in old:
-            conn.close()
-        if waiting:
-            return True
+            if self._idle and now - self._idle[-1][1] <= RENEW_SECONDS:
+                return True
+        scheme, host, port = self.settings.origin
         try:
-            conn = self._open(timeout)
+            self.request("GET", "%s://%s:%d%s" % (scheme, host, port, WARM_PATH),
+                         headers=dict(headers or {"Accept": "application/json"}),
+                         deadline=time.monotonic() + timeout, retry_on_reset=True)
         except Exception as exc:  # noqa: BLE001 - see the docstring
-            logger.info("engine connection not opened ahead of time: %s", type(exc).__name__)
+            logger.info("engine connection not warmed: %s", type(exc).__name__)
             return False
-        self._keep(conn)
-        return True
+        with self._lock:
+            # The one the request used is the youngest; the rest are spares
+            # from a burst, older than it.
+            spares = [pair for pair in list(self._idle)[:-1]
+                      if self._clock() - pair[1] > RENEW_SECONDS]
+            for pair in spares:
+                self._idle.remove(pair)
+            warm = bool(self._idle)
+        for conn, _since in spares:
+            conn.close()
+        return warm
 
     def close(self) -> None:
         with self._lock:

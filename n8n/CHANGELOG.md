@@ -2,6 +2,19 @@
 
 All notable changes to `@cognexuslabs/n8n-nodes-artzain`.
 
+## 0.1.7
+
+### Changed
+
+- **An item after a quiet spell no longer opens a new connection.** Node's
+  `fetch` keeps an idle connection for 4 s, so an item more than 4 s after
+  the last request paid for the DNS lookup and the TCP and TLS handshakes
+  before its answer: far from the engine, most of a decision's time. Both
+  nodes now keep the connection for 60 s, as the Python SDK does, while n8n
+  runs on Node's own connection settings. An n8n that set its own, a proxy or
+  a certificate authority set in code, keeps them, and the requests go out
+  on them as before. `COGNEXUS_KEEP_ALIVE=0` turns it off.
+
 ## 0.1.6
 
 ### Fixed

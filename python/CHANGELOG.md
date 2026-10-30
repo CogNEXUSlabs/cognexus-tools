@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.6.61
+
+### Changed
+
+- **`artzain.decide()` keeps its connection for the next decision.** It
+  sent each decision through `urllib`, which asks for `Connection: close`, so
+  every decision paid the DNS lookup and the TCP and TLS handshakes first:
+  from Frankfurt, about 480 ms of a 690 ms decision. A decision now goes on a
+  kept connection, shared by the process's threads (at most four kept), and
+  only the first pays for the handshakes. What it sends, the proxies it
+  takes (the environment's or the system's, `https` through `CONNECT`), the
+  certificate check, the errors it raises and their messages are unchanged,
+  and a redirect is still not followed. An `http://` base URL that a proxy
+  would carry still goes through `urllib`. A connection the server closed, or
+  one idle for 60 s, is not used; a change to the proxies or to
+  `SSL_CERT_FILE` / `SSL_CERT_DIR` retires what is kept, and a child process
+  after `fork` does not use its parent's. A decision is sent again, once, on a
+  new connection, only when sending it failed on a kept connection, or when
+  its `request_id` is one the API replays and the connection was lost before
+  the answer. Never after a timeout.
+- **The OpenShell sidecar keeps the edge in front of the engine warm too.**
+  `EngineClient.warm()` opened a new connection every 30 s and sent nothing
+  on it, which warmed the TCP and TLS to the nearest edge only: the first
+  governed write after a quiet spell still paid for the edge's own new
+  connection to the engine. It now sends `GET /health`, with the SDK's
+  User-Agent and no key, down a kept connection that no call has used for
+  25 s, and keeps it; a busy sidecar sends nothing extra. Spare connections
+  that waited are closed. `warm()` takes the request's `headers`.
+
 ## 0.6.60
 
 ### Changed
