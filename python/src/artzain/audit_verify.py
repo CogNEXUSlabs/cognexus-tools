@@ -1,4 +1,4 @@
-"""Offline verification of a CogNexus audit evidence bundle (FR-3, WS2 §2.4).
+"""Offline verification of an ArtzAIn audit evidence bundle (FR-3, WS2 §2.4).
 
 Zero network.  Given a bundle directory (or ``.zip``) produced by
 ``GET /api/v1/audit/export``, this recomputes every leaf hash, checks the

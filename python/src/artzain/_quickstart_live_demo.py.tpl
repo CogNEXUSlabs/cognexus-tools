@@ -239,7 +239,7 @@ def run_guard_tests() -> None:
 
 
 # Representative Token-to-Outcome (T2O) examples. Each prompt is phrased so the
-# CogNEXUS prompt-defender classifier routes it to a distinct department /
+# ArtzAIn prompt-defender classifier routes it to a distinct department /
 # outcome; token counts differ so the dashboard's per-outcome averages vary.
 T2O_EXAMPLES = (
     ("Engineering → Pull Request",
@@ -261,7 +261,7 @@ def run_t2o_examples() -> None:
     """Trigger one generation event per department for Token-to-Outcome analytics.
 
     Each call reports token spend (tokens_in / tokens_out) and a prompt preview;
-    the CogNEXUS backend classifies the prompt's department/outcome and rolls the
+    the ArtzAIn backend classifies the prompt's department/outcome and rolls the
     tokens up under Analytics → Leaderboard. Requires COGNEXUS_API_KEY for ingest.
     """
     print_header("Token-to-Outcome (T2O) examples → Leaderboard")

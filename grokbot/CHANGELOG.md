@@ -4,6 +4,15 @@ All notable changes to `@cognexuslabs/grokbot-artzain`. Headings are the
 bare version (`## 0.1.0`): the mirror's `publish-npm.yml` cuts the GitHub
 release notes for tag `grokbot-v<version>` from the matching section.
 
+## 0.1.9
+
+### Changed
+
+- **The company is CogNEXUS Labs and the product ArtzAIn.** `SKILL.md` and the
+  README tell the Bot to ask ArtzAIn, and name the ArtzAIn account, API key,
+  Review Queue and Audit log; the rules themselves are unchanged. The
+  copyright line in `LICENSE` reads "CogNEXUS Labs, LLC", the legal name.
+
 ## 0.1.8
 
 ### Changed

@@ -1,8 +1,8 @@
 # cognexus-tools
 
-Client SDKs for the CogNEXUS / Artzain decision engine.
+Client SDKs for the ArtzAIn decision engine, made by CogNEXUS Labs.
 
-This is the **public home** of every CogNEXUS client package. The decision
+This is the **public home** of every ArtzAIn client package. The decision
 engine itself lives in a separate private repository and dual-homes copies
 for CI and guard-sync until those jobs move here.
 
@@ -307,7 +307,7 @@ openclaw plugins install ./openclaw
 
 The plugin registers `api.on("before_tool_call", …)` and calls
 `POST /api/v1/decisions`. `deny`, `review`, and transport errors set
-`{ block: true }`. It does **not** map CogNEXUS `review` onto OpenClaw
+`{ block: true }`. It does **not** map ArtzAIn `review` onto OpenClaw
 `/approve`. ClawHub listing is dest Trusted Publishing, not a tag from
 the engine repo.
 
@@ -321,8 +321,8 @@ npm i @cognexuslabs/n8n-nodes-artzain
 
 Two nodes:
 
-- **Artzain Decision** — `POST /api/v1/decisions` with Allow / Review / Deny outputs. HTTP 503 fails closed. `review` is a third output, not an n8n Wait node.
-- **Artzain Envelope** — `POST /api/v1/envelope/v1/chat/completions` with an envelope credential (`cnxe_…`). Not the Decision API.
+- **ArtzAIn Decision** — `POST /api/v1/decisions` with Allow / Review / Deny outputs. HTTP 503 fails closed. `review` is a third output, not an n8n Wait node.
+- **ArtzAIn Envelope** — `POST /api/v1/envelope/v1/chat/completions` with an envelope credential (`cnxe_…`). Not the Decision API.
 
 See [`n8n/README.md`](n8n/README.md).
 

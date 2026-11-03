@@ -1,4 +1,4 @@
-"""Cryptographic audit chain for the CogNexus SDK (pure stdlib).
+"""Cryptographic audit chain for the ArtzAIn SDK (pure stdlib).
 
 Implements SHA-256 *hash chaining* and *HMAC-SHA-256 per-entry signing* for
 the local JSONL audit trail written by :mod:`artzain.events`.

@@ -16,14 +16,14 @@ import { DEFAULT_TIMEOUT_MS, fetchWithTimeout, resolveTimeoutMs } from "../../ti
 
 export class ArtzainDecision implements INodeType {
   description: INodeTypeDescription = {
-    displayName: "CogNEXUS Decision",
+    displayName: "ArtzAIn Decision",
     name: "artzainDecision",
     icon: { light: "file:artzain.svg", dark: "file:artzain.svg" },
     group: ["transform"],
     version: 1,
     description:
       "POST /api/v1/decisions. Allow / review / deny outputs. HTTP 503 fails closed onto Deny. review does not wait inside n8n.",
-    defaults: { name: "CogNEXUS Decision" },
+    defaults: { name: "ArtzAIn Decision" },
     inputs: [NodeConnectionTypes.Main],
     outputs: [NodeConnectionTypes.Main, NodeConnectionTypes.Main, NodeConnectionTypes.Main],
     outputNames: ["Allow", "Review", "Deny"],

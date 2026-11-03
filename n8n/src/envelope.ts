@@ -1,4 +1,4 @@
-/** Envelope pattern B — OpenAI-shaped chat completions via CogNEXUS. */
+/** Envelope pattern B — OpenAI-shaped chat completions via ArtzAIn. */
 
 import { trimTrailingSlashes } from "./base-url.js";
 

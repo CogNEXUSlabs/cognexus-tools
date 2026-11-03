@@ -1,7 +1,7 @@
 /**
- * CogNEXUS OpenClaw plugin — pattern C tool gate.
+ * ArtzAIn OpenClaw plugin — pattern C tool gate.
  *
- * Install from a CogNEXUS checkout (`openclaw plugins install ./sdk/openclaw`).
+ * Install from a checkout of the engine repository (`openclaw plugins install ./sdk/openclaw`).
  * This repository does not publish to ClawHub (Trusted Publishing lives on
  * cognexus-tools). Envelope pattern B is still the models.providers snippet.
  */
@@ -12,9 +12,9 @@ import { handleBeforeToolCall, HOOK_TIMEOUT_MS } from "./gate.js";
 
 export default definePluginEntry({
   id: "artzain-tool-gate",
-  name: "CogNEXUS tool gate",
+  name: "ArtzAIn tool gate",
   description:
-    "Clear OpenClaw host tools through the CogNEXUS Decision API before they run.",
+    "Clear OpenClaw host tools through the ArtzAIn Decision API before they run.",
   register(api: {
     on: (
       name: "before_tool_call",

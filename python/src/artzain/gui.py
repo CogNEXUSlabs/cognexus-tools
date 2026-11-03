@@ -1,11 +1,11 @@
-"""Artzain Chat (local) — the server behind the ``artzain gui`` command.
+"""ArtzAIn Chat (local) — the server behind the ``artzain gui`` command.
 
 One surface, one name: this is the **local chat client**, not the hosted
 dashboard (that lives at ``<base>/dashboard.html``; requests to
 ``/dashboard*`` on the local port redirect there).
 
 Starts a lightweight HTTP proxy on localhost and opens the default browser.
-All ``/api/*`` traffic is forwarded to the configured CogNEXUS platform API,
+All ``/api/*`` traffic is forwarded to the configured ArtzAIn platform API,
 including SSE-streamed conversation responses.
 
 If a ``COGNEXUS_API_KEY`` is present the user goes directly into the chat —
@@ -80,7 +80,7 @@ _GUI_HTML_TEMPLATE = """\
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#07080a" />
-  <title>Artzain Chat (local)</title>
+  <title>ArtzAIn Chat (local)</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&family=Plus+Jakarta+Sans:wght@700;800&display=swap" rel="stylesheet" />
@@ -484,7 +484,7 @@ _GUI_HTML_TEMPLATE = """\
 <!-- ── CHAT VIEW ── -->
 <div id="chatView" hidden>
   <header class="chat-header">
-    <div class="chat-brand">Artzain <span>Chat</span><span style="font-size:0.62rem;color:#7a7f8e;border:1px solid #2a2f3a;border-radius:4px;padding:0.1rem 0.35rem;margin-left:0.5rem;vertical-align:middle;letter-spacing:0.04em;">LOCAL</span></div>
+    <div class="chat-brand">ArtzAIn <span>Chat</span><span style="font-size:0.62rem;color:#7a7f8e;border:1px solid #2a2f3a;border-radius:4px;padding:0.1rem 0.35rem;margin-left:0.5rem;vertical-align:middle;letter-spacing:0.04em;">LOCAL</span></div>
     <div class="chat-header-actions">
       <a href="__COGNEXUS_ORIGIN__/dashboard.html" target="_blank" rel="noopener" style="font-size:0.78rem;color:#7a7f8e;text-decoration:none;">Dashboard &#8599;</a>
       <span class="chat-user-email" id="chatUserEmail"></span>
@@ -622,7 +622,7 @@ _GUI_HTML_TEMPLATE = """\
       } else {
         loginError.textContent = data.detail || data.message || 'Login failed \u2014 check your credentials.';
       }
-    } catch { loginError.textContent = 'Connection error. Is the CogNEXUS server reachable?'; }
+    } catch { loginError.textContent = 'Connection error. Is the ArtzAIn server reachable?'; }
     finally { loginBtn.disabled = false; loginBtn.textContent = 'Sign in'; }
   }
 
@@ -1113,9 +1113,9 @@ def _write_redirect_file(url: str) -> Path | None:
     launch code in *url*'s fragment is not on a command line. None when the
     file cannot be written."""
     target = html_lib.escape(url, quote=True)
-    page = ("<!doctype html><meta charset=\"utf-8\"><title>Artzain Chat</title>"
+    page = ("<!doctype html><meta charset=\"utf-8\"><title>ArtzAIn Chat</title>"
             f"<meta http-equiv=\"refresh\" content=\"0;url={target}\">"
-            f"<p><a href=\"{target}\">Open Artzain Chat</a></p>\n")
+            f"<p><a href=\"{target}\">Open ArtzAIn Chat</a></p>\n")
     try:
         directory = Path(tempfile.mkdtemp(prefix="artzain-gui-"))
         path = directory / "open.html"
@@ -1145,7 +1145,7 @@ _LAUNCH_REQUIRED_ERROR = (
 #: authenticator-code step, so the user is pointed at the hosted dashboard.
 _MFA_BOOTSTRAP_ERROR = (
     "This account has two-factor authentication enabled, so the API key alone "
-    "cannot open a session. Artzain Chat (local) cannot complete the "
+    "cannot open a session. ArtzAIn Chat (local) cannot complete the "
     "authenticator step; use the hosted dashboard to sign in."
 )
 
@@ -1479,7 +1479,7 @@ def launch_gui(
     Parameters
     ----------
     base_url:
-        CogNEXUS platform origin, e.g. ``https://app.cognexuslabs.ai``.
+        ArtzAIn platform origin, e.g. ``https://app.cognexuslabs.ai``.
     api_key:
         Dashboard API key (``COGNEXUS_API_KEY``).  When present the browser
         goes straight to the chat — no login form shown.
@@ -1508,7 +1508,7 @@ def launch_gui(
     )
 
     print()
-    print(f"  Artzain Chat (local)  \u2192  {local_url}")
+    print(f"  ArtzAIn Chat (local)  \u2192  {local_url}")
     print(f"  Platform API          \u2192  {base_url}")
     print(f"  Full dashboard        \u2192  {base_url}/dashboard.html (hosted \u2014 not this local server)")
     print(key_line)
@@ -1527,7 +1527,7 @@ def launch_gui(
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n  Artzain Chat stopped.")
+        print("\n  ArtzAIn Chat stopped.")
     finally:
         server.shutdown()
         if redirect is not None:

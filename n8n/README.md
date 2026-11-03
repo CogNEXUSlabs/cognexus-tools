@@ -1,14 +1,14 @@
 # `@cognexuslabs/n8n-nodes-artzain`
 
-n8n community nodes that wrap CogNEXUS **Decision** (pattern A) and
+n8n community nodes that wrap ArtzAIn **Decision** (pattern A) and
 **Envelope** (pattern B) so operators do not hand-assemble JSON.
 
 ## Nodes
 
 | Node | What it does |
 |---|---|
-| **CogNEXUS Decision** | `POST /api/v1/decisions`. Three outputs: Allow / Review / Deny. HTTP 503 / 401 / 422 land on **Deny**, and so does a redirect (3xx), which is not followed. Review does **not** wait inside n8n — a human owns it in the dashboard Review Queue. Wire side effects only to Allow. |
-| **CogNEXUS Envelope** | `POST /api/v1/envelope/v1/chat/completions` with a `cnxe_…` key. Screens model traffic. It does **not** gate a later Stripe/Gmail node. |
+| **ArtzAIn Decision** | `POST /api/v1/decisions`. Three outputs: Allow / Review / Deny. HTTP 503 / 401 / 422 land on **Deny**, and so does a redirect (3xx), which is not followed. Review does **not** wait inside n8n — a human owns it in the dashboard Review Queue. Wire side effects only to Allow. |
+| **ArtzAIn Envelope** | `POST /api/v1/envelope/v1/chat/completions` with a `cnxe_…` key. Screens model traffic. It does **not** gate a later Stripe/Gmail node. |
 
 ## Request ID (Decision node)
 
@@ -57,7 +57,7 @@ in n8n's environment to turn it off.
 - Not published to npm from the engine repository. Dest
   (`CogNEXUSlabs/cognexus-tools`) publishes it through npm Trusted
   Publishing, with provenance, on an `n8n-v*` tag.
-- Not a Wait node that pretends CogNEXUS `review` resolved inside n8n.
+- Not a Wait node that pretends ArtzAIn `review` resolved inside n8n.
 - Not an OpenClaw community node. OpenClaw Chat nodes drive the Gateway;
   this package sits in front of *your* side effects.
 

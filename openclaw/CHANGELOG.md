@@ -4,6 +4,17 @@ All notable changes to `@cognexuslabs/openclaw-artzain`. Headings are the
 bare version (`## 0.2.2`): the mirror's `publish-npm.yml` cuts the GitHub
 release notes for tag `openclaw-v<version>` from the matching section.
 
+## 0.2.9
+
+### Changed
+
+- **The company is CogNEXUS Labs and the product ArtzAIn.** The plugin's
+  display name is now "ArtzAIn tool gate" (it was "CogNEXUS tool gate"); its
+  id, `artzain-tool-gate`, is unchanged, so an installed plugin and its config
+  carry over. The description, README and the ClawHub `SKILL.md` name ArtzAIn
+  for the Decision API, the Review Queue and the account. The copyright line
+  in `LICENSE` reads "CogNEXUS Labs, LLC", the legal name.
+
 ## 0.2.8
 
 ### Changed

@@ -5,8 +5,8 @@
 Three things, in the order you will meet them:
 
 1. **Local guards — free, offline, pure Python.** System-prompt grading against the OWASP LLM Top 10, runtime injection screening, a destructive-action guard for model output, PII detection, tool-call contracts and a cooperative kill switch. No server, no network, no mandatory dependencies, Apache-2.0. The six guard modules — prompt defence, injection screening, destructive-action guard, policy enforcement, PII detection, tool-call contracts — are byte-identical to the engine's `application/security/` copies and CI enforces it (`scripts/check_security_sync.py`); the kill switch is the SDK's own cooperative implementation.
-2. **`artzain.decide()` — one governed decision.** Ask a CogNEXUS engine whether an action may proceed and get `allow`, `deny` or `review` back; by the time you have the answer it is already sealed into a hash-chained, Ed25519-signed audit log. With no API key set, `decide()` runs the same guards locally instead (`offline: true` in the result, no seal).
-3. **The offline verifier and the licence CLI.** `artzain audit verify <bundle>` recomputes every leaf hash, chain link, Merkle root and signature of an exported evidence bundle with zero network — and, once the Evidence Root is pinned, zero trust in the producing server; today every verdict is `SELF-ATTESTED` (below). `artzain licence request|install|attest|anchor-request|anchor|anchors|verify` is the file-based licence flow for private, sovereign and air-gapped installs — certificates, trial extensions, anchors and usage attestations travel as files, and nothing phones home. `licence install` (and `artzain local activate`) takes a certificate or a trial extension file from CogNEXUS: an extension moves the trial's end date without ending the trial, and `artzain local status` shows the new date.
+2. **`artzain.decide()` — one governed decision.** Ask an ArtzAIn engine whether an action may proceed and get `allow`, `deny` or `review` back; by the time you have the answer it is already sealed into a hash-chained, Ed25519-signed audit log. With no API key set, `decide()` runs the same guards locally instead (`offline: true` in the result, no seal).
+3. **The offline verifier and the licence CLI.** `artzain audit verify <bundle>` recomputes every leaf hash, chain link, Merkle root and signature of an exported evidence bundle with zero network — and, once the Evidence Root is pinned, zero trust in the producing server; today every verdict is `SELF-ATTESTED` (below). `artzain licence request|install|attest|anchor-request|anchor|anchors|verify` is the file-based licence flow for private, sovereign and air-gapped installs — certificates, trial extensions, anchors and usage attestations travel as files, and nothing phones home. `licence install` (and `artzain local activate`) takes a certificate or a trial extension file from CogNEXUS Labs: an extension moves the trial's end date without ending the trial, and `artzain local status` shows the new date.
 
 ```
 pip install artzain              # guards, decide(), the CLI
@@ -33,7 +33,7 @@ artzain audit export --profile eu-ai-act    # evidence bundle (ZIP), optionally 
 artzain audit verify eu-evidence.zip        # offline; exit 1 on any integrity failure
 ```
 
-**The three verdicts, honestly.** `FAILED` — a check the bundle must pass did not. `VERIFIED, SELF-ATTESTED` — intact and internally consistent, but nothing ties its signing key to CogNEXUS. `VERIFIED, ATTESTED` — additionally, the signing key chains to the pinned CogNEXUS Evidence Root. That root fingerprint is `None` in this release because the root ceremony has not yet run, so every bundle currently verifies `SELF-ATTESTED`; the verifier says so rather than implying more. Without `cryptography` installed, hashes and structure still verify, signatures report as unchecked, and the verdict is capped at `SELF-ATTESTED`.
+**The three verdicts.** `FAILED` — a check the bundle must pass did not. `VERIFIED, SELF-ATTESTED` — intact and internally consistent, but nothing ties its signing key to CogNEXUS. `VERIFIED, ATTESTED` — additionally, the signing key chains to the pinned CogNEXUS Evidence Root. That root fingerprint is `None` in this release because the root ceremony has not yet run, so every bundle currently verifies `SELF-ATTESTED`; the verifier says so rather than implying more. Without `cryptography` installed, hashes and structure still verify, signatures report as unchecked, and the verdict is capped at `SELF-ATTESTED`.
 
 Putting `decide()` into an agent's tool loop? The next section, **Gating tool calls**,
 covers it. The rest of this README is the guard library.
@@ -486,7 +486,7 @@ print(result.matched_patterns)   # ["direct_override:..."]
 ## Dashboard event logs (API key)
 
 When ``COGNEXUS_API_KEY`` is set (create one under **Account → API Keys** in the
-dashboard), the package mirrors activity to your CogNEXUS account via
+dashboard), the package mirrors activity to your ArtzAIn account via
 ``POST /api/events``. After you sign in, open **Account → Event Logs** or the
 main **Events** feed to review:
 
@@ -587,7 +587,7 @@ reports = evaluator.evaluate_batch({
 
 ## Client policy enforcement (document-derived)
 
-When **Compliance Warden** rule extraction is enabled, CogNEXUS indexes HR, legal, and business policy
+When **Compliance Warden** rule extraction is enabled, ArtzAIn indexes HR, legal, and business policy
 documents from Google Drive / OneDrive and derives tenant-specific enforcement rules.
 Use these alongside OWASP prompt defence:
 

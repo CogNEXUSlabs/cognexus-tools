@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.63
+
+### Changed
+
+- **The company is CogNEXUS Labs and the product ArtzAIn.** The command line,
+  the browser chat, the scaffolds (`artzain init`), the local stack's compose
+  file and the docstrings said "CogNexus" or called the dashboard, account and
+  server CogNEXUS's: they are ArtzAIn's. `artzain local --help` reads "Run
+  ArtzAIn in your own boundary". The licence commands still name CogNEXUS,
+  which issues and countersigns. The copyright line in `LICENSE` reads
+  "CogNEXUS Labs, LLC", the legal name.
+
 ## 0.6.62
 
 ### Added

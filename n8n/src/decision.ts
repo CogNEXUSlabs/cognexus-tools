@@ -1,5 +1,5 @@
 /**
- * Fail-closed routing for the CogNEXUS Decision node.
+ * Fail-closed routing for the ArtzAIn Decision node.
  *
  * HTTP 200 + outcome allow/review/deny → that branch. Any other status
  * (503 audit_unavailable, 401/422 misconfig, transport-shaped bodies)

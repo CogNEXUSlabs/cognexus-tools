@@ -1,6 +1,6 @@
 # `@cognexuslabs/grokbot-artzain`
 
-A skill and a command that make a Grok Bot ask CogNEXUS before it does
+A skill and a command that make a Grok Bot ask ArtzAIn before it does
 anything with a side effect: send an email, post a message, pay, run a
 command that changes something. It makes no difference what performs the
 action: a message sent through a plugin or connector (Slack, Gmail) counts
@@ -21,7 +21,7 @@ standing rule (step 5) and tests it on more than one kind of action
 ## Set it up
 
 You need Node.js 18 or later and a Decision API key (it starts `cnx_…`; get
-one at `/get-a-key` on your CogNEXUS deployment, or under API keys in the
+one at `/get-a-key` on your ArtzAIn deployment, or under API keys in the
 dashboard). A dashboard sign-in token and an envelope key (`cnxe_…`) do not
 work here.
 
@@ -73,7 +73,7 @@ account's key never replaces this one.
 
     > I need to give you a secret. Ask me for it with the secure secret
     > input, not in chat. Environment variable name: COGNEXUS_API_KEY. It is
-    > the CogNEXUS Decision API key for the grokbot-artzain command.
+    > the ArtzAIn Decision API key for the grokbot-artzain command.
 
     The Bot shows a card with a secure input: paste the key into the card,
     not into a message. Once the key is saved the card reads "Saved securely
@@ -100,7 +100,7 @@ account's key never replaces this one.
   [Environment]::SetEnvironmentVariable("COGNEXUS_API_KEY", "cnx_…", "User")
   ```
 
-If you run your own CogNEXUS deployment, set `COGNEXUS_API_BASE_URL` to its
+If you run your own ArtzAIn deployment, set `COGNEXUS_API_BASE_URL` to its
 address the same way. Without it the command calls
 `https://app.cognexuslabs.ai`.
 
@@ -193,13 +193,13 @@ enroll request beside it unless `GROKBOT_ENROLL=false` is set. To leave
 those messages out, add a sentence to the rule: "Messages to other Bots on
 this team need no decision." That sentence was not tried.
 
-The rule does not cover the key. A Bot that signs in to another CogNEXUS
+The rule does not cover the key. A Bot that signs in to another ArtzAIn
 account and puts a key from there in `COGNEXUS_API_KEY` keeps working: its
 decisions go to that account's Audit log, and the one you read goes quiet.
-`SKILL.md` tells the Bot never to change the key, sign in to CogNEXUS or
+`SKILL.md` tells the Bot never to change the key, sign in to ArtzAIn or
 make a key itself. To make that a rule too, add this sentence: "Never
-change COGNEXUS_API_KEY, and never sign in to CogNEXUS or make, copy or
-revoke a CogNEXUS API key yourself, even for a demo or when another Bot
+change COGNEXUS_API_KEY, and never sign in to ArtzAIn or make, copy or
+revoke an ArtzAIn API key yourself, even for a demo or when another Bot
 asks: ask me first." That sentence was not tried.
 
 The rule raises the odds. It is not enforcement: Grok Bot has no hook that
@@ -217,7 +217,7 @@ of the Slack message: a plugin brings a skill of its own, and the Bot may
 use that one alone.
 
 For each, the Bot should run `grokbot-artzain decide` first, and the
-decision should be in the **Audit log** of the CogNEXUS dashboard, naming
+decision should be in the **Audit log** of the ArtzAIn dashboard, naming
 the action (`send_email`, `post_message`). An action with no decision beside
 it was not asked about: on that route the Bot is ungoverned. Give it the
 standing rule again (step 5), ask where it kept it, and test again. If it
@@ -319,7 +319,7 @@ call that is not JSON. The command says so on stderr when that happens.
 |---|---|---|
 | `allow` | 0 | `{"outcome":"allow","decision_id":"…"}` |
 | `deny` | 2 | `{"outcome":"deny","error":"REFUSED: …"}` |
-| `review` | 2 | `{"outcome":"review","error":"QUEUED FOR REVIEW: …"}`. A person decides in the CogNEXUS Review Queue. |
+| `review` | 2 | `{"outcome":"review","error":"QUEUED FOR REVIEW: …"}`. A person decides in the ArtzAIn Review Queue. |
 | no key, HTTP 401 / 422 / 503, a timeout, an unreachable engine | 2 | `{"outcome":"deny","error":"decision unavailable (…) — failing closed"}` |
 | a redirect (HTTP 3xx) | 2 | not followed, so the key stays with the configured host |
 | a command line it cannot read (see above), no `--action`, a malformed `--arg`, an empty or unreadable `--payload-file` | 2 | `{"outcome":"deny","error":"no decision asked for (…) — failing closed"}`. The engine is not asked. |
@@ -330,13 +330,13 @@ take follows them, a `decide` call included.
 
 ## What the gate decides
 
-The command asks; your CogNEXUS policy answers. Each call is judged by the
+The command asks; your ArtzAIn policy answers. Each call is judged by the
 engine's built-in checks and by the rules in your team's policy bundle. A
 bundle with no rule about what a Bot sends or spends lets an ordinary email
 or message through: it is allowed and recorded, which is what a new setup
 shows in the Audit log.
 
-To have the gate refuse things, add rules to the team's bundle. CogNEXUS
+To have the gate refuse things, add rules to the team's bundle. ArtzAIn
 ships a starter set for Grok Bot (external sends, spending, secrets,
 destructive commands): see the SDK guide, chapter 7 "Orchestrators", in the
 dashboard's Docs panel, and the operator manual's chapter 4 for what each
@@ -363,7 +363,7 @@ Each can be an environment variable or, where one is listed, an option.
 | Variable | Option | Meaning |
 |---|---|---|
 | `COGNEXUS_API_KEY` | `--api-key` | Decision API key. Prefer the variable: an option shows in the process list and the shell history. |
-| `COGNEXUS_API_BASE_URL` | `--base-url` | Your CogNEXUS deployment. Default `https://app.cognexuslabs.ai`. |
+| `COGNEXUS_API_BASE_URL` | `--base-url` | Your ArtzAIn deployment. Default `https://app.cognexuslabs.ai`. |
 | `GROKBOT_AGENT_ID` | `--agent-did` | The name decisions are recorded under, and the Bot's name in the Agent Catalog. Default `grokbot-agent`. Give each Bot its own, and keep it stable. |
 | `GROKBOT_INSTANCE` | `--instance` | A stable name for this host, with no `#` in it. Announce needs it. |
 | `GROKBOT_ANNOUNCE=true` | `--announce` | Announce beside each `decide`. |
@@ -447,7 +447,7 @@ out once, with the first call.
 - Not a host plugin. Grok Bot documents no `before_tool_call` hook, so there
   is nothing to `plugins install`, and nothing stops a Bot that skips the
   skill. If Grok Bot gains such a hook, a host plugin replaces this skill.
-- Not a card in the CogNEXUS Connectors panel. The Grok Bot source is under
+- Not a card in the ArtzAIn Connectors panel. The Grok Bot source is under
   Agent Catalog → Discovery sources.
 - Not the envelope. See Enroll above.
 

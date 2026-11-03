@@ -1,6 +1,6 @@
-# @cognexuslabs/artzain — CogNEXUS Decision API client for Node.js
+# @cognexuslabs/artzain — ArtzAIn Decision API client for Node.js
 
-Gate agent actions through the CogNEXUS decision engine and get back a
+Gate agent actions through the ArtzAIn decision engine and get back a
 sealed, auditable `allow` / `deny` / `review` outcome.
 
 ```bash

@@ -1,4 +1,4 @@
-# CogNexus self-serve stack — rendered by `artzain local up` (WS-B).
+# ArtzAIn self-serve stack — rendered by `artzain local up` (WS-B).
 #
 # Do not edit by hand: `artzain local upgrade` rewrites this file with the
 # next release's digests. Durable configuration lives in the .env beside it,

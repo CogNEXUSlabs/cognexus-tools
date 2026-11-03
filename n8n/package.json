@@ -1,7 +1,7 @@
 {
   "name": "@cognexuslabs/n8n-nodes-artzain",
-  "version": "0.1.7",
-  "description": "n8n nodes for the CogNEXUS Decision API and envelope proxy. Fail closed on HTTP 503. review does not wait inside n8n.",
+  "version": "0.1.8",
+  "description": "n8n nodes for the ArtzAIn Decision API and envelope proxy. Fail closed on HTTP 503. review does not wait inside n8n.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

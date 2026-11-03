@@ -2,6 +2,18 @@
 
 All notable changes to `@cognexuslabs/n8n-nodes-artzain`.
 
+## 0.1.8
+
+### Changed
+
+- **The company is CogNEXUS Labs and the product ArtzAIn.** The nodes are now
+  "ArtzAIn Decision" and "ArtzAIn Envelope", and the credentials "ArtzAIn
+  Decision API" and "ArtzAIn Envelope". Only the display names changed: the
+  node and credential types (`artzainDecision`, `artzainApi`, ...) are the
+  same, so saved workflows keep working and keep the node titles they were
+  saved with. The copyright line in `LICENSE` reads "CogNEXUS Labs, LLC", the
+  legal name.
+
 ## 0.1.7
 
 ### Changed

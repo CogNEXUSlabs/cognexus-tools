@@ -1,5 +1,5 @@
 /**
- * `decide()` — gate a proposed agent action through the CogNEXUS Decision
+ * `decide()` — gate a proposed agent action through the ArtzAIn Decision
  * API (`POST /api/v1/decisions`). Remote-only: unlike the Python SDK there
  * is no offline local-guard fallback — a missing API key throws a clear
  * `DecisionError` instead (documented divergence).

@@ -339,7 +339,7 @@ def write_profile(*, api_key: str, base_url: str = "", email: str = "") -> Path:
         with contextlib.suppress(OSError):
             if os.stat(path.parent.parent).st_uid == invoker[0]:
                 os.chown(path.parent, *invoker)
-    lines = ["# CogNEXUS CLI credentials — do not commit", "[default]"]
+    lines = ["# ArtzAIn CLI credentials — do not commit", "[default]"]
     lines.append(f'api_key = "{api_key}"')
     if base_url:
         lines.append(f'base_url = "{base_url.rstrip("/")}"')
