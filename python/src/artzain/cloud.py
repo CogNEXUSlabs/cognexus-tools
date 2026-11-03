@@ -1,4 +1,4 @@
-"""Optional HTTPS ingest of SDK telemetry into the CogNEXUS dashboard.
+"""Optional HTTPS ingest of SDK telemetry into the ArtzAIn dashboard.
 
 Requires an API key created under **Account → API Keys** in the dashboard.
 If no key or base URL is configured, :func:`post_sdk_event` returns immediately

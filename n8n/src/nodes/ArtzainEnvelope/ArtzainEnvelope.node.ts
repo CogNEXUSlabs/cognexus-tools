@@ -15,14 +15,14 @@ import { DEFAULT_TIMEOUT_MS, fetchWithTimeout, resolveTimeoutMs } from "../../ti
 
 export class ArtzainEnvelope implements INodeType {
   description: INodeTypeDescription = {
-    displayName: "CogNEXUS Envelope",
+    displayName: "ArtzAIn Envelope",
     name: "artzainEnvelope",
     icon: { light: "file:artzain.svg", dark: "file:artzain.svg" },
     group: ["transform"],
     version: 1,
     description:
       "POST /api/v1/envelope/v1/chat/completions with a cnxe_ key. Screens model traffic only — it does not gate later side effects. HTTP 403/503 fail closed.",
-    defaults: { name: "CogNEXUS Envelope" },
+    defaults: { name: "ArtzAIn Envelope" },
     inputs: [NodeConnectionTypes.Main],
     outputs: [NodeConnectionTypes.Main],
     credentials: [{ name: "artzainEnvelopeApi", required: true }],

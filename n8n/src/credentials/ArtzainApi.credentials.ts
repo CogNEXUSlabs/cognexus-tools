@@ -11,7 +11,7 @@ const REDIRECT_STATUSES = [300, 301, 302, 303, 304, 305, 306, 307, 308];
 
 export class ArtzainApi implements ICredentialType {
   name = "artzainApi";
-  displayName = "CogNEXUS Decision API";
+  displayName = "ArtzAIn Decision API";
   documentationUrl = "https://docs.cognexuslabs.ai";
   properties: INodeProperties[] = [
     {

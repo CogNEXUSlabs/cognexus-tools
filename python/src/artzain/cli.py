@@ -70,7 +70,7 @@ _SCAFFOLDS: dict[str, tuple[str, str]] = {
 }
 
 # Representative Token-to-Outcome (T2O) examples. Each prompt is written so the
-# CogNEXUS prompt-defender classifier routes it to a distinct department /
+# ArtzAIn prompt-defender classifier routes it to a distinct department /
 # outcome, and the token counts differ so the dashboard's "tokens per outcome"
 # averages are visibly different. Used by ``artzain quickstart`` and mirrored
 # in the generated live-demo script.
@@ -516,7 +516,7 @@ def _append_cli_http_hint(message: str) -> str:
     if _CDN_BLOCKED in message or _looks_cdn_blocked(message):
         return (
             message
-            + "\n  The block is from the CDN/WAF (e.g. Cloudflare 1010), not the Cognexus app. "
+            + "\n  The block is from the CDN/WAF (e.g. Cloudflare 1010), not the ArtzAIn app. "
             "The API does not reject sign-up by User-Agent. If this persists, create an API key "
             "in the browser (Account → API Keys) and set COGNEXUS_API_KEY, or ask your infra "
             "admin to allow programmatic access to /api/auth/* (e.g. lower bot fight for that path "
@@ -690,7 +690,7 @@ def run_quickstart_demo(api_key: str, *, base_url: str) -> None:
         print()
         print(f"=== {title} ===")
 
-    header("Cognexus quickstart — hands-on tour")
+    header("ArtzAIn quickstart — hands-on tour")
 
     print(
         "This package layers OWASP-aligned prompt defence, runtime injection screening,\n"
@@ -2074,7 +2074,7 @@ def cmd_local_activate(args: argparse.Namespace) -> None:
 
 
 def cmd_gui(args: argparse.Namespace) -> None:
-    """Launch Artzain Chat (local) — a chat client proxying to the platform."""
+    """Launch ArtzAIn Chat (local) — a chat client proxying to the platform."""
     from artzain.gui import launch_gui  # lazy import — keeps startup fast
 
     creds = _cli_credentials()
@@ -2267,14 +2267,14 @@ def _add_gui_parser(sub: argparse._SubParsersAction) -> None:
     """``artzain gui``."""
     p_gui = sub.add_parser(
         "gui",
-        help="Open Artzain Chat (local) — a chat client connected to the platform.",
+        help="Open ArtzAIn Chat (local) — a chat client connected to the platform.",
         description=(
-            "Artzain Chat (local): a lightweight HTTP proxy on 127.0.0.1 that opens the\n"
+            "ArtzAIn Chat (local): a lightweight HTTP proxy on 127.0.0.1 that opens the\n"
             "default browser at that address.  All /api/* traffic is forwarded to the\n"
-            "CogNEXUS platform API (COGNEXUS_API_BASE_URL or https://app.cognexuslabs.ai\n"
+            "ArtzAIn platform API (COGNEXUS_API_BASE_URL or https://app.cognexuslabs.ai\n"
             "by default).  This is the local chat client, not the hosted dashboard —\n"
             "the dashboard lives at <base>/dashboard.html.\n\n"
-            "Sign in with your CogNEXUS account credentials in the browser to start chatting.\n"
+            "Sign in with your ArtzAIn account credentials in the browser to start chatting.\n"
             "Use @legalAgent / @propensityAgent / @complianceMonitor / @codeBastion to route\n"
             "messages to specific agents, or pick one from the dropdown in the composer."
         ),
@@ -2545,7 +2545,7 @@ def _add_local_parser(sub: argparse._SubParsersAction) -> None:
     """``artzain local ...``."""
     p_local = sub.add_parser(
         "local",
-        help="Run CogNexus in your own boundary: up, doctor, status, "
+        help="Run ArtzAIn in your own boundary: up, doctor, status, "
              "upgrade, down.",
         description=(
             "The self-serve installer. `artzain local up` renders a compose\n"
@@ -2783,7 +2783,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ``artzain --help`` lists them."""
     parser = argparse.ArgumentParser(
         prog="artzain",
-        description="Cognexus LLM safety SDK — prompt defence, guards, kill switch, audit.",
+        description="ArtzAIn LLM safety SDK — prompt defence, guards, kill switch, audit.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

@@ -1,7 +1,7 @@
 {
  "prog": "artzain",
  "usage": null,
- "description": "Cognexus LLM safety SDK — prompt defence, guards, kill switch, audit.",
+ "description": "ArtzAIn LLM safety SDK — prompt defence, guards, kill switch, audit.",
  "epilog": null,
  "formatter_class": "HelpFormatter",
  "add_help": true,
@@ -262,11 +262,11 @@
     },
     {
      "name": "gui",
-     "help": "Open Artzain Chat (local) — a chat client connected to the platform.",
+     "help": "Open ArtzAIn Chat (local) — a chat client connected to the platform.",
      "parser": {
       "prog": "artzain gui",
       "usage": null,
-      "description": "Artzain Chat (local): a lightweight HTTP proxy on 127.0.0.1 that opens the\ndefault browser at that address.  All /api/* traffic is forwarded to the\nCogNEXUS platform API (COGNEXUS_API_BASE_URL or https://app.cognexuslabs.ai\nby default).  This is the local chat client, not the hosted dashboard —\nthe dashboard lives at <base>/dashboard.html.\n\nSign in with your CogNEXUS account credentials in the browser to start chatting.\nUse @legalAgent / @propensityAgent / @complianceMonitor / @codeBastion to route\nmessages to specific agents, or pick one from the dropdown in the composer.",
+      "description": "ArtzAIn Chat (local): a lightweight HTTP proxy on 127.0.0.1 that opens the\ndefault browser at that address.  All /api/* traffic is forwarded to the\nArtzAIn platform API (COGNEXUS_API_BASE_URL or https://app.cognexuslabs.ai\nby default).  This is the local chat client, not the hosted dashboard —\nthe dashboard lives at <base>/dashboard.html.\n\nSign in with your ArtzAIn account credentials in the browser to start chatting.\nUse @legalAgent / @propensityAgent / @complianceMonitor / @codeBastion to route\nmessages to specific agents, or pick one from the dropdown in the composer.",
       "epilog": null,
       "formatter_class": "RawDescriptionHelpFormatter",
       "add_help": true,
@@ -2516,7 +2516,7 @@
     },
     {
      "name": "local",
-     "help": "Run CogNexus in your own boundary: up, doctor, status, upgrade, down.",
+     "help": "Run ArtzAIn in your own boundary: up, doctor, status, upgrade, down.",
      "parser": {
       "prog": "artzain local",
       "usage": null,

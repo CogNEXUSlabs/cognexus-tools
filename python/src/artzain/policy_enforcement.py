@@ -2,7 +2,7 @@
 
 Complements :mod:`artzain.prompt_defense` (OWASP-aligned *generic* system-prompt
 checks) with *tenant-specific* rules derived from HR, legal, and business policy
-documents indexed by CogNEXUS Compliance Monitor / Legal Watch.
+documents indexed by ArtzAIn Compliance Monitor / Legal Watch.
 
 Rules are structured for deterministic regex screening at inference time — same
 privacy posture as prompt defense (no raw document bodies in audit rows).
@@ -372,7 +372,7 @@ class PolicyEnforcementConfig:
 
 
 # ---------------------------------------------------------------------------
-# Extraction helpers (shared with CogNEXUS server guideline builder)
+# Extraction helpers (shared with ArtzAIn server guideline builder)
 # ---------------------------------------------------------------------------
 
 
@@ -528,7 +528,7 @@ def rules_from_context_items(
     max_rules_per_doc: int = 6,
     max_total: int = 80,
 ) -> list[ClientPolicyRule]:
-    """Build rules from CogNEXUS ``context_items`` rows (dashboard / API shape)."""
+    """Build rules from ArtzAIn ``context_items`` rows (dashboard / API shape)."""
     all_rules: list[ClientPolicyRule] = []
     for it in items:
         subject = str(it.get("subject") or "(untitled)")

@@ -1,11 +1,11 @@
 ---
 name: ArtzAIn Tool Gate
-description: Put this OpenClaw instance under ArtzAIn governance — every host tool call is checked against your own CogNEXUS Decision API before it runs, failing closed on deny, review, or any engine error.
+description: Put this OpenClaw instance under ArtzAIn governance — every host tool call is checked against your own ArtzAIn Decision API before it runs, failing closed on deny, review, or any engine error.
 ---
 
 # ArtzAIn Tool Gate
 
-This is the **official ArtzAIn / CogNEXUS listing**. It is a pointer, not a
+This is the **official ArtzAIn listing, published by CogNEXUS Labs**. It is a pointer, not a
 code bundle: the integration itself is the npm package
 [`@cognexuslabs/openclaw-artzain`](https://www.npmjs.com/package/@cognexuslabs/openclaw-artzain)
 (published with provenance attestation; source at
@@ -21,13 +21,13 @@ package, not a ClawHub bundle.
 ## What it does
 
 The plugin registers `before_tool_call` on the Gateway and asks your
-CogNEXUS deployment for a sealed decision before any host tool runs:
+ArtzAIn deployment for a sealed decision before any host tool runs:
 
 | Decision | Result |
 |---|---|
 | `allow` | tool runs |
 | `deny` | blocked, with the engine's reason |
-| `review` | blocked — a human resolves it in the CogNEXUS Review Queue |
+| `review` | blocked — a human resolves it in the ArtzAIn Review Queue |
 | HTTP 503 / 401 / 422 / missing key | blocked (fail closed) |
 
 ## Set up
@@ -84,7 +84,7 @@ dependencies, so that one package is everything you install.
    ```
 
 4. Restart the Gateway. Tool calls now appear as sealed decisions in your
-   CogNEXUS audit trail, and this instance becomes visible to the Agent
+   ArtzAIn audit trail, and this instance becomes visible to the Agent
    registry.
 
 ## Security notes
@@ -105,7 +105,7 @@ dependencies, so that one package is everything you install.
 - **Tool arguments are recorded.** Keep secrets out of arguments you do not
   want screened and sealed in your audit trail.
 - **The key decides which account records the decisions.** A key from
-  another CogNEXUS account does not fail: the decisions go to that
+  another ArtzAIn account does not fail: the decisions go to that
   account's audit trail, and yours goes quiet. Keep `COGNEXUS_API_KEY` or
   `apiKey` in the Gateway's own config, out of what the agents' tools write
   to, and give a demo its own Gateway and key rather than swapping this one.

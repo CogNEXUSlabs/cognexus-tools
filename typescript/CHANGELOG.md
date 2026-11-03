@@ -4,6 +4,15 @@ All notable changes to `@cognexuslabs/artzain`. Headings are the bare
 version (`## 0.1.5`): the mirror's `publish-npm.yml` cuts the GitHub release
 notes for tag `sdk-ts-v<version>` from the matching section.
 
+## 0.1.10
+
+### Changed
+
+- **The company is CogNEXUS Labs and the product ArtzAIn.** The README and the
+  `decide()` doc comment called the Decision API and the engine CogNEXUS's;
+  they are ArtzAIn's. The copyright line in `LICENSE` reads "CogNEXUS Labs,
+  LLC", the legal name.
+
 ## 0.1.9
 
 ### Fixed

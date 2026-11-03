@@ -1,7 +1,7 @@
 {
   "id": "artzain-tool-gate",
-  "name": "CogNEXUS tool gate",
-  "description": "Clear OpenClaw host tools through the CogNEXUS Decision API before they run. deny, review, and engine refusals block. review is not OpenClaw /approve.",
+  "name": "ArtzAIn tool gate",
+  "description": "Clear OpenClaw host tools through the ArtzAIn Decision API before they run. deny, review, and engine refusals block. review is not OpenClaw /approve.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -20,7 +20,7 @@
       },
       "announce": {
         "type": "boolean",
-        "description": "Opt-in (v0.2): announce this instance's identity (agent ids and skill slugs — names only, never content) to the CogNEXUS Agent Wrangler once per process, so unreachable laptop/home-lab instances enter the estate as reviewable discovered rows. Fire-and-forget; never blocks tool gating."
+        "description": "Opt-in (v0.2): announce this instance's identity (agent ids and skill slugs — names only, never content) to the ArtzAIn Agent Wrangler once per process, so unreachable laptop/home-lab instances enter the estate as reviewable discovered rows. Fire-and-forget; never blocks tool gating."
       },
       "instance": {
         "type": "string",

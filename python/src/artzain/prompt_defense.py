@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 #
-# Vendored into CogNEXUS from:
+# Vendored into ArtzAIn from:
 #   https://github.com/microsoft/agent-governance-toolkit
 #   agent-governance-python/agent-compliance/src/agent_compliance/prompt_defense.py
 # (Upstream moved this out of the former top-level `packages/` tree in the
@@ -12,7 +12,7 @@
 # unless the team explicitly chooses to.
 #
 # LOCAL DIVERGENCE — do not lose these in a merge:
-#   Three CogNEXUS-only vectors were added after the PocketOS / Cursor / Claude
+#   Three ArtzAIn-only vectors were added after the PocketOS / Cursor / Claude
 #   incident (see security/__init__.py): `database-destruction`,
 #   `kill-switch-awareness`, `never-guess-destructive`. Upstream does not have
 #   them; a naive re-sync would delete them.
@@ -354,7 +354,7 @@ _RULES: tuple[_DefenseRule, ...] = (
     ),
     # ── Adopted from upstream AGT (agent-governance-toolkit) ──────────
     # Five vectors added upstream after the original vendoring. Ported
-    # verbatim; the CogNEXUS-only vectors above are preserved. Adopting
+    # verbatim; the ArtzAIn-only vectors above are preserved. Adopting
     # these required extending _COGNEXUS_SYSTEM_DEFENSE_APPENDIX in the
     # same change — see security/cognexus_prompt_defense.py — or the
     # engine's own default prompt would drop below grade A.

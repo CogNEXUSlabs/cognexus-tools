@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 #
-# Vendored into CogNEXUS from:
+# Vendored into ArtzAIn from:
 #   https://github.com/microsoft/agent-governance-toolkit
 #   agent-governance-python/agent-os/src/agent_os/prompt_injection.py
 # (Upstream moved this out of the former top-level `packages/` tree in the
@@ -12,14 +12,14 @@
 # dependency unless the team explicitly chooses to.
 #
 # LOCAL DIVERGENCE — do not lose these in a merge:
-#   CogNEXUS carries four InjectionType members upstream does not:
+#   ArtzAIn carries four InjectionType members upstream does not:
 #   CROSS_PLUGIN, MARKUP_INJECTION, TOKEN_SMUGGLING, CREDENTIAL_EXFIL.
 #   Upstream has since added an optional embedding-signal layer over the regex
 #   core (EvidenceSignal / DetectionEvidenceBackend / EmbeddingSignalBackend)
 #   that we do NOT carry — adopting it would put a model on the decision hot
 #   path, which the sub-200 ms budget and the zero-egress VPC claim both
 #   constrain. Evaluate deliberately.
-#   CogNEXUS also normalises the text before the regex pass (NFKC, and
+#   ArtzAIn also normalises the text before the regex pass (NFKC, and
 #   zero-width / soft-hyphen characters stripped) — see _normalise_for_scan.
 #   A run of non-starters longer than the UAX #15 stream-safe limit is broken
 #   first, so that normalisation stays linear. Ordinary text, and a keyword in
@@ -43,13 +43,13 @@
 #   direction, and a right-to-left isolate or embedding around left-to-right
 #   text or digits with no right-to-left letter or digit in it, formatted
 #   amounts and dates aside (Trojan Source) — see _bidi_reordering.
-#   CogNEXUS refuses text holding an unpaired surrogate (a code point in
+#   ArtzAIn refuses text holding an unpaired surrogate (a code point in
 #   U+D800-U+DFFF, which json.loads makes from a lone escape): detect()
 #   returns CRITICAL `encoding:unpaired_surrogate` before any other check.
 #   The audit hash encodes with surrogatepass, and the fail-closed handler
 #   in detect() cannot re-raise. The strict UTF-8 audit hash used to raise
 #   UnicodeEncodeError on such text, from inside that handler as well.
-#   markdown_delimiter_lines_as_separators() is CogNEXUS's: the engine and the
+#   markdown_delimiter_lines_as_separators() is ArtzAIn's: the engine and the
 #   SDK's offline decide() read a model_output reply that is not JSON through
 #   it, so a line of only ---, ### or a code fence is a delimiter finding
 #   there only when the next line opens with a chat role's label (SYSTEM:).
@@ -126,7 +126,7 @@ class InjectionType(Enum):
     CONTEXT_MANIPULATION = "context_manipulation"
     CANARY_LEAK = "canary_leak"
     MULTI_TURN_ESCALATION = "multi_turn_escalation"
-    # CogNEXUS extensions (mapped to governance PD-10 / PD-11 / PD-12)
+    # ArtzAIn extensions (mapped to governance PD-10 / PD-11 / PD-12)
     CROSS_PLUGIN = "cross_plugin"
     MARKUP_INJECTION = "markup_injection"
     TOKEN_SMUGGLING = "token_smuggling"

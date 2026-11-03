@@ -1,7 +1,7 @@
 # `@cognexuslabs/openclaw-artzain`
 
 OpenClaw **plugin** that registers `api.on("before_tool_call", …)` and calls
-the CogNEXUS Decision API before a host tool runs. `deny`, `review`, and
+the ArtzAIn Decision API before a host tool runs. `deny`, `review`, and
 engine refusals (HTTP 503 / missing key) return `{ block: true }`.
 
 This is pattern C. Envelope pattern B (model `base_url` swap) is still
@@ -15,7 +15,7 @@ This is pattern C. Envelope pattern B (model `base_url` swap) is still
   Publishing, with provenance, on an `openclaw-v*` tag. The ClawHub listing
   ([`clawhub/SKILL.md`](clawhub/SKILL.md)) points at that package; it is not
   a code bundle.
-- Not a mapping of CogNEXUS `review` onto OpenClaw `/approve`.
+- Not a mapping of ArtzAIn `review` onto OpenClaw `/approve`.
 
 ## Install
 
@@ -57,7 +57,7 @@ a dashboard JWT and **not** an envelope `cnxe_…` key). Optional:
 |---|---|
 | `allow` | tool runs |
 | `deny` | `{ block: true, blockReason }` |
-| `review` | `{ block: true }` — human owns it in the CogNEXUS Review Queue |
+| `review` | `{ block: true }` — human owns it in the ArtzAIn Review Queue |
 | HTTP 503 / 401 / 422 / missing key | `{ block: true }` (fail closed) |
 | a redirect (HTTP 3xx) | `{ block: true }`: not followed, so the key stays with the configured host |
 
@@ -79,7 +79,7 @@ Set `COGNEXUS_KEEP_ALIVE=0` on the Gateway to turn it off.
 ## Instance announce (v0.2, opt-in)
 
 Instances no scanner can reach (laptops, home labs) can self-register with
-the CogNEXUS Agent Wrangler:
+the ArtzAIn Agent Wrangler:
 
 ```json
 {

@@ -5,7 +5,7 @@ import type {
 
 export class ArtzainEnvelopeApi implements ICredentialType {
   name = "artzainEnvelopeApi";
-  displayName = "CogNEXUS Envelope";
+  displayName = "ArtzAIn Envelope";
   documentationUrl = "https://docs.cognexuslabs.ai";
   properties: INodeProperties[] = [
     {

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Render the CogNEXUS agent-workflow architecture diagram.
+"""Render the ArtzAIn agent-workflow architecture diagram.
 
 Shows where the ``artzain`` PyPI package sits inside a user's agent
 pipeline: four independent safety chokepoints (static prompt defence,
 runtime input screening, runtime output / destructive-action guard +
 kill switch) plus a cross-cutting audit & telemetry rail to the
-CogNEXUS dashboard.
+ArtzAIn dashboard.
 
 Usage::
 
@@ -24,7 +24,7 @@ from pathlib import Path
 import graphviz
 
 # ── Palette ────────────────────────────────────────────────────────────────
-COG = "#0E7C86"        # CogNEXUS chokepoint fill (teal)
+COG = "#0E7C86"        # ArtzAIn chokepoint fill (teal)
 COG_BORDER = "#0A5A61"
 COG_LIGHT = "#E6F4F5"  # build-time / audit light teal
 USER = "#334155"       # user-owned agent components (slate)
@@ -60,7 +60,7 @@ def build() -> graphviz.Digraph:
         labelloc="t",
         label=(
             '<<b><font point-size="20" color="#0F172A">'
-            "CogNEXUS Decision Architecture</font></b>"
+            "ArtzAIn Decision Architecture</font></b>"
             '<br/><font point-size="11" color="#475569">'
             "Where the <b>artzain</b> PyPI package sits in your agent pipeline &#8212; "
             "four independent safety chokepoints + audit telemetry</font>>"

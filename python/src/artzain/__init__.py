@@ -12,7 +12,7 @@ Python with zero mandatory dependencies:
 
 **Client policy enforcement** (:mod:`artzain.policy_enforcement`)
     Tenant-specific rules derived from HR, legal, and business policy documents
-    indexed by CogNEXUS (Drive / OneDrive).  Complements OWASP prompt defence
+    indexed by ArtzAIn (Drive / OneDrive).  Complements OWASP prompt defence
     with document-grounded guardrails via :func:`screen_client_policy`.
 
 **Runtime input injection detection** (:mod:`artzain.prompt_injection`)
@@ -180,7 +180,7 @@ from artzain.prompt_injection import (
     load_prompt_injection_config,
 )
 
-__version__ = "0.6.62"
+__version__ = "0.6.63"
 
 __all__ = [
     # Version
