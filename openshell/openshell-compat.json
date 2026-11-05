@@ -1,8 +1,15 @@
 {
   "kind": "artzain.openshell.compat",
   "version": 2,
-  "serial": 22,
+  "serial": 23,
   "pairs": [
+    {
+      "artzain": "0.6.64",
+      "openshell": "0.1.7",
+      "verified": "2026-11-05",
+      "conformance_run": 42013434409,
+      "connect_script_sha256": "62fa644b723e5243639cc7b088b78223bdeef4e1898d9bfe9f1291ca45fff7df"
+    },
     {
       "artzain": "0.6.63",
       "openshell": "0.1.7",
@@ -149,6 +156,13 @@
       "verified": "2026-10-09",
       "conformance_run": 38002180987,
       "connect_script_sha256": "97a1e391b650936f727b5104723e5da4f369fbb904cac782b39ff1a50c63a85f"
+    },
+    {
+      "artzain": "0.6.64",
+      "openshell": "0.1.2",
+      "verified": "2026-11-05",
+      "conformance_run": 42013434409,
+      "connect_script_sha256": "62fa644b723e5243639cc7b088b78223bdeef4e1898d9bfe9f1291ca45fff7df"
     },
     {
       "artzain": "0.6.63",
