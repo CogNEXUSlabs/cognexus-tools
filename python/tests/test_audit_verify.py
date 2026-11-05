@@ -310,7 +310,7 @@ def authority():
 
 
 def _signed_manifest(signer, first_seq, last_seq, leaf_count,
-                     seal_count=None, leaves=None, proofs=None) -> dict:
+                     seal_count=None, leaves=None, proofs=None, attrs=None) -> dict:
     manifest = {"first_seq": first_seq, "last_seq": last_seq,
                 "leaf_count": leaf_count, "tenant_user_id": 1}
     if seal_count is not None:
@@ -324,6 +324,13 @@ def _signed_manifest(signer, first_seq, last_seq, leaf_count,
     # it models a bundle exported before inclusion proofs existed.
     if proofs is not None:
         manifest["proofs_digest"] = _proofs_digest(proofs)
+    # An export from a deployment that seals request attributes commits the
+    # leaves that carry them (``attrs`` is that leaf list); omitting it models
+    # a bundle exported before the attributes existed.
+    if attrs is not None:
+        from artzain.audit_verify import _attrs_digest
+
+        manifest["attrs_digest"] = _attrs_digest(attrs)
     h = hashlib.sha256(_canonical(manifest)).hexdigest()
     return {**manifest, "sig": signer.sign(h.encode("ascii")),
             "signer_key_id": signer.key_id}

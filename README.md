@@ -86,9 +86,19 @@ sent automatically.
 Grok Bot and OpenClaw announce only when `announce` is exactly true. The
 post is names only: the instance, agent ids, and skill slugs, capped at 50
 agents, 100 skills, 200 characters a name, and 120 characters for the
-instance. Enroll is on by default. It posts the same names to
-`POST /api/v1/registry/enroll`. Turn it off with `GROKBOT_ENROLL=false` or
-`--no-enroll`, or with `enroll: false` in OpenClaw.
+instance. A longer agent list is several calls of at most 25, under that
+name cap and under 25 new rows on one call. `announce` sends the current
+profile's agent, and `--all-profiles` sends every profile. An agent
+announced within 24 hours is skipped unless `--force`.
+`grokbot-artzain coverage --since <ISO time>` lists actions in the shim log,
+the gateway log, and the action journal that have no decision id, and posts
+one action count per agent.
+Enroll is on by default. It posts the same names to
+`POST /api/v1/registry/enroll`. A `decide` skips that post when this CLI
+version already enrolled for the same base URL, key and Bot within
+`GROKBOT_ENROLL_TTL_HOURS` (default 24). Turn it off with
+`GROKBOT_ENROLL=false` or `--no-enroll`, or with `enroll: false` in
+OpenClaw.
 
 `COGNEXUS_SDK_BROWSER_HEADERS` defaults to `"0"` since 0.6.11. `"1"` makes
 CLI auth calls and the GUI proxy send browser-like headers. Event posts and
@@ -331,17 +341,76 @@ See [`n8n/README.md`](n8n/README.md).
 ```bash
 npm install -g @cognexuslabs/grokbot-artzain
 grokbot-artzain --version
+grokbot-artzain doctor
 ```
+
+`doctor` checks Node, the command on PATH, this version, the skill text,
+the key and the address. It exits 0 when no check failed and 1 when a
+check failed. `--json` prints the checks. `--offline` skips the comparison
+with the latest version on npm. The key check is an enroll request and
+counts against the enroll limit. It sends no decision request. On Windows
+the PATH check also looks for `grokbot-artzain.cmd` and the PowerShell
+execution policy.
+
+`grokbot-artzain upgrade` prints the install command for this copy and runs
+it only with `--yes`. On Windows the command is `npm.cmd`, and the output
+says to open a new shell. `--skill` with `--yes` copies the packaged
+`SKILL.md` after a one-line summary. A path outside the directory for this
+install is refused unless `--force` is set. It does not read or change the key.
 
 Install it with `-g`, where the Bot runs its commands: the skill tells the
 Bot to run the `grokbot-artzain` command, and only a global install puts
-that on the PATH. Then set `COGNEXUS_API_KEY` (a Decision API key, `cnx_…`)
+that on the PATH. Then set `COGNEXUS_API_KEY` (a Decision API key, `cnx_…`). `MYAPP_API_KEY` is not a key. When it is the only name set, this release warns on stderr and the command has no key.
 and add [`grokbot/SKILL.md`](grokbot/SKILL.md) to the Bot as a skill, in
-the Grok Bot app.
+the Grok Bot app. On the ArtzAIn dashboard, API keys has an optional Bind
+to agent id field for that Bot's agent id. The account switch
+`enforce_grokbot_identity_binding` (default off) refuses a grokbot decide
+whose bound key asserts a different agent id, HTTP 422 `identity_binding`,
+before the engine. `COGNEXUS_IDENTITY_BINDING` stays the deployment-wide
+mode. After an update, `grokbot-artzain skill --check <path>`
+compares that saved skill with the package and says current or behind.
+`decide --queue` stores a request when the engine cannot be reached and
+still exits 2. `queue retry` sends it again with its original request id,
+and the outcome is recorded only. An entry older than 48 hours is dropped,
+with a note. `--model` and `--workload` are `model_id` and `workload_id`.
+`--session`, `--parent` and `--on-behalf-of` are sent in `context`. The
+engine seals them on leaf version 2 as `session_id`, `parent_decision_ids`
+and `on_behalf_of`. `--cites-review` stays in `context`. The rest of
+`context` is not in the signed leaf.
 
 Cooperative skill (pattern C): Grok Bot has no host `before_tool_call`
 intercept, so the Bot itself runs `grokbot-artzain decide` before a
-side-effect. `deny`, `review`, and transport errors fail closed. The setup
+side-effect. `grokbot-artzain init --bot <name>` saves a profile. `--profile` or `GROKBOT_BOT` selects it. Flag, then environment, then profile, then the default. `COGNEXUS_AGENT_DID` is the agent id when `GROKBOT_AGENT_ID` is unset. A decide with no agent id uses `grokbot-agent` and says so on stderr. `GROKBOT_REQUIRE_IDENTITY=1` exits 2 before any network call. `MYAPP_API_KEY` is not a key. When it is the only name set, this release warns on stderr and the command has no key. `decide` prints one JSON line. `next_step` is `run` on allow,
+`wait for review` on review, and `do not run` otherwise. `decision_id` is
+its own field when the engine returned a decision. `--payload-file -` reads
+the tool-call JSON from standard input; an empty or unreadable standard
+input exits 2 and the engine is not asked. `deny`, `review`, and transport
+errors fail closed. Every
+decide sends `product` as `grokbot-artzain@` the command's version.
+`COGNEXUS_GROKBOT_MIN_VERSION` is read on each decide and applies only when
+the account switch `enforce_grokbot_min_version` is on (default off). A
+`grokbot-artzain` below that version is HTTP 422 `client_too_old`, before
+the engine decides, so nothing is sealed and nothing is billed. The command
+prints `REFUSED: this grokbot-artzain is older than the minimum this account accepts. Run grokbot-artzain upgrade.`
+A decide with no product is not this refusal.
+`grokbot-artzain decide --tool <connector tool name>` maps that name onto a
+taxonomy action and a target (`slack:channel/C123`,
+`github:repo/Quantumskipper/CogNEXUS`). The action is the payload's `tool`
+field, which is what policy rules read. A name that is not listed is
+`unknown_tool`. `--action` still works and wins when both are given. The
+map is `src/taxonomy.json` in this package.
+`grokbot-artzain decide --cites-review <decision id>` sends
+`context.cites_review`. Context is an idempotency input, so the re-ask is
+decided again. `grokbot-artzain review-status <decision id>` reads
+`GET /api/v1/decisions/{decision_id}/review` and prints `pending`,
+`approved`, or `rejected`. It cannot change the review. The gate
+runs on the Grok Bot box, with no `machineId`, even when the action itself
+targets a user computer. Decide on the box first, then use the
+machine-targeted tool only for the approved action
+([Where to run the gate](grokbot/SKILL.md#where-to-run-the-gate)). A message
+to another Bot is `send_agent_message`, with the recipient in
+`--arg "to=<agent id>"`. `GB-AGENT-MSG` in the recipe is medium and matches
+a `to` that is not one of the team's Bot names. The setup
 steps, the Windows notes, opt-in announce and default-on pull enroll are in
 [`grokbot/README.md`](grokbot/README.md).
 
@@ -384,6 +453,7 @@ release whose sidecar passed conformance against that OpenShell release.
 <!-- openshell-compat:begin -->
 | artzain | OpenShell | Verified |
 |---|---|---|
+| 0.6.63 | 0.1.7 | 2026-11-04 |
 | 0.6.62 | 0.1.6 | 2026-10-30 |
 | 0.6.61 | 0.1.6 | 2026-10-30 |
 | 0.6.60 | 0.1.6 | 2026-10-29 |
@@ -404,6 +474,7 @@ release whose sidecar passed conformance against that OpenShell release.
 | 0.6.45 | 0.1.3 | 2026-10-10 |
 | 0.6.44 | 0.1.3 | 2026-10-10 |
 | 0.6.43 | 0.1.3 | 2026-10-09 |
+| 0.6.63 | 0.1.2 | 2026-11-04 |
 | 0.6.62 | 0.1.2 | 2026-10-30 |
 | 0.6.61 | 0.1.2 | 2026-10-30 |
 | 0.6.60 | 0.1.2 | 2026-10-29 |

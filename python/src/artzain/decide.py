@@ -72,6 +72,84 @@ def _dimension_id(value: str) -> str:
     return text[:80]
 
 
+def _bounded_text(value: str, width: int, name: str) -> str:
+    """A lineage string, stripped and cut to *width*. Empty is allowed."""
+    text = str(value or "").strip()
+    if any(ord(ch) < 32 for ch in text):
+        raise ValueError(f"{name} cannot include control characters.")
+    return text[:width]
+
+
+def _parent_ids(value: Optional[list[str]]) -> list[str]:
+    """``parent_decision_ids``, empty dropped, duplicates dropped, at most 16."""
+    if not value:
+        return []
+    parents: list[str] = []
+    for item in value:
+        text = _bounded_text(item, 64, "parent_decision_ids")
+        if text and text not in parents:
+            parents.append(text)
+        if len(parents) == 16:
+            break
+    return parents
+
+
+def _online_body(
+    *,
+    action: str,
+    target: str,
+    payload: str,
+    kind: str,
+    agent_did: str,
+    surface: str,
+    request_id: Optional[str],
+    product: Optional[str],
+    context: Optional[dict[str, Any]],
+    workload_id: str,
+    model_id: str,
+    parent_decision_ids: Optional[list[str]],
+    session_id: str,
+    trace_id: str,
+    span_id: str,
+    tool_call_id: str,
+    on_behalf_of: str,
+    approver_did: str,
+) -> dict[str, Any]:
+    """The Decision API body. Empty lineage fields are left out."""
+    body = {
+        "agent_did": agent_did,
+        "action": action,
+        "target": target,
+        "payload": payload,
+        "payload_kind": kind,
+        "surface": surface,
+        "request_id": request_id,
+        "product": product,
+        "context": context or {},
+    }
+    workload = _dimension_id(workload_id)
+    model = _dimension_id(model_id)
+    if workload:
+        body["workload_id"] = workload
+    if model:
+        body["model_id"] = model
+    parents = _parent_ids(parent_decision_ids)
+    if parents:
+        body["parent_decision_ids"] = parents
+    for name, width, raw in (
+        ("session_id", 128, session_id),
+        ("trace_id", 64, trace_id),
+        ("span_id", 32, span_id),
+        ("tool_call_id", 128, tool_call_id),
+        ("on_behalf_of", 160, on_behalf_of),
+        ("approver_did", 160, approver_did),
+    ):
+        text = _bounded_text(raw, width, name)
+        if text:
+            body[name] = text
+    return body
+
+
 def decide(
     *,
     action: str,
@@ -85,6 +163,13 @@ def decide(
     context: Optional[dict[str, Any]] = None,
     workload_id: str = "",
     model_id: str = "",
+    parent_decision_ids: Optional[list[str]] = None,
+    session_id: str = "",
+    trace_id: str = "",
+    span_id: str = "",
+    tool_call_id: str = "",
+    on_behalf_of: str = "",
+    approver_did: str = "",
     timeout_sec: float = 10.0,
 ) -> dict[str, Any]:
     """Gate a proposed agent action and return the decision.
@@ -112,13 +197,25 @@ def decide(
             API replays, a decision whose kept connection is lost before the
             answer is sent once more, and the API answers with the first
             decision. Without one it raises :class:`DecisionError` instead,
-            rather than risk sealing it twice.
+            rather than risk sealing it twice. The platform seals it beside
+            the decision's leaf, as sent (at most 64 characters), so send
+            your own trace, span or job id: ``GET /api/v1/audit/decisions?
+            request=<id>`` then finds the entry, and an auditor holding the
+            id reaches it in one lookup.
         product: FR-11 product identifier (``"name"`` or ``"name@version"``).
             Validated at the server boundary against negotiated product
             schemas — unknown products/versions are rejected with a 422.
         context: Advisory context (recorded with the decision).
         workload_id: Workload this decision belongs to. Omitted when empty.
         model_id: Model that produced the payload. Omitted when empty.
+        parent_decision_ids: Decisions this one follows. Omitted when empty.
+        session_id: Session this decision belongs to. Omitted when empty.
+        trace_id: Trace id. Omitted when empty.
+        span_id: Span id. Omitted when empty.
+        tool_call_id: The tool call this decision screens. Omitted when empty.
+        on_behalf_of: The principal the agent acts for. Omitted when empty.
+        approver_did: Who approved a resolution. Omitted when empty.
+            These lineage fields are sealed on a version 2 leaf.
         timeout_sec: HTTP timeout for the online path.
 
     Returns:
@@ -174,23 +271,15 @@ def decide(
             request_id=request_id,
         )
 
-    body = {
-        "agent_did": agent_did,
-        "action": action,
-        "target": target,
-        "payload": payload,
-        "payload_kind": kind,
-        "surface": surface,
-        "request_id": request_id,
-        "product": product,
-        "context": context or {},
-    }
-    workload = _dimension_id(workload_id)
-    model = _dimension_id(model_id)
-    if workload:
-        body["workload_id"] = workload
-    if model:
-        body["model_id"] = model
+    body = _online_body(
+        action=action, target=target, payload=payload, kind=kind,
+        agent_did=agent_did, surface=surface, request_id=request_id,
+        product=product, context=context, workload_id=workload_id,
+        model_id=model_id, parent_decision_ids=parent_decision_ids,
+        session_id=session_id, trace_id=trace_id, span_id=span_id,
+        tool_call_id=tool_call_id, on_behalf_of=on_behalf_of,
+        approver_did=approver_did,
+    )
     url = creds.base_url + "/api/v1/decisions"
     try:
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")

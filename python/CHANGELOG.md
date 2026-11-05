@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.6.64
+
+### Added
+
+- **`artzain audit verify` checks the request attributes a leaf carries.** A
+  deployment that seals them stores, beside each leaf's signed body, the
+  request's own `request_id`, `surface`, `payload_kind`, `product`,
+  `workload_id` and `model_id` as `attrs`, signed by the leaf's key over the
+  leaf hash and the attributes as `attrs_sig`, and the signed manifest
+  commits the set as `attrs_digest`. The verifier checks each signature with
+  the leaf's (`FAILED at seq N: bad request attributes signature`,
+  `request attributes unsigned`) and the committed set with the record set
+  (`request attribute set does not match the signed manifest (attrs_digest
+  mismatch)`), and counts the signatures it checked. A bundle from before
+  the attributes existed verifies as before, and the signed leaf body is
+  unchanged, so an earlier release verifies a bundle that carries them.
+- **`artzain audit verify` accepts leaf version 2.** A leaf whose
+  `leaf_version` is 2 hashes that version plus the version 1 fields plus
+  `parent_decision_ids`, `session_id`, `trace_id`, `span_id`, `tool_call_id`,
+  `on_behalf_of`, `model_id`, `approver_did`, `surface`, `product` and
+  `payload_kind`. Any other `leaf_version`, including none, still hashes the
+  version 1 field set, so a bundle sealed before version 2 verifies as before.
+  Changing any version 2 field changes the hash.
+- **`artzain audit verify` checks the bundle's readable companions.** An
+  export carries `decisions.csv` (one row per leaf) and a `README.md` for the
+  auditor, derived at export, and the signed manifest commits each by the
+  SHA-256 of its bytes under `companions`. The verifier checks every file
+  that map lists (`FAILED: companion decisions.csv altered (digest
+  mismatch)`, `FAILED: companion README.md missing`), reading each as bytes,
+  so the CSV's CRLF line ends hash as written, and refuses a name that is not
+  a plain file name at the bundle's top level without reading it. A bundle
+  whose manifest lists none verifies as before, and an earlier release
+  ignores the map.
+
 ## 0.6.63
 
 ### Changed

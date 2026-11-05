@@ -110,6 +110,17 @@ def test_decide_sends_a_workload_and_a_model_when_named(monkeypatch):
     )
     assert captured["body"]["workload_id"] == "invoice-approval"
     assert captured["body"]["model_id"] == "model-a"
+    assert "session_id" not in captured["body"]
+    decide(
+        action="send_email", target="crm:1", payload="hi", kind="user_input",
+        parent_decision_ids=["01PARENT", ""],
+        session_id=" sess-1 ",
+        on_behalf_of="alice",
+    )
+    assert captured["body"]["parent_decision_ids"] == ["01PARENT"]
+    assert captured["body"]["session_id"] == "sess-1"
+    assert captured["body"]["on_behalf_of"] == "alice"
+    assert "trace_id" not in captured["body"]
 
     def _refuse(req, timeout=None):
         raise AssertionError("sent")

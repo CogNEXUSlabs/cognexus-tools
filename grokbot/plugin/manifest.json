@@ -1,0 +1,34 @@
+{
+  "todo": "Q1: The Grok Bot plugin manifest format was not found in this repository. This file is a placeholder until that format is known. Do not treat the fields below as a format the app accepts.",
+  "name": "grokbot-artzain",
+  "mcp": {
+    "command": "grokbot-artzain",
+    "args": ["mcp"]
+  },
+  "settings": [
+    {
+      "name": "COGNEXUS_API_KEY",
+      "secret": true,
+      "required": true,
+      "description": "Decision API key. A Team Bot secret field, read from the app's text and not tried. An ordinary Bot takes this through a card in the chat. Neither route is known to configure this MCP server until Q1 is answered."
+    },
+    {
+      "name": "GROKBOT_AGENT_ID",
+      "secret": false,
+      "required": false,
+      "description": "Agent id decisions are recorded under. Default grokbot-agent."
+    },
+    {
+      "name": "GROKBOT_INSTANCE",
+      "secret": false,
+      "required": false,
+      "description": "Stable name for this host."
+    },
+    {
+      "name": "COGNEXUS_API_BASE_URL",
+      "secret": false,
+      "optional": true,
+      "description": "ArtzAIn deployment. Optional. Default https://app.cognexuslabs.ai."
+    }
+  ]
+}

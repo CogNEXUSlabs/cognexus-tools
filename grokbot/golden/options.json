@@ -1,0 +1,53 @@
+{
+  "decide": {
+    "valued": [
+      "--api-key",
+      "--base-url",
+      "--agent-did",
+      "--instance",
+      "--profile",
+      "--action",
+      "--tool",
+      "--target",
+      "--arg",
+      "--payload",
+      "--payload-file",
+      "--request-id",
+      "--cites-review",
+      "--model",
+      "--workload",
+      "--session",
+      "--parent",
+      "--on-behalf-of"
+    ],
+    "switches": [
+      "--announce",
+      "--no-enroll",
+      "--queue"
+    ]
+  },
+  "announce": {
+    "valued": [
+      "--api-key",
+      "--base-url",
+      "--agent-did",
+      "--instance",
+      "--profile"
+    ],
+    "switches": [
+      "--all-profiles",
+      "--force"
+    ]
+  },
+  "enroll": {
+    "valued": [
+      "--api-key",
+      "--base-url",
+      "--agent-did",
+      "--instance",
+      "--profile",
+      "--enroll-token"
+    ],
+    "switches": []
+  }
+}

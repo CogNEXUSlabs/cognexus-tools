@@ -1,7 +1,12 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { enrollInstance } from "./enroll.js";
-import { gateToolCall, resetAnnounceForTests, type SkillConfig } from "./gate.js";
+import { gateToolCall, resetAnnounceForTests, resetEnrollForTests, settleEnrollForTests, type SkillConfig } from "./gate.js";
+import { setStateDirectoryForTests } from "./state.js";
 import type { FetchLike } from "./client.js";
 
 type Captured = { url: string; init: Parameters<FetchLike>[1] };
@@ -36,7 +41,11 @@ const CFG: SkillConfig = {
   announceSkills: ["artzain"],
 };
 
-beforeEach(() => resetAnnounceForTests());
+beforeEach(() => {
+  resetAnnounceForTests();
+  resetEnrollForTests();
+  setStateDirectoryForTests(mkdtempSync(join(tmpdir(), "grokbot-enroll-")));
+});
 
 describe("enrollInstance", () => {
   it("POSTs announce-shape identity with source grokbot", async () => {
@@ -125,6 +134,7 @@ describe("gateToolCall enroll", () => {
     const cfg = { ...CFG, announce: false };
     const r1 = await gateToolCall(cfg, { toolName: "exec" }, impl);
     const r2 = await gateToolCall(cfg, { toolName: "exec" }, impl);
+    await settleEnrollForTests();
     expect(r1.allow).toBe(true);
     expect(r2.allow).toBe(true);
     expect(calls.filter((c) => c.url.endsWith("/registry/enroll"))).toHaveLength(1);

@@ -25,10 +25,15 @@ import {
 } from "./client.js";
 
 export const ANNOUNCE_TIMEOUT_MS = 10_000;
-const MAX_AGENTS = 50;
+/** The server rejects a call with more names than this. */
+export const ANNOUNCE_MAX_AGENTS = 50;
+/** New catalog rows past this on one call are deferred, not stored. */
+export const ANNOUNCE_MAX_NEW = 25;
 const MAX_SKILLS = 100;
 const MAX_NAME_LEN = 200;
 const MAX_INSTANCE_LEN = 120;
+/** A fully new batch stays under both server caps. */
+const ANNOUNCE_CHUNK = Math.min(ANNOUNCE_MAX_AGENTS, ANNOUNCE_MAX_NEW);
 
 export interface AnnounceConfig {
   apiKey?: string;
@@ -59,6 +64,8 @@ export interface AnnounceResult {
   /** Transient (network / 5xx / 429): a later gated call may retry.
    * False for successes and for 3xx and 4xx config refusals. */
   retryable?: boolean;
+  /** Agents whose call was stored. Absent when none were. */
+  agentsSent?: string[];
 }
 
 function asString(value: unknown): string {
@@ -69,7 +76,7 @@ function boundName(value: string, maxLen: number): string {
   return Array.from(value.trim()).slice(0, maxLen).join("");
 }
 
-function cleanNames(values: unknown, cap: number): string[] {
+function cleanNames(values: unknown, cap?: number): string[] {
   if (!Array.isArray(values)) return [];
   const out: string[] = [];
   for (const v of values) {
@@ -77,9 +84,18 @@ function cleanNames(values: unknown, cap: number): string[] {
     const name = boundName(v, MAX_NAME_LEN);
     if (!name || out.includes(name)) continue;
     out.push(name);
-    if (out.length >= cap) break;
+    if (cap !== undefined && out.length >= cap) break;
   }
   return out;
+}
+
+/** Calls of at most 25 names. A longer list is several calls, not a silent drop. */
+export function chunkAnnounceAgents(agents: string[]): string[][] {
+  const chunks: string[][] = [];
+  for (let i = 0; i < agents.length; i += ANNOUNCE_CHUNK) {
+    chunks.push(agents.slice(i, i + ANNOUNCE_CHUNK));
+  }
+  return chunks;
 }
 
 /** Fire one announce. Never throws — the caller is a Decision gate.
@@ -104,7 +120,7 @@ export async function announceInstance(
     log("artzain announce skipped: set `instance` to a stable name");
     return { ok: false, reason: "no instance name" };
   }
-  const agents = cleanNames(cfg.announceAgents, MAX_AGENTS);
+  const agents = cleanNames(cfg.announceAgents);
   if (agents.length === 0) {
     const fallback = boundName(
       asString(fallbackAgentId).trim() ||
@@ -115,6 +131,7 @@ export async function announceInstance(
     agents.push(fallback);
   }
   const skills = cleanNames(cfg.announceSkills, MAX_SKILLS);
+  const chunks = chunkAnnounceAgents(agents);
 
   const impl: FetchLike | undefined =
     fetchImpl ?? (globalThis.fetch as unknown as FetchLike | undefined);
@@ -123,62 +140,95 @@ export async function announceInstance(
     return { ok: false, reason: "no fetch" };
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ANNOUNCE_TIMEOUT_MS);
   // Named if the request fails; a baseUrl that is not a string fails first.
   let baseSource = configBaseUrlSource(cfg.baseUrlSource);
+  const agentsSent: string[] = [];
+  const sent = (): Pick<AnnounceResult, "agentsSent"> =>
+    agentsSent.length > 0 ? { agentsSent: [...agentsSent] } : {};
   try {
     const base = resolveBaseUrlSetting(cfg.baseUrl, cfg.baseUrlSource);
     baseSource = base.source;
-    const resp = await impl(
-      `${base.url}/api/v1/registry/announce`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Api-Key": apiKey,
-        },
-        body: JSON.stringify({ source: "grokbot", instance, agents, skills }),
-        signal: controller.signal,
-        redirect: "manual",
-      },
-    );
-    if (!resp.ok) {
-      // The refusal's body is not read: end the request, or a large one
-      // holds the connection until garbage collection.
-      controller.abort();
-      const retryable = resp.status >= 500 || resp.status === 429;
-      log(`artzain announce refused: HTTP ${resp.status}` +
-        (retryable ? " (will retry on a later gated call)" : ""));
-      return { ok: false, status: resp.status, reason: `http ${resp.status}`, retryable };
+    let lastStatus = 200;
+    const totals: Record<string, number> = {
+      registered: 0, seen: 0, blocked: 0, deferred: 0, failed: 0,
+    };
+    let unreadable = false;
+    let calls = 0;
+    for (const chunk of chunks) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), ANNOUNCE_TIMEOUT_MS);
+      calls += 1;
+      try {
+        const resp = await impl(
+          `${base.url}/api/v1/registry/announce`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Api-Key": apiKey,
+            },
+            body: JSON.stringify({ source: "grokbot", instance, agents: chunk, skills }),
+            signal: controller.signal,
+            redirect: "manual",
+          },
+        );
+        if (!resp.ok) {
+          // The refusal's body is not read: end the request, or a large one
+          // holds the connection until garbage collection.
+          controller.abort();
+          const retryable = resp.status >= 500 || resp.status === 429;
+          log(`artzain announce refused: HTTP ${resp.status}` +
+            (retryable ? " (will retry on a later gated call)" : ""));
+          return {
+            ok: false,
+            status: resp.status,
+            reason: `http ${resp.status}`,
+            retryable,
+            ...sent(),
+          };
+        }
+        agentsSent.push(...chunk);
+        lastStatus = resp.status;
+        try {
+          const data = (await resp.json()) as Record<string, unknown>;
+          for (const key of Object.keys(totals)) {
+            const value = data[key];
+            totals[key] = (totals[key] ?? 0) + (typeof value === "number" ? value : 0);
+          }
+        } catch {
+          unreadable = true;
+        }
+      } catch (err) {
+        // The error's text can quote the API key or name the host (see
+        // failureKind): the line and the reason give its kind instead.
+        const kind = failureKind(err, controller.signal);
+        log(`artzain announce failed: ${kind} (base URL from ${baseSource}) ` +
+          "(will retry on a later gated call)");
+        return { ok: false, reason: kind, retryable: true, ...sent() };
+      } finally {
+        clearTimeout(timer);
+      }
     }
-    let counts = "";
-    try {
-      const data = (await resp.json()) as Record<string, unknown>;
-      const n = (k: string) => (typeof data[k] === "number" ? (data[k] as number) : 0);
-      counts = `registered ${n("registered")}, seen ${n("seen")}, ` +
+    const n = (k: string) => totals[k] ?? 0;
+    let counts = unreadable
+      ? "response unreadable"
+      : `registered ${n("registered")}, seen ${n("seen")}, ` +
         `blocked ${n("blocked")}, deferred ${n("deferred")}, ` +
         `failed ${n("failed")}`;
-      if (n("deferred") > 0) {
-        counts += " — deferred rows are not retried until a re-announce (restart)";
-      }
-      if (n("failed") > 0) {
-        counts += " — failed rows hit a server-side write error and were NOT " +
-          "stored; a re-announce (restart) retries them";
-      }
-    } catch {
-      counts = "response unreadable";
+    if (!unreadable && n("deferred") > 0) {
+      counts += " — deferred rows are not retried until a re-announce (restart)";
     }
-    log(`artzain announce ok: instance '${instance}', ${agents.length} agent(s); ${counts}`);
-    return { ok: true, status: resp.status };
+    if (!unreadable && n("failed") > 0) {
+      counts += " — failed rows hit a server-side write error and were NOT " +
+        "stored; a re-announce (restart) retries them";
+    }
+    const requests = calls > 1 ? ` in ${calls} requests` : "";
+    log(`artzain announce ok: instance '${instance}', ${agentsSent.length} agent(s)${requests}; ${counts}`);
+    return { ok: true, status: lastStatus, agentsSent };
   } catch (err) {
-    // The error's text can quote the API key or name the host (see
-    // failureKind): the line and the reason give its kind instead.
-    const kind = failureKind(err, controller.signal);
+    const kind = failureKind(err, undefined);
     log(`artzain announce failed: ${kind} (base URL from ${baseSource}) ` +
       "(will retry on a later gated call)");
-    return { ok: false, reason: kind, retryable: true };
-  } finally {
-    clearTimeout(timer);
+    return { ok: false, reason: kind, retryable: true, ...sent() };
   }
 }

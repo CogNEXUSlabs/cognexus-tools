@@ -1,6 +1,6 @@
 {
   "name": "@cognexuslabs/grokbot-artzain",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Grok Bot cooperative skill: ArtzAIn Decision API gate, opt-in announce, and pull enroll (no host intercept).",
   "license": "Apache-2.0",
   "repository": {
@@ -23,15 +23,17 @@
   },
   "files": [
     "dist",
+    "src/taxonomy.json",
     "SKILL.md",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "plugin"
   ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-taxonomy.mjs",
     "test": "vitest run",
     "prepublishOnly": "npm run build && npm test"
   },

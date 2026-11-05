@@ -330,6 +330,7 @@ describe("grokbot-artzain decide", () => {
         error:
           "decision unavailable (Decision API unreachable: TypeError " +
           "(base URL from COGNEXUS_API_BASE_URL)) — failing closed",
+        next_step: "do not run",
       }),
     ]);
   });
@@ -346,6 +347,7 @@ describe("grokbot-artzain decide", () => {
         error:
           "decision unavailable (Decision API unreachable: Error [ECONNREFUSED] " +
           "(base URL from --base-url)) — failing closed",
+        next_step: "do not run",
       }),
     ]);
   });
