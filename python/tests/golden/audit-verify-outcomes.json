@@ -701,6 +701,111 @@
    "FAILED: missing key(s) the signed manifest commits to: <retiring>"
   ]
  },
+ "companion_csv_altered": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "companion decisions.csv altered (digest mismatch)",
+   "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "",
+   "FAILED: companion decisions.csv altered (digest mismatch)"
+  ]
+ },
+ "companion_readme_removed": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "companion README.md missing",
+   "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "",
+   "FAILED: companion README.md missing"
+  ]
+ },
+ "companions_clean": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 7,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 7",
+   "",
+   "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ },
  "cross_bundle_splice": {
   "result": {
    "ok": false,
@@ -2375,6 +2480,145 @@
    "  first_seq 1, expected 2",
    "  leaf_count 5, expected 4",
    "  leaves_digest mismatch (exported leaf set altered)"
+  ]
+ },
+ "request_attributes_clean": {
+  "result": {
+   "ok": true,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 9,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": null,
+   "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
+   "attestation": "SELF-ATTESTED",
+   "attestation_reasons": [
+    "no certificate chain in bundle"
+   ],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
+  },
+  "exit": 0,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 9",
+   "",
+   "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "  self-attested because: no certificate chain in bundle"
+  ]
+ },
+ "request_attributes_dropped_from_committed_set": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 5,
+   "seals_checked": 1,
+   "signatures_checked": 8,
+   "signatures_skipped": false,
+   "first_bad_seq": null,
+   "error": "request attribute set does not match the signed manifest (attrs_digest mismatch)",
+   "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     5",
+   "  seals checked:      1",
+   "  signatures checked: 8",
+   "",
+   "FAILED: request attribute set does not match the signed manifest (attrs_digest mismatch)"
+  ]
+ },
+ "request_attributes_edited": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 3,
+   "seals_checked": 0,
+   "signatures_checked": 5,
+   "signatures_skipped": false,
+   "first_bad_seq": 4,
+   "error": "bad request attributes signature",
+   "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     3",
+   "  seals checked:      0",
+   "  signatures checked: 5",
+   "",
+   "FAILED at seq 4: bad request attributes signature"
+  ]
+ },
+ "request_attributes_unsigned": {
+  "result": {
+   "ok": false,
+   "leaves_checked": 1,
+   "seals_checked": 0,
+   "signatures_checked": 2,
+   "signatures_skipped": false,
+   "first_bad_seq": 2,
+   "error": "request attributes unsigned",
+   "warnings": [],
+   "seq_gaps": 0,
+   "seal_chain_gaps": 0,
+   "partial_seals": 0,
+   "partial_seals_proved": 0,
+   "warning_details": [],
+   "attestation": null,
+   "attestation_reasons": [],
+   "certificates_checked": 0,
+   "rotations_checked": 0,
+   "unexplained_key_ids": [],
+   "evidence_root_fingerprint": null,
+   "root_fingerprint_overridden": false,
+   "evidence_root_retired": false
+  },
+  "exit": 1,
+  "report": [
+   "Audit bundle: <bundle>",
+   "  leaves checked:     1",
+   "  seals checked:      0",
+   "  signatures checked: 2",
+   "",
+   "FAILED at seq 2: request attributes unsigned"
   ]
  },
  "resigned_by_uncertified_key": {

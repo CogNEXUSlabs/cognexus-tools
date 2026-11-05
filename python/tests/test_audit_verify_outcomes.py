@@ -59,6 +59,9 @@ from .test_audit_verify import (  # noqa: TID252 - the tamper matrix's own build
     _write_leaves,
     _write_proofs,
 )
+from .test_audit_verify_attrs import _attrs_bundle  # noqa: TID252
+from .test_audit_verify_companions import _CSV as _COMPANION_CSV  # noqa: TID252
+from .test_audit_verify_companions import _companions_bundle  # noqa: TID252
 from .test_audit_verify_rotations import (  # noqa: TID252
     _handover,
     _rotated_bundle,
@@ -1114,6 +1117,70 @@ def _altered_proof_and_record_set_mismatch(tmp: Path) -> _Case:
     next(p for p in proofs if p["seq"] == 7)["path"][1][0] = "cd" * 32
     _write_proofs(d, proofs)
     _resign_manifest(d, s, leaf_count=4)
+    return _case(d, signer=s)
+
+
+# -- request attributes beside the leaf (audit linkage plan, WP1) ----------------------
+
+
+@_scenario
+def _request_attributes_clean(tmp: Path) -> _Case:
+    s = _Signer()
+    return _case(_attrs_bundle(tmp, s), signer=s)
+
+
+@_scenario
+def _request_attributes_edited(tmp: Path) -> _Case:
+    s = _Signer()
+    d = _attrs_bundle(tmp, s)
+    leaves = _read_leaves(d)
+    leaves[3]["attrs"]["request_id"] = "trace-999"
+    _write_leaves(d, leaves)
+    return _case(d, signer=s)
+
+
+@_scenario
+def _request_attributes_unsigned(tmp: Path) -> _Case:
+    s = _Signer()
+    d = _attrs_bundle(tmp, s)
+    leaves = _read_leaves(d)
+    leaves[1]["attrs_sig"] = None
+    _write_leaves(d, leaves)
+    return _case(d, signer=s)
+
+
+@_scenario
+def _request_attributes_dropped_from_committed_set(tmp: Path) -> _Case:
+    s = _Signer()
+    d = _attrs_bundle(tmp, s)
+    leaves = _read_leaves(d)
+    leaves[3]["attrs"], leaves[3]["attrs_sig"] = None, None
+    _write_leaves(d, leaves)
+    return _case(d, signer=s)
+
+
+# -- readable companions in the bundle (audit linkage plan, WP2) -----------------------
+
+
+@_scenario
+def _companions_clean(tmp: Path) -> _Case:
+    s = _Signer()
+    return _case(_companions_bundle(tmp, s), signer=s)
+
+
+@_scenario
+def _companion_csv_altered(tmp: Path) -> _Case:
+    s = _Signer()
+    d = _companions_bundle(tmp, s)
+    (d / "decisions.csv").write_bytes(_COMPANION_CSV.replace(b"Zo\xc3\xab", b"Zoe"))
+    return _case(d, signer=s)
+
+
+@_scenario
+def _companion_readme_removed(tmp: Path) -> _Case:
+    s = _Signer()
+    d = _companions_bundle(tmp, s)
+    (d / "README.md").unlink()
     return _case(d, signer=s)
 
 

@@ -11,8 +11,9 @@
  * Enroll is on unless `enroll: false`. It is telemetry, not a gate: it
  * never blocks the Decision call, and failures are logged and swallowed.
  * Transient failures (network, 5xx, 429) retry on a later gated call; a
- * refusal (3xx or 4xx) is a config problem and is not retried until the process
- * restarts.
+ * refusal (3xx or 4xx) is a config problem and is not retried until the
+ * process restarts. A success is remembered in the state file, so a later
+ * process skips enroll until the CLI version changes or the record expires.
  */
 
 import {

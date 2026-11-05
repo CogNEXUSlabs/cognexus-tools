@@ -1,7 +1,12 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { announceInstance } from "./announce.js";
-import { gateToolCall, resetAnnounceForTests, type SkillConfig } from "./gate.js";
+import { ANNOUNCE_MAX_NEW, announceInstance, chunkAnnounceAgents } from "./announce.js";
+import { gateToolCall, resetAnnounceForTests, resetEnrollForTests, type SkillConfig } from "./gate.js";
+import { currentCliVersion, setStateDirectoryForTests } from "./state.js";
 import type { FetchLike } from "./client.js";
 
 type Captured = { url: string; init: Parameters<FetchLike>[1] };
@@ -32,7 +37,11 @@ const CFG: SkillConfig = {
   announceSkills: ["artzain"],
 };
 
-beforeEach(() => resetAnnounceForTests());
+beforeEach(() => {
+  resetAnnounceForTests();
+  resetEnrollForTests();
+  setStateDirectoryForTests(mkdtempSync(join(tmpdir(), "grokbot-announce-")));
+});
 
 describe("announceInstance", () => {
   it("POSTs names-only identity with source grokbot", async () => {
@@ -105,6 +114,44 @@ describe("announceInstance", () => {
     };
     expect((await announceInstance(CFG, failing)).retryable).toBe(true);
   });
+
+  it("splits a long agent list into calls of 25", async () => {
+    const names = Array.from({ length: 51 }, (_, i) => `bot-${String(i).padStart(2, "0")}`);
+    expect(chunkAnnounceAgents(names).map((chunk) => chunk.length)).toEqual([
+      ANNOUNCE_MAX_NEW,
+      ANNOUNCE_MAX_NEW,
+      1,
+    ]);
+    const { impl, calls } = fakeFetch();
+    const out = await announceInstance({ ...CFG, announceAgents: names }, impl);
+    expect(out.ok).toBe(true);
+    expect(calls).toHaveLength(3);
+    expect(out.agentsSent).toEqual(names);
+    expect(calls.map((call) => (JSON.parse(call.init.body as string).agents as string[]).length)).toEqual([
+      25,
+      25,
+      1,
+    ]);
+  });
+
+  it("keeps the agents a call stored when a later call fails", async () => {
+    let n = 0;
+    const impl: FetchLike = async () => {
+      n += 1;
+      const status = n === 1 ? 200 : 503;
+      return {
+        ok: status === 200,
+        status,
+        json: async () => ({ registered: 25, seen: 0, blocked: 0, deferred: 0, failed: 0 }),
+        text: async () => "",
+      };
+    };
+    const names = Array.from({ length: 26 }, (_, i) => `bot-${i}`);
+    const out = await announceInstance({ ...CFG, announceAgents: names }, impl);
+    expect(out.ok).toBe(false);
+    expect(out.retryable).toBe(true);
+    expect(out.agentsSent).toEqual(names.slice(0, 25));
+  });
 });
 
 describe("gateToolCall", () => {
@@ -117,6 +164,7 @@ describe("gateToolCall", () => {
     const sent = JSON.parse(decisionCalls[0].init.body as string);
     expect(sent.payload_kind).toBe("tool_call");
     expect(sent.surface).toBe("grokbot");
+    expect(sent.product).toBe(`grokbot-artzain@${currentCliVersion()}`);
     expect(sent.action).toBe("send_email");
     expect(JSON.stringify(sent)).not.toContain("eyJ");
     expect(decisionCalls[0].url).not.toContain("envelope");
@@ -137,6 +185,22 @@ describe("gateToolCall", () => {
     const missing = await gateToolCall({ ...CFG, apiKey: "" }, { toolName: "exec" }, fakeFetch().impl);
     expect(missing.allow).toBe(false);
     expect(missing.blockReason).toContain("failing closed");
+  });
+
+  it("refuses a client older than the account minimum, and does not ask again", async () => {
+    const tooOld =
+      "REFUSED: this grokbot-artzain is older than the minimum this account accepts. Run grokbot-artzain upgrade.";
+    const { impl, calls } = fakeFetch(422, {
+      detail: { code: "client_too_old", detail: "Run grokbot-artzain upgrade." },
+    });
+    const out = await gateToolCall(
+      { ...CFG, announce: false, enroll: false },
+      { toolName: "exec" },
+      impl,
+    );
+    expect(out.allow).toBe(false);
+    expect(out.blockReason).toBe(tooOld);
+    expect(calls.filter((c) => c.url.endsWith("/decisions"))).toHaveLength(1);
   });
 
   it("HTTP 503 fails closed", async () => {

@@ -14,7 +14,11 @@ verifying ATTESTED under it, and the result says which root it reached.
 
 Bundle layout::
 
-    leaves.jsonl        one JSON leaf record per line (canonical body + chain meta)
+    leaves.jsonl        one JSON leaf record per line (canonical body + chain meta,
+                        and beside them the request attributes a deployment seals:
+                        ``attrs`` signed by the leaf's key over the leaf hash and
+                        the attributes as ``attrs_sig``, ``null`` on a leaf sealed
+                        before they existed)
     seals.jsonl         one JSON seal record per line
     keys.json           [{key_id, public_key_pem, ...}]  (keys.pem is the same, PEM-only)
     manifest.json       range / counts / key ids (optionally Ed25519-signed)
@@ -23,6 +27,13 @@ Bundle layout::
     proofs.jsonl        optional, one per sealed leaf present: its Merkle
                         inclusion proof {seq, seal_id, index, path} through
                         the seal's full tree
+    decisions.csv       optional, derived: one row per leaf for a spreadsheet
+    README.md           optional, derived: what each file is, for the auditor
+
+The two derived files are generated at export, not sealed. A signed manifest
+commits each by the SHA-256 of its bytes under ``companions``, and the
+verifier checks every file it lists: present, and hashing to that value. A
+manifest that lists none is read as before.
 
 Leaf-hash, chain, and Merkle integrity verify with the standard library alone.
 A seal whose leaves are only partly present (a range- or tenant-filtered
@@ -77,6 +88,7 @@ import base64
 import hashlib
 import json
 import math
+import re
 import zipfile
 from collections import Counter
 from dataclasses import dataclass, field
@@ -108,11 +120,19 @@ _DEPLOYMENT_CERT_FORMAT = "cognexus-licence-certificate"
 
 # Canonical body fields (must match the server's audit_scribe._leaf_body order-
 # independently; sort_keys makes order irrelevant).
+# Version 1 is this set. Version 2 adds ``leaf_version`` and the lineage
+# fields. A leaf with no ``leaf_version``, or any value other than 2, hashes
+# the version 1 set, so a bundle sealed before version 2 still verifies.
 _LEAF_BODY_FIELDS = (
     "leaf_id", "decision_id", "created_at", "user_id", "team_id", "agent_did",
     "action", "target", "outcome", "payload_sha256", "votes", "bundle_version",
     "resolution", "prev_leaf_hash",
 )
+_LEAF_LINEAGE_FIELDS = (
+    "parent_decision_ids", "session_id", "trace_id", "span_id", "tool_call_id",
+    "on_behalf_of", "model_id", "approver_did", "surface", "product", "payload_kind",
+)
+_LEAF_BODY_FIELDS_V2 = ("leaf_version",) + _LEAF_BODY_FIELDS + _LEAF_LINEAGE_FIELDS
 _SEAL_BODY_FIELDS = (
     "seal_id", "first_seq", "last_seq", "merkle_root", "prev_seal_hash", "sealed_at",
 )
@@ -262,7 +282,13 @@ def _canonical(obj: dict[str, Any]) -> bytes:
 
 
 def _leaf_hash(record: dict[str, Any]) -> str:
-    body = {k: record.get(k) for k in _LEAF_BODY_FIELDS}
+    """The hash the server signed for *record*.
+
+    Version 2 covers the lineage fields. Anything else is the version 1
+    field set, and extra keys on that record are not part of the hash.
+    """
+    fields = _LEAF_BODY_FIELDS_V2 if record.get("leaf_version") == 2 else _LEAF_BODY_FIELDS
+    body = {k: record.get(k) for k in fields}
     return hashlib.sha256(_canonical(body)).hexdigest()
 
 
@@ -385,6 +411,72 @@ def _proofs_digest(proofs: list[dict[str, Any]]) -> str:
         key=lambda r: (r[0], r[1]),
     )
     return hashlib.sha256(_canonical_list(rows)).hexdigest()
+
+
+def _attrs_hash(leaf_hash: Any, attrs: dict[str, Any]) -> str:
+    """The hash a leaf's ``attrs_sig`` signs: SHA-256 over the canonical JSON
+    of ``{"attrs": attrs, "leaf_hash": leaf_hash}``, which binds the request
+    attributes to the one leaf they describe. Must match
+    ``application/services/audit_scribe.attrs_hash`` byte for byte."""
+    return hashlib.sha256(_canonical({"attrs": attrs, "leaf_hash": leaf_hash})).hexdigest()
+
+
+def _attrs_digest(leaves: list[dict[str, Any]]) -> str:
+    """SHA-256 over the canonical sorted ``[seq, attrs_sig]`` rows of the
+    leaves that carry request attributes.
+
+    Each signature already binds its attributes to its leaf (step 1 checks
+    it); what the digest guards is the set: a leaf's attributes and signature
+    dropped together, so the entry reads as sealed before they existed, or a
+    signed pair added. Must match ``application/api/audit.py::_attrs_digest``
+    byte for byte.
+    """
+    rows = sorted(
+        [_as_int(leaf.get("seq")) or 0, str(leaf.get("attrs_sig") or "")]
+        for leaf in leaves if leaf.get("attrs") is not None
+    )
+    return hashlib.sha256(_canonical_list(rows)).hexdigest()
+
+
+def _companion_digest(data: bytes) -> str:
+    """SHA-256 hex of a readable companion's bytes, as the signed manifest's
+    ``companions`` commits it. Must match
+    ``application/services/evidence_companions.py::companion_digest``."""
+    return hashlib.sha256(data).hexdigest()
+
+
+#: A companion the manifest lists is a plain file name at the bundle's top
+#: level: ASCII letters, digits, ``.``, ``_`` and ``-``, starting with a letter
+#: or digit. Anything else (a path, a drive, an NTFS stream, ``..``) is refused
+#: before it is read.
+_COMPANION_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+
+
+def _companion_name_ok(name: Any) -> bool:
+    return isinstance(name, str) and _COMPANION_NAME.match(name) is not None
+
+
+def _companion_file_digest(path: Path, name: str) -> Optional[str]:
+    """:func:`_companion_digest` of the bundle's file *name*, read as bytes in
+    blocks (a CSV's CRLF stays CRLF), or ``None`` when the bundle has none."""
+    h = hashlib.sha256()
+    if path.is_dir():
+        member = path / name
+        if not member.is_file():
+            return None
+        with member.open("rb") as fh:
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                h.update(block)
+        return h.hexdigest()
+    with zipfile.ZipFile(path) as zf:
+        try:
+            fh = zf.open(name)
+        except KeyError:
+            return None
+        with fh:
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                h.update(block)
+    return h.hexdigest()
 
 
 def _mk_leaf(data: bytes) -> bytes:
@@ -1066,9 +1158,18 @@ def _load_bundle(path: Path) -> dict[str, Any]:
         certificates = {}
     if not isinstance(rotations, list):
         rotations = []
+    # The readable companions the manifest lists, by the digest of their
+    # bytes (None when absent). A name that is not a plain file name is never
+    # read; the check refuses it (_verify_companions).
+    listed = manifest.get("companions")
+    companions = {
+        name: _companion_file_digest(path, name)
+        for name in (listed if isinstance(listed, dict) else ())
+        if _companion_name_ok(name)
+    }
     return {"leaves": leaves, "seals": seals, "keys": keys,
             "manifest": manifest, "certificates": certificates,
-            "rotations": rotations, "proofs": proofs}
+            "rotations": rotations, "proofs": proofs, "companions": companions}
 
 
 # ---------------------------------------------------------------------------
@@ -1193,7 +1294,8 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
     #    a bundle key and read without cryptography (step 3).
     if manifest_trusted or manifest_unverified:
         failed = _verify_manifest_record_set(res, manifest, leaf_by_seq, leaves, seals, proofs,
-                                             verified=manifest_trusted)
+                                             verified=manifest_trusted,
+                                             companions=bundle.get("companions") or {})
         if failed is not None:
             return failed
 
@@ -1282,9 +1384,44 @@ def _verify_leaves(res: VerifyResult, leaves: list[dict[str, Any]], pubkeys,
                 return res._fail(seq, "bad leaf signature")
             res.signatures_checked += 1
 
+        failed = _verify_leaf_attrs(res, leaf, seq, pubkeys)
+        if failed is not None:
+            return failed
+
         prev_hash = leaf.get("leaf_hash")
         prev_seq = seq
         res.leaves_checked += 1
+    return None
+
+
+def _verify_leaf_attrs(res: VerifyResult, leaf: dict[str, Any], seq: int,
+                       pubkeys) -> Optional[VerifyResult]:
+    """The request attributes a leaf carries beside its signed body
+    (``attrs``), and the leaf key's signature over the leaf hash and the
+    attributes (``attrs_sig``).
+
+    A leaf without them (sealed before they existed, or read on a store
+    without the columns) has nothing to check. One that carries them must
+    carry a signature by its own signer over :func:`_attrs_hash`, so an
+    edited attribute, or a signature moved from another leaf, fails at the
+    leaf's seq. Runs after the leaf's own signature, so the signer's key is
+    known to be in the bundle.
+    """
+    attrs = leaf.get("attrs")
+    sig = leaf.get("attrs_sig")
+    if attrs is None:
+        if sig:
+            return res._fail(seq, "request attributes signature without attributes")
+        return None
+    if not isinstance(attrs, dict):
+        return res._fail(seq, "malformed request attributes")
+    if not sig or not isinstance(sig, str):
+        return res._fail(seq, "request attributes unsigned")
+    if pubkeys is not None:
+        pk = pubkeys.get(leaf.get("signer_key_id"))
+        if pk is None or not _verify_sig(pk, _attrs_hash(leaf.get("leaf_hash"), attrs), sig):
+            return res._fail(seq, "bad request attributes signature")
+        res.signatures_checked += 1
     return None
 
 
@@ -1604,12 +1741,16 @@ def _verify_manifest_record_set(res: VerifyResult, manifest: dict[str, Any],
                                 leaves: list[dict[str, Any]],
                                 seals: list[dict[str, Any]],
                                 proofs: list[dict[str, Any]], *,
-                                verified: bool = True) -> Optional[VerifyResult]:
+                                verified: bool = True,
+                                companions: Optional[dict[str, Optional[str]]] = None,
+                                ) -> Optional[VerifyResult]:
     """Step 5, for a trusted manifest: the record set it commits to against
-    the leaves, seals and inclusion proofs present. ``verified=False`` is a
-    manifest signed by a bundle key and read without cryptography: the same
-    check, and a mismatch may then also be the manifest edited, which the
-    failure says.
+    the leaves, seals and inclusion proofs present, then the readable
+    companions it lists against the files present (*companions*: name ->
+    digest of the bundle's file, ``None`` when absent). ``verified=False`` is
+    a manifest signed by a bundle key and read without cryptography: the
+    same check, and a mismatch may then also be the manifest edited, which
+    the failure says.
 
     Returns the failed result, or ``None`` when they match.
     """
@@ -1679,4 +1820,46 @@ def _verify_manifest_record_set(res: VerifyResult, manifest: dict[str, Any],
                       "(seals_digest mismatch)")
         return res._fail(
             None, "seals differ (seals_digest mismatch, signature not verified)")
+    # ``attrs_digest`` commits the leaves that carry request attributes. Each
+    # signature was checked in step 1 (an edited one has failed at its seq);
+    # what is left to catch is a signed pair dropped from a leaf, so that it
+    # reads as sealed before the attributes existed, or one added. A bundle
+    # from before the field existed commits none, and is read as before.
+    ad = manifest.get("attrs_digest")
+    if ad is not None and ad != _attrs_digest(leaves):
+        if verified:
+            return res._fail(
+                None, "request attribute set does not match the signed manifest "
+                      "(attrs_digest mismatch)")
+        return res._fail(
+            None, "request attributes differ (attrs_digest mismatch, "
+                  "signature not verified)")
+    return _verify_companions(res, manifest, companions or {}, verified=verified)
+
+
+def _verify_companions(res: VerifyResult, manifest: dict[str, Any],
+                       found: dict[str, Optional[str]], *,
+                       verified: bool) -> Optional[VerifyResult]:
+    """The readable companions (``decisions.csv``, ``README.md``) the signed
+    manifest lists: each a plain file name, present, and hashing to the
+    committed value. They are derived from the records checked before them,
+    so they are checked last. A manifest from before companions existed lists
+    none and is read as before; an empty map lists nothing to check.
+    """
+    if "companions" not in manifest:
+        return None
+    unverified = "" if verified else " (signature not verified)"
+    listed = manifest.get("companions")
+    if not isinstance(listed, dict):
+        return res._fail(None, "companions is not a map of file names to digests" + unverified)
+    for name in sorted(listed):
+        if not _companion_name_ok(name):
+            return res._fail(None, f"companion {ascii(name)} is not a plain file name"
+                             + unverified)
+        digest = found.get(name)
+        if digest is None:
+            return res._fail(None, f"companion {name} missing" + unverified)
+        if digest != listed[name]:
+            detail = "digest mismatch" if verified else "digest mismatch, signature not verified"
+            return res._fail(None, f"companion {name} altered ({detail})")
     return None
