@@ -200,3 +200,31 @@ jobs:
 
       - name: Test
         run: npm test
+
+  mcp-gateway:
+    name: MCP gateway
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: mcp-gateway
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mcp-gateway/package-lock.json
+
+      - name: Use the publish job's npm
+        run: npm install -g npm@12.1.0
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test

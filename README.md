@@ -13,8 +13,9 @@ for CI and guard-sync until those jobs move here.
 | **`@cognexuslabs/openclaw-artzain`** | `npm i @cognexuslabs/openclaw-artzain` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/openclaw-artzain)](https://www.npmjs.com/package/@cognexuslabs/openclaw-artzain) | OpenClaw `before_tool_call` plugin (deny / review / errors block; not `/approve`) |
 | **`@cognexuslabs/n8n-nodes-artzain`** | `npm i @cognexuslabs/n8n-nodes-artzain` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/n8n-nodes-artzain)](https://www.npmjs.com/package/@cognexuslabs/n8n-nodes-artzain) | n8n Decision + Envelope nodes (fail closed on HTTP 503; `review` does not Wait) |
 | **`@cognexuslabs/grokbot-artzain`** | `npm install -g @cognexuslabs/grokbot-artzain` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/grokbot-artzain)](https://www.npmjs.com/package/@cognexuslabs/grokbot-artzain) | Grok Bot cooperative Decision skill, opt-in announce, and pull enroll (no host intercept) |
+| **`@cognexuslabs/artzain-mcp-gateway`** | `npm install -g @cognexuslabs/artzain-mcp-gateway` | [![npm version](https://img.shields.io/npm/v/@cognexuslabs/artzain-mcp-gateway)](https://www.npmjs.com/package/@cognexuslabs/artzain-mcp-gateway) | MCP server that forwards an upstream tool call only when the Decision API allows it (fails closed) |
 
-All five are Apache-2.0 [![License](https://img.shields.io/pypi/l/artzain)](https://pypi.org/project/artzain/). `artzain` also ships the OpenShell sidecar, as
+All six are Apache-2.0 [![License](https://img.shields.io/pypi/l/artzain)](https://pypi.org/project/artzain/). `artzain` also ships the OpenShell sidecar, as
 the `[openshell]` extra, as a signed image on GHCR, and with a one-command
 connect script on each release ([OpenShell](#openshell-artzainopenshell)).
 
@@ -22,9 +23,9 @@ Each package is versioned and released on its own. Its release tag publishes
 it and creates a GitHub Release carrying that version's changelog section
 ([python](python/CHANGELOG.md), [typescript](typescript/CHANGELOG.md),
 [openclaw](openclaw/CHANGELOG.md), [n8n](n8n/CHANGELOG.md),
-[grokbot](grokbot/CHANGELOG.md)). The Releases box on the repository page
-shows only the release marked Latest, which is always `artzain`'s; the four
-npm packages' releases are in the same
+[grokbot](grokbot/CHANGELOG.md), [mcp-gateway](mcp-gateway/CHANGELOG.md)). The
+Releases box on the repository page shows only the release marked Latest,
+which is always `artzain`'s; the five npm packages' releases are in the same
 [list](https://github.com/CogNEXUSlabs/cognexus-tools/releases).
 
 Putting `decide()` into an agent's tool loop (OpenAI or Anthropic)? Start at
@@ -36,12 +37,13 @@ typescript/   # npm package @cognexuslabs/artzain
 openclaw/     # npm package @cognexuslabs/openclaw-artzain
 n8n/          # npm package @cognexuslabs/n8n-nodes-artzain
 grokbot/      # npm package @cognexuslabs/grokbot-artzain
+mcp-gateway/  # npm package @cognexuslabs/artzain-mcp-gateway
 images/       # the OpenShell sidecar image (ghcr.io/cognexuslabs/artzain-openshell-sidecar)
 tools/        # standalone scripts: the decide latency benchmark
 ```
 
 Engine dual-home paths (private repo): `pypi-package/`, `sdk/typescript/`,
-`sdk/openclaw/`, `sdk/n8n/`, `sdk/grokbot/`. Seed with `scripts/seed_cognexus_tools.sh` from
+`sdk/openclaw/`, `sdk/n8n/`, `sdk/grokbot/`, `sdk/mcp-gateway/`. Seed with `scripts/seed_cognexus_tools.sh` from
 the engine tree.
 
 ## Privacy and telemetry
@@ -414,6 +416,20 @@ a `to` that is not one of the team's Bot names. The setup
 steps, the Windows notes, opt-in announce and default-on pull enroll are in
 [`grokbot/README.md`](grokbot/README.md).
 
+## MCP gateway (`@cognexuslabs/artzain-mcp-gateway`)
+
+```bash
+npm install -g @cognexuslabs/artzain-mcp-gateway
+artzain-mcp-gateway --config gateway.json
+```
+
+An MCP server that proxies the upstream MCP servers in `gateway.json`. It
+lists each upstream tool as `<upstream>__<tool>` and forwards a
+`tools/call` only when the Decision API returns `allow`. A deny, a review,
+and an outage return `isError`, and the upstream is not called. Connectors
+that Grok Bot authenticates with its own OAuth may not route through it.
+See [`mcp-gateway/README.md`](mcp-gateway/README.md).
+
 ## OpenShell (`artzain[openshell]`)
 
 `artzain` carries a sidecar that binds an NVIDIA OpenShell gateway to
@@ -544,12 +560,13 @@ npm run build   # tsc → dist/
 npm test        # vitest
 ```
 
-OpenClaw plugin, n8n nodes, and Grok Bot skill:
+OpenClaw plugin, n8n nodes, Grok Bot skill, and MCP gateway:
 
 ```bash
 cd openclaw && npm ci && npm test && npm run build
 cd ../n8n && npm ci && npm test && npm run build
 cd ../grokbot && npm ci && npm test && npm run build
+cd ../mcp-gateway && npm ci && npm test && npm run build
 ```
 
 ## Releases
@@ -559,8 +576,9 @@ cd ../grokbot && npm ci && npm test && npm run build
 - OpenClaw plugin: push tag `openclaw-v<version>` (must match `openclaw/package.json`).
 - n8n nodes: push tag `n8n-v<version>` (must match `n8n/package.json`).
 - Grok Bot skill: push tag `grokbot-v<version>` (must match `grokbot/package.json`).
+- MCP gateway: push tag `mcp-gateway-v<version>` (must match `mcp-gateway/package.json`).
 - OpenShell sidecar image: push tag `sidecar-v<version>` (must be the `artzain` version `images/openshell-sidecar/artzain.lock` names, which is written after that version is on PyPI). `sidecar-image.yml` builds it from the published wheel for linux/amd64 and linux/arm64, pushes it to `ghcr.io/cognexuslabs/artzain-openshell-sidecar`, runs what it pushed, then signs the digest and attests an SBOM, keyless, as that workflow at that tag.
-- All four npm packages publish through the same `publish-npm.yml` (npm **Trusted Publishing**, OIDC, no token) — each package's npmjs.com binding names that one workflow file. The **first** publish of a new package is an owner bootstrap, because npm only binds a trusted publisher to a package that already exists; the steps live in the engine repo's `scripts/cognexus-tools-seed/APPLY.md`. Do not publish from the engine repo, and never use a bare `v*` tag here.
+- All five npm packages publish through the same `publish-npm.yml` (npm **Trusted Publishing**, OIDC, no token) — each package's npmjs.com binding names that one workflow file. The **first** publish of a new package is an owner bootstrap, because npm only binds a trusted publisher to a package that already exists; the steps live in the engine repo's `scripts/cognexus-tools-seed/APPLY.md`. Do not publish from the engine repo, and never use a bare `v*` tag here.
 
 Nothing publishes from a developer machine (WS-8): the tag is the release, and
 the workflows here hold the only credentials involved.

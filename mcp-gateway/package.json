@@ -1,0 +1,41 @@
+{
+  "name": "@cognexuslabs/artzain-mcp-gateway",
+  "version": "0.1.0",
+  "description": "An MCP server that decides each upstream tool call with the ArtzAIn Decision API before it forwards the call.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "artzain-mcp-gateway": "./dist/cli.js"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CogNEXUSlabs/cognexus-tools.git",
+    "directory": "mcp-gateway"
+  },
+  "homepage": "https://cognexuslabs.ai",
+  "bugs": {
+    "url": "https://github.com/CogNEXUSlabs/cognexus-tools/issues"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-taxonomy.mjs",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}
