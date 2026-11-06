@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2
+
+### Added
+
+- **An action log for `grokbot-artzain coverage`.** Each `tools/call` the gateway forwards after an allow appends one JSON line (`at`, `agent`, `action`, `target`, `decision_id`) to `ARTZAIN_GATEWAY_LOG`, or by default `~/.config/artzain-mcp-gateway/gateway.jsonl` (`%APPDATA%\artzain-mcp-gateway\gateway.jsonl` on Windows), the file `coverage` reads. A refused call gets no line, because it never reaches the upstream. The line holds no arguments, headers, env values or key. When the file cannot be written, the gateway prints `artzain-mcp-gateway could not record the action` on stderr and forwards the call. 0.1.1 wrote no log, so the gateway source of `coverage` was always empty.
+
+### Changed
+
+- The README gives the npm install command and documents the action log.
+
 ## 0.1.1
 
 ### Changed

@@ -36,10 +36,23 @@ Each upstream has a `name`, an `agent_id`, and exactly one of `command` (a strin
 The gateway reads `--config`, then `ARTZAIN_GATEWAY_CONFIG`, then `./gateway.json`. The Decision API key is `COGNEXUS_API_KEY`. `COGNEXUS_API_BASE_URL` defaults to `https://app.cognexuslabs.ai`. A child-process upstream does not inherit the gateway's environment, so its token belongs in that upstream's `env`.
 
 ```bash
-node dist/cli.js --config gateway.json
+npm install -g @cognexuslabs/artzain-mcp-gateway
+artzain-mcp-gateway --config gateway.json
 ```
 
+From a checkout, `node dist/cli.js --config gateway.json` is the same command.
+
 Point an MCP client at that process over stdio. Logs stay on stderr, and stderr does not include upstream credentials or the API key.
+
+## Action log
+
+Each `tools/call` the gateway forwards after an allow appends one JSON line to `ARTZAIN_GATEWAY_LOG`, or by default `~/.config/artzain-mcp-gateway/gateway.jsonl` (on Windows, `%APPDATA%\artzain-mcp-gateway\gateway.jsonl`):
+
+```json
+{"at":"2026-11-06T01:02:03.456Z","agent":"notes-bot","action":"write_file","target":"file:path/notes.txt","decision_id":"<decision id>"}
+```
+
+`grokbot-artzain coverage --since <ISO time>` reads this file. A call the gateway refuses is not forwarded and gets no line. The line holds no arguments, headers, env values or key. If the file cannot be written, the gateway says so on stderr and forwards the call anyway.
 
 ## Develop
 
