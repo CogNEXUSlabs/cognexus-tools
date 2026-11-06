@@ -9,9 +9,10 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 
 import type { UpstreamConfig } from "./config.js";
+import { VERSION } from "./version.js";
 
 const PROTOCOL = "2024-11-05";
-const CLIENT = { name: "artzain-mcp-gateway", version: "0.1.0" };
+const CLIENT = { name: "artzain-mcp-gateway", version: VERSION };
 
 export interface RpcMessage {
   jsonrpc?: string;

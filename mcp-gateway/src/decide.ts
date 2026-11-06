@@ -6,6 +6,8 @@
 
 import { randomUUID } from "node:crypto";
 
+import { VERSION } from "./version.js";
+
 const DEFAULT_BASE = "https://app.cognexuslabs.ai";
 const TIMEOUT_MS = 10_000;
 
@@ -73,7 +75,7 @@ export async function decide(request: DecisionRequest, env: NodeJS.ProcessEnv = 
         payload_kind: "tool_call",
         surface: "mcp",
         request_id: request.requestId ?? randomUUID(),
-        product: "artzain-mcp-gateway@0.1.0",
+        product: `artzain-mcp-gateway@${VERSION}`,
       }),
     });
   } catch (err) {
