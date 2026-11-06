@@ -70,6 +70,12 @@ async function callLog(): Promise<string> {
   return readFile(join(dir, "calls.log"), "utf8").catch(() => "");
 }
 
+/** The gateway's action log, as `grokbot-artzain coverage` reads it. */
+async function actionLines(): Promise<{ raw: string; row: Record<string, unknown> }[]> {
+  const text = await readFile(join(dir, "logs", "gateway.jsonl"), "utf8").catch(() => "");
+  return text.split("\n").filter((line) => line.trim()).map((raw) => ({ raw, row: JSON.parse(raw) as Record<string, unknown> }));
+}
+
 beforeAll(async () => {
   execFileSync(process.execPath, ["node_modules/typescript/bin/tsc", "-p", "tsconfig.json"], {
     cwd: ROOT,
@@ -142,6 +148,7 @@ lines.on("line", (line) => {
       TMP: process.env.TMP,
       COGNEXUS_API_KEY: API_KEY,
       COGNEXUS_API_BASE_URL: `http://127.0.0.1:${decisionPort}`,
+      ARTZAIN_GATEWAY_LOG: join(dir, "logs", "gateway.jsonl"),
     },
   });
   gateway.stderr.setEncoding("utf8");
@@ -203,6 +210,20 @@ describe("a fake upstream", () => {
       tool: "write_file",
       arguments: { path: "notes.txt" },
     });
+    const lines = await actionLines();
+    expect(lines).toHaveLength(1);
+    const { raw, row } = lines[0]!;
+    expect(Object.keys(row).sort()).toEqual(["action", "agent", "at", "decision_id", "target"]);
+    expect(row).toMatchObject({
+      agent: "notes-bot",
+      action: "write_file",
+      target: "file:path/notes.txt",
+      decision_id: "dec-allow-1",
+    });
+    expect(String(row.at)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/);
+    expect(raw).not.toContain("arguments");
+    expect(raw).not.toContain(API_KEY);
+    expect(raw).not.toContain(UPSTREAM_TOKEN);
   });
 
   it("reports the version in package.json to the client, the Decision API and the upstream", async () => {
@@ -227,6 +248,7 @@ describe("a fake upstream", () => {
     expect(response.result?.content?.[0]?.text).toContain("REFUSED:");
     expect(response.result?.content?.[0]?.text).toContain("policy denied this call");
     expect(await callLog()).toBe(before);
+    expect(await actionLines()).toHaveLength(1);
   });
 
   it("blocks a review and returns the decision id", async () => {
@@ -241,6 +263,23 @@ describe("a fake upstream", () => {
     expect(text).toContain("QUEUED FOR REVIEW:");
     expect(text).toContain("(decision dec-review-7)");
     expect(await callLog()).toBe(before);
+    expect(await actionLines()).toHaveLength(1);
+  });
+
+  it("forwards an allow when the action log cannot be written", async () => {
+    mode = "allow";
+    await rm(join(dir, "logs"), { recursive: true, force: true });
+    await writeFile(join(dir, "logs"), "not a directory");
+    const response = await request("tools/call", {
+      name: "notes__write_file",
+      arguments: { path: "unlogged.txt" },
+    });
+    expect(response.result?.isError).not.toBe(true);
+    expect(response.result?.content?.[0]?.text).toBe("wrote the file");
+    expect(await callLog()).toContain("unlogged.txt");
+    expect(stderr).toContain("could not record the action");
+    expect(stderr).not.toContain(API_KEY);
+    await rm(join(dir, "logs"), { force: true });
   });
 
   it("blocks an outage without calling the upstream", async () => {
@@ -255,6 +294,7 @@ describe("a fake upstream", () => {
     expect(response.result?.isError).toBe(true);
     expect(text).toContain("REFUSED:");
     expect(text).toContain("Failing closed.");
+    expect(await actionLines()).toHaveLength(0);
     expect(text).not.toContain(API_KEY);
     expect(text).not.toContain(UPSTREAM_TOKEN);
     expect(await callLog()).toBe(before);

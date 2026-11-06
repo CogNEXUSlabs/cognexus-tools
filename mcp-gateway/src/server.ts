@@ -6,6 +6,7 @@
 
 import { createInterface } from "node:readline";
 
+import { appendActionLine, defaultActionLog, type ActionLine } from "./actionlog.js";
 import { ConfigError, loadConfig, type GatewayConfig, type UpstreamConfig } from "./config.js";
 import { decide, DecisionError, type Decision } from "./decide.js";
 import { classifyTool } from "./taxonomy.js";
@@ -48,6 +49,7 @@ function refusal(decision: Decision): string {
 
 export class Gateway {
   private readonly sessions = new Map<string, Upstream>();
+  private readonly actionLog = defaultActionLog();
 
   constructor(private readonly config: GatewayConfig) {}
 
@@ -95,6 +97,13 @@ export class Gateway {
       return textResult(`REFUSED: ${message}`, true);
     }
     if (decision.outcome !== "allow") return textResult(refusal(decision), true);
+    await this.record({
+      at: new Date().toISOString(),
+      agent: routed.upstream.agentId,
+      action,
+      target: classified.target,
+      decision_id: decision.decisionId,
+    });
     try {
       const session = await this.session(routed.upstream);
       const result = await session.callTool(routed.tool, args ?? {});
@@ -103,6 +112,17 @@ export class Gateway {
     } catch (err) {
       const message = err instanceof UpstreamError ? err.message : "the upstream call failed";
       return textResult(`FAILED: ${message}`, true);
+    }
+  }
+
+  /** One line in the action log. A write that fails does not stop the call. */
+  private async record(row: ActionLine): Promise<void> {
+    try {
+      await appendActionLine(this.actionLog, row);
+    } catch (err) {
+      const code = err && typeof err === "object" && "code" in err ? String((err as { code: unknown }).code) : "Error";
+      process.stderr.write(`artzain-mcp-gateway could not record the action (${code})
+`);
     }
   }
 
