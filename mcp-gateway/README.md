@@ -43,4 +43,4 @@ Point an MCP client at that process over stdio. Logs stay on stderr, and stderr 
 
 ## Develop
 
-From this directory: `npm ci`, `npm test`, `npm run build`. The package version is `0.1.0`. It publishes from the public mirror on an `mcp-gateway-v<version>` tag.
+From this directory: `npm ci`, `npm test`, `npm run build`. It publishes from the public mirror on an `mcp-gateway-v<version>` tag.

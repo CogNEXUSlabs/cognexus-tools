@@ -21,6 +21,7 @@ interface RpcResponse {
   id?: number;
   result?: {
     tools?: { name: string }[];
+    serverInfo?: { name?: string; version?: string };
     isError?: boolean;
     content?: { type: string; text: string }[];
   };
@@ -35,6 +36,7 @@ interface SeenDecision {
     payload?: string;
     payload_kind?: string;
     surface?: string;
+    product?: string;
   };
   sawKey: boolean;
 }
@@ -47,6 +49,7 @@ let mode: "allow" | "deny" | "review" = "allow";
 const seen: SeenDecision[] = [];
 let gateway: ChildProcessWithoutNullStreams;
 let stderr = "";
+let served: { name?: string; version?: string } | undefined;
 let nextId = 1;
 const pending = new Map<number, (message: RpcResponse) => void>();
 
@@ -86,6 +89,7 @@ lines.on("line", (line) => {
   const msg = JSON.parse(line);
   if (msg.id === undefined) return;
   if (msg.method === "initialize") {
+    appendFileSync(log + ".clients", JSON.stringify(msg.params.clientInfo) + "\\n");
     send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "0" } } });
   } else if (msg.method === "tools/list") {
     send({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "write_file", description: "Write a file", inputSchema: { type: "object" } }] } });
@@ -171,6 +175,7 @@ describe("a fake upstream", () => {
       clientInfo: { name: "test", version: "0" },
     });
     expect(init.result).toBeTruthy();
+    served = init.result?.serverInfo;
     gateway.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
     const listed = await request("tools/list");
     expect(listed.result?.tools?.map((tool) => tool.name)).toEqual(["notes__write_file"]);
@@ -198,6 +203,17 @@ describe("a fake upstream", () => {
       tool: "write_file",
       arguments: { path: "notes.txt" },
     });
+  });
+
+  it("reports the version in package.json to the client, the Decision API and the upstream", async () => {
+    const { version } = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8")) as { version: string };
+    expect(served).toEqual({ name: "artzain-mcp-gateway", version });
+    expect(seen.at(-1)?.body.product).toBe(`artzain-mcp-gateway@${version}`);
+    const clients = (await readFile(join(dir, "calls.log.clients"), "utf8")).trim().split("\n");
+    expect(clients.length).toBeGreaterThan(0);
+    for (const line of clients) {
+      expect(JSON.parse(line)).toEqual({ name: "artzain-mcp-gateway", version });
+    }
   });
 
   it("blocks a deny without calling the upstream", async () => {

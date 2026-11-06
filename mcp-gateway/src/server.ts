@@ -10,6 +10,7 @@ import { ConfigError, loadConfig, type GatewayConfig, type UpstreamConfig } from
 import { decide, DecisionError, type Decision } from "./decide.js";
 import { classifyTool } from "./taxonomy.js";
 import { openUpstream, UpstreamError, type Upstream } from "./upstream.js";
+import { VERSION } from "./version.js";
 
 const PROTOCOL = "2024-11-05";
 
@@ -156,7 +157,7 @@ export async function handleRequest(gateway: Gateway, request: RpcRequest): Prom
     return reply(id, {
       protocolVersion: PROTOCOL,
       capabilities: { tools: {} },
-      serverInfo: { name: "artzain-mcp-gateway", version: "0.1.0" },
+      serverInfo: { name: "artzain-mcp-gateway", version: VERSION },
     });
   }
   if (method === "ping") return reply(id, {});
