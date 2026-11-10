@@ -101,14 +101,13 @@ _T2O_QUICKSTART_EXAMPLES = (
     },
 )
 
-def _request_headers_for_url(url: str) -> dict[str, str]:
+def _request_headers() -> dict[str, str]:
     """Headers for a CLI request to the dashboard API.
 
-    The User-Agent / fetch-metadata policy (browser-like while the CDN/WAF
-    requires it, honest SDK identity otherwise) lives in
-    :func:`artzain.cloud._sdk_headers`; this only tags the client.
+    The User-Agent policy lives in :func:`artzain.cloud._sdk_headers`; this
+    only tags the client.
     """
-    h = _sdk_headers(url=url)
+    h = _sdk_headers()
     h["X-Cognexus-Client"] = f"artzain-cli/{__version__}"
     return h
 
@@ -422,7 +421,7 @@ def _http_json(
     JSON, with a message rather than a traceback.
     """
     data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
-    req_headers = {**_request_headers_for_url(url), **(headers or {})}
+    req_headers = {**_request_headers(), **(headers or {})}
     if body is not None:
         req_headers.setdefault("Content-Type", "application/json")
     try:
@@ -1725,7 +1724,7 @@ def _download(url: str, creds: ResolvedCredentials) -> bytes:
     or, for a page, what came back (see :func:`_error_answer`); a request no
     request can be made with ends it as :func:`_http_json` does.
     """
-    headers = {**_request_headers_for_url(url), **_policy_auth_headers(creds)}
+    headers = {**_request_headers(), **_policy_auth_headers(creds)}
     try:
         req = urllib.request.Request(url, headers=headers, method="GET")
         # A redirect is not followed: it ends the command as its status.

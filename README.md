@@ -94,7 +94,8 @@ profile's agent, and `--all-profiles` sends every profile. An agent
 announced within 24 hours is skipped unless `--force`.
 `grokbot-artzain coverage --since <ISO time>` lists actions in the shim log,
 the gateway log, and the action journal that have no decision id, and posts
-one action count per agent.
+one action count per agent. The MCP gateway writes its log from 0.1.2, one
+line per call it forwards after an allow; 0.1.1 wrote none.
 Enroll is on by default. It posts the same names to
 `POST /api/v1/registry/enroll`. A `decide` skips that post when this CLI
 version already enrolled for the same base URL, key and Bot within
@@ -102,9 +103,11 @@ version already enrolled for the same base URL, key and Bot within
 `GROKBOT_ENROLL=false` or `--no-enroll`, or with `enroll: false` in
 OpenClaw.
 
-`COGNEXUS_SDK_BROWSER_HEADERS` defaults to `"0"` since 0.6.11. `"1"` makes
-CLI auth calls and the GUI proxy send browser-like headers. Event posts and
-`decide` calls do not. The switch is scheduled for removal.
+Every request the Python SDK (`artzain`), its CLI and its GUI proxy make
+identifies itself as `artzain-python-sdk/<version>`. `COGNEXUS_CLI_USER_AGENT`
+replaces that User-Agent for an edge that still challenges it.
+(`COGNEXUS_SDK_BROWSER_HEADERS`, the browser-like header switch kept since
+0.6.11, was removed in 0.6.65 and has no effect.)
 
 ## Python (`artzain`)
 
@@ -363,7 +366,7 @@ install is refused unless `--force` is set. It does not read or change the key.
 Install it with `-g`, where the Bot runs its commands: the skill tells the
 Bot to run the `grokbot-artzain` command, and only a global install puts
 that on the PATH. Then set `COGNEXUS_API_KEY` (a Decision API key, `cnx_…`). `MYAPP_API_KEY` is not a key. When it is the only name set, this release warns on stderr and the command has no key.
-and add [`grokbot/SKILL.md`](grokbot/SKILL.md) to the Bot as a skill, in
+Then add [`grokbot/SKILL.md`](grokbot/SKILL.md) to the Bot as a skill, in
 the Grok Bot app. On the ArtzAIn dashboard, API keys has an optional Bind
 to agent id field for that Bot's agent id. The account switch
 `enforce_grokbot_identity_binding` (default off) refuses a grokbot decide
@@ -591,4 +594,4 @@ Please see [SECURITY.md](SECURITY.md).
 
 Apache License 2.0. Portions of the Python guards are derived from
 [microsoft/agent-governance-toolkit](https://github.com/microsoft/agent-governance-toolkit)
-(MIT); notices are in [LICENSE](LICENSE) and the vendored source files.
+(MIT); notices are in [NOTICE](NOTICE) and the vendored source files.

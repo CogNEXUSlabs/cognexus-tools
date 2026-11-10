@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.65
+
+### Changed
+
+- **Every request identifies as `artzain-python-sdk/<version>`.** The
+  browser-like header set the CLI and GUI proxy could send while the edge
+  challenged non-browser clients (a desktop-browser `User-Agent`,
+  `Origin`/`Referer` and `Sec-Fetch-*` metadata) and the
+  `COGNEXUS_SDK_BROWSER_HEADERS` switch that selected it are deleted, as
+  scheduled when 0.6.11 made the SDK's own identity the default. Setting
+  the variable has no effect. `COGNEXUS_CLI_USER_AGENT` still replaces the
+  `User-Agent` for an edge that challenges the SDK's own. The GUI proxy no
+  longer relays the browser's `User-Agent` upstream.
+- **Python 3.13 and 3.14 classifiers.** Both run in CI for every release;
+  the package metadata now says so (`requires-python` stays `>=3.10`).
+- **The third-party notice ships as `NOTICE`.** The MIT attribution for the
+  portions derived from microsoft/agent-governance-toolkit moves from the
+  end of `LICENSE`, now the Apache-2.0 text alone, to a `NOTICE` file
+  listed in `license-files` and the sdist. On the `cognexus-tools` mirror
+  it is the root `NOTICE`; the seed no longer appends it to the mirror's
+  `LICENSE`.
+
 ## 0.6.64
 
 ### Added

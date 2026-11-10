@@ -1183,7 +1183,7 @@ def _try_bootstrap(upstream: str, api_key: str) -> dict[str, Any] | None:
     """
     upstream = upstream.rstrip("/")
     url      = upstream + "/api/auth/token"
-    headers  = _sdk_headers(url=upstream)
+    headers  = _sdk_headers()
     headers["X-Api-Key"]    = api_key
     headers["Content-Type"] = "application/json"
     req      = urllib.request.Request(url, data=b"{}", headers=headers, method="POST")
@@ -1258,9 +1258,11 @@ def _proxy_to_upstream(handler: BaseHTTPRequestHandler, upstream: str, method: s
     back to the browser."""
     url = upstream + handler.path
 
-    # Origin/Referer are rewritten from localhost to the upstream domain;
-    # the browser's own UA is forwarded while the WAF still needs it.
-    fwd = _sdk_headers(url=upstream, browser_user_agent=handler.headers.get("user-agent"))
+    # The SDK's own headers, not the browser's: only the few below are
+    # relayed. (The browser's User-Agent, and Origin/Referer rewritten to
+    # the upstream domain, went along while the edge required a browser;
+    # removed in 0.6.65.)
+    fwd = _sdk_headers()
     for hdr in ("authorization", "content-type", "accept", "x-request-id", "accept-language"):
         v = handler.headers.get(hdr)
         if v:

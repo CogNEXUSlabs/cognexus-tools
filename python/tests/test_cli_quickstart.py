@@ -9,7 +9,7 @@ import pytest
 from artzain import __version__
 from artzain.cli import (
     _quickstart_demo_file_contents,
-    _request_headers_for_url,
+    _request_headers,
     extract_artzain_api_key_from_text,
     find_artzain_api_key_in_env_files,
 )
@@ -41,18 +41,17 @@ def test_find_artzain_api_key_in_env_files(tmp_path: Path, monkeypatch: pytest.M
     assert path == (tmp_path / ".env").resolve()
 
 
-def test_request_headers_match_dashboard_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_request_headers_are_the_sdk_identity_plus_the_client_tag(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COGNEXUS_CLI_USER_AGENT", raising=False)
-    monkeypatch.setenv("COGNEXUS_SDK_BROWSER_HEADERS", "1")
-    url = "https://app.cognexuslabs.ai/api/auth/signup"
-    h = _request_headers_for_url(url)
-    assert h["Origin"] == "https://app.cognexuslabs.ai"
-    assert h["Referer"] == "https://app.cognexuslabs.ai/"
-    assert h["Sec-Fetch-Site"] == "same-origin"
-    assert "Mozilla" in h["User-Agent"]
-    assert "Chrome" in h["User-Agent"]
-    assert "Python-urllib" not in h["User-Agent"]
+    monkeypatch.setenv("COGNEXUS_SDK_BROWSER_HEADERS", "1")   # retired in 0.6.65: no effect
+    h = _request_headers()
+    # The version in the User-Agent is the installed distribution's (cloud._package_version).
+    assert h["User-Agent"].startswith("artzain-python-sdk/")
+    assert "Mozilla" not in h["User-Agent"]
+    assert h["Accept"] == "application/json"
     assert h["X-Cognexus-Client"] == f"artzain-cli/{__version__}"
+    for key in ("Origin", "Referer", "Sec-Fetch-Site", "Accept-Language"):
+        assert key not in h
 
 
 def test_quickstart_demo_template_substitutes_metadata() -> None:

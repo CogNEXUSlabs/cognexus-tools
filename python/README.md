@@ -765,4 +765,4 @@ Model weights are downloaded at runtime from Hugging Face by the user and are
 **not** distributed with this package; this package contains no model weights.
 Substitute any chat model you prefer — the guards are model-agnostic.
 
-Detection rules and evaluator logic originally derived from [microsoft/agent-governance-toolkit](https://github.com/microsoft/agent-governance-toolkit) (MIT; original notices retained in the vendored files and in LICENSE's third-party section). The destructive-action guard and kill switch were added in v0.2.0 in response to the PocketOS / Cursor / Claude incident ([Guardian, Apr 2026](https://www.theguardian.com/technology/2026/apr/29/claude-ai-deletes-firm-database)).
+Detection rules and evaluator logic originally derived from [microsoft/agent-governance-toolkit](https://github.com/microsoft/agent-governance-toolkit) (MIT; original notices retained in the vendored files and in [NOTICE](NOTICE)). The destructive-action guard and kill switch were added in v0.2.0 in response to the PocketOS / Cursor / Claude incident ([Guardian, Apr 2026](https://www.theguardian.com/technology/2026/apr/29/claude-ai-deletes-firm-database)).

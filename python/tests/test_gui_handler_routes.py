@@ -72,7 +72,6 @@ def upstream(monkeypatch):
         return state["response"]
 
     monkeypatch.setattr(cloud, "_urlopen", _urlopen)
-    monkeypatch.delenv("COGNEXUS_SDK_BROWSER_HEADERS", raising=False)
     monkeypatch.delenv("COGNEXUS_CLI_USER_AGENT", raising=False)
     return state
 
