@@ -14,7 +14,7 @@ readme = "README.md"
 # license into the License core-metadata field, which scanners such as
 # deps.dev report as non-standard. The text itself ships via license-files.
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.10"
 authors = [
     { name = "CogNEXUS Labs", email = "hello@cognexuslabs.ai" },
@@ -45,6 +45,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Security",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Typing :: Typed",
@@ -110,6 +112,7 @@ include = [
     "cognexus-logo.png",
     "README.md",
     "LICENSE",
+    "NOTICE",
     "pyproject.toml",
 ]
 

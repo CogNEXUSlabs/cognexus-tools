@@ -13,10 +13,9 @@ Environment variables
 ``COGNEXUS_API_BASE_URL``
     API origin, e.g. ``https://app.cognexuslabs.ai`` — **no trailing slash required**.
     An ``http://`` or ``https://`` URL; with any other, no key is sent.
-``COGNEXUS_SDK_BROWSER_HEADERS``
-    ``"1"`` (default for now) makes the CLI and GUI send browser-like headers
-    so the CDN/WAF lets them through; ``"0"`` sends the honest
-    ``artzain-python-sdk/<ver>`` identity. See :func:`_sdk_headers`.
+``COGNEXUS_CLI_USER_AGENT``
+    Replaces the ``artzain-python-sdk/<ver>`` User-Agent every request
+    carries, for an edge that still challenges it. See :func:`_sdk_headers`.
 """
 
 from __future__ import annotations
@@ -239,84 +238,27 @@ def _sdk_user_agent() -> str:
     return f"artzain-python-sdk/{_package_version()}"
 
 
-#: Policy switch for :func:`_sdk_headers`. ``"0"`` (the default since 0.6.11,
-#: after the CDN allowlisted the ``artzain-python-sdk/`` User-Agent on
-#: ``/api/*``; docs/runbooks/supply-chain.md, "CDN / WAF allowlist") sends the
-#: honest SDK identity. ``"1"`` keeps the browser-like header set for an edge
-#: that still challenges non-browser clients; that branch and this switch are
-#: scheduled for removal in a later release.
-_BROWSER_HEADERS_ENV = "COGNEXUS_SDK_BROWSER_HEADERS"
-_BROWSER_HEADERS_DEFAULT = "0"
-
-# Cloudflare (and similar) may block ``Python-urllib/…`` or a non-browser TLS
-# fingerprint *before* requests reach FastAPI. This mimics a desktop Chrome
-# fetch; override with COGNEXUS_CLI_USER_AGENT if your edge still challenges
-# the client.
-_BROWSER_LIKE_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-)
-
-
-def _browser_headers_enabled() -> bool:
-    """True when ``COGNEXUS_SDK_BROWSER_HEADERS`` (default ``"0"``) is on."""
-    raw = (os.environ.get(_BROWSER_HEADERS_ENV) or _BROWSER_HEADERS_DEFAULT).strip().lower()
-    return raw not in {"0", "false", "no", "off"}
-
-
-def _sdk_headers(
-    *,
-    url: str = "",
-    browser_like: Optional[bool] = None,
-    browser_user_agent: Optional[str] = None,
-) -> dict[str, str]:
+def _sdk_headers() -> dict[str, str]:
     """Base headers for an outbound request to the dashboard API.
 
-    The single place that knows both header sets:
-
-    * honest (``browser_like=False``): ``Accept`` plus the identifiable
-      ``artzain-python-sdk/<ver>`` User-Agent that CDN/WAF allowlists match on;
-    * browser-like (``browser_like=True``): a desktop-Chrome User-Agent,
-      ``Accept-Language`` and, when *url* is given, ``Origin``/``Referer`` and
-      the ``Sec-Fetch-*`` metadata of a same-origin browser ``fetch``. This is
-      what the edge currently requires for ``/api/auth/*`` and the GUI proxy.
-
-    ``browser_like=None`` (the default) follows :func:`_browser_headers_enabled`,
-    i.e. env ``COGNEXUS_SDK_BROWSER_HEADERS``, whose default is ``"0"`` since
-    0.6.11: the CDN allowlists the SDK User-Agent on ``/api/*``, so the CLI and
-    GUI identify honestly. Set the variable to ``"1"`` only for an edge that
-    still challenges non-browser clients.
-
-    *browser_user_agent* (the GUI proxy's real browser UA) replaces the
-    synthetic one in browser-like mode and is ignored in honest mode.
-    ``COGNEXUS_CLI_USER_AGENT`` overrides the User-Agent in either mode.
+    ``Accept`` plus the identifiable ``artzain-python-sdk/<ver>`` User-Agent
+    the CDN/WAF allowlists on ``/api/*`` (docs/runbooks/supply-chain.md,
+    "CDN / WAF allowlist"): Cloudflare and similar edges may block a bare
+    ``Python-urllib`` client before the request reaches the application.
+    ``COGNEXUS_CLI_USER_AGENT`` replaces the User-Agent for an edge that
+    still challenges the SDK's own. The browser-like header set the CLI and
+    GUI proxy sent while the edge required a browser, and the environment
+    switch that selected it, were removed in 0.6.65.
     """
-    if browser_like is None:
-        browser_like = _browser_headers_enabled()
     override = (os.environ.get("COGNEXUS_CLI_USER_AGENT") or "").strip()
-    if not browser_like:
-        return {
-            "Accept": "application/json",
-            "User-Agent": override or _sdk_user_agent(),
-        }
-    h: dict[str, str] = {
-        "User-Agent": override or browser_user_agent or _BROWSER_LIKE_UA,
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
+    return {
+        "Accept": "application/json",
+        "User-Agent": override or _sdk_user_agent(),
     }
-    parts = urllib.parse.urlsplit(url) if url else None
-    if parts and parts.scheme and parts.netloc:
-        origin = f"{parts.scheme}://{parts.netloc}"
-        h["Origin"] = origin
-        h["Referer"] = origin + "/"
-        h["Sec-Fetch-Dest"] = "empty"
-        h["Sec-Fetch-Mode"] = "cors"
-        h["Sec-Fetch-Site"] = "same-origin"
-    return h
 
 
 def _api_request_headers(api_key: Optional[str] = None) -> dict[str, str]:
-    headers = _sdk_headers(browser_like=False)
+    headers = _sdk_headers()
     if api_key:
         headers["X-Api-Key"] = api_key
     return headers

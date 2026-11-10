@@ -14,8 +14,8 @@ them.
 
 - the packages published from this repository: `artzain` on PyPI, and
   `@cognexuslabs/artzain`, `@cognexuslabs/openclaw-artzain`,
-  `@cognexuslabs/n8n-nodes-artzain` and `@cognexuslabs/grokbot-artzain` on
-  npm;
+  `@cognexuslabs/n8n-nodes-artzain`, `@cognexuslabs/grokbot-artzain` and
+  `@cognexuslabs/artzain-mcp-gateway` on npm;
 - what else its releases publish: the OpenShell sidecar image
   `ghcr.io/cognexuslabs/artzain-openshell-sidecar`, and the
   `connect-<version>.sh` script attached to each `python-v<version>`
