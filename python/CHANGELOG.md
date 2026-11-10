@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.66
+
+### Fixed
+
+- **Token counts sent with a decision id reach that decision.**
+  `post_generation_outcome`, `record_prompt_defense_event` and
+  `record_policy_enforcement_event` lower-cased every `request_id`. A
+  `decision_id` from `decide()` is upper case, so the tokens sent with it
+  counted in the Tokens-to-Outcomes window total and on no decision: its
+  workload, policy and model row and its wasted-token figure showed none.
+  A 26-character decision id is now sent in upper case, whatever case it
+  is passed in. Any other id is sent in lower case, as before. A server
+  with the matching fix also reads rows that earlier releases stored in
+  lower case.
+
 ## 0.6.65
 
 ### Changed

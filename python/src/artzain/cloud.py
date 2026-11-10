@@ -1206,7 +1206,9 @@ def post_generation_outcome(
         outcome: ``"passed"`` or ``"failed"`` (other values are stored as-is).
         reason: Human-readable explanation (e.g. blocked by guard, success, timeout).
         model_id: Optional model / deployment label.
-        request_id: Correlation id (new UUID hex when omitted).
+        request_id: Correlation id (new UUID hex when omitted). Pass the
+            ``decision_id`` that ``decide()`` returned to count these tokens
+            on that decision in Tokens-to-Outcomes.
         tokens_in: Optional prompt / input token count. Drives the Leaderboard's
             "Total Tokens In" and the Token-to-Outcome (T2O) averages.
         tokens_out: Optional completion / output token count.
@@ -1229,9 +1231,9 @@ def post_generation_outcome(
         level = "info"
         title = f"Generation · {outcome or 'event'}"
 
-    import uuid
+    from artzain._request_ids import correlation_id
 
-    rid = (request_id or uuid.uuid4().hex).lower()
+    rid = correlation_id(request_id)
     payload: dict[str, Any] = {
         "outcome": oc or outcome,
         "reason": (reason or "").strip()[:2000],
