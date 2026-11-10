@@ -58,13 +58,13 @@ import logging
 import os
 import re
 import sys
-import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from artzain._private_files import private_dir, private_temp_dir
+from artzain._request_ids import correlation_id
 from artzain._surrogates import replace_unpaired_surrogates, without_unpaired_surrogates
 from artzain.audit_chain import AuditLogWriteError, get_chain
 from artzain.pii_detector import redact_text
@@ -244,7 +244,7 @@ def record_prompt_defense_event(
         if not _cloud_include_passes():
             return
 
-    rid = (request_id or uuid.uuid4().hex).lower()
+    rid = correlation_id(request_id)
     payload_hash = hashlib.sha256((text or "").encode("utf-8", "surrogatepass")).hexdigest()
     lat = None if latency_ms is None else max(0.0, float(latency_ms))
 
@@ -471,7 +471,7 @@ def record_policy_enforcement_event(
         if not _cloud_include_passes():
             return
 
-    rid = (request_id or uuid.uuid4().hex).lower()
+    rid = correlation_id(request_id)
     payload_hash = hashlib.sha256((text or "").encode("utf-8", "surrogatepass")).hexdigest()
     lat = None if latency_ms is None else max(0.0, float(latency_ms))
 
