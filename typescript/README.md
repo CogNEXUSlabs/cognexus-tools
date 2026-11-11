@@ -54,8 +54,18 @@ follow redirects either.
   quote the API key or name the host; to see that text, pass a `fetchImpl`
   that wraps `fetch` and records what it, and the response's `json()`, reject
   with.
+  `workloadId` and `modelId` name the workload and the model the decision
+  belongs to; the Tokens-to-Outcomes page groups by them.
 - `postSdkEvent(options)` — fire-and-forget guard-event telemetry
-  (`POST /api/events`); never throws.
+  (`POST /api/events`); never throws. `tokensIn` and `tokensOut` attach token
+  counts to the event.
+- `postGenerationOutcome(options)` — report one model call and what it cost
+  in tokens; never throws. Pass the `decision_id` from `decide()` as
+  `requestId` and the tokens count on that decision.
+- `postDecisionResult(decisionId, resultRef)` — post the business result of a
+  sealed decision (`POST /api/v1/decisions/{decision_id}/result`). An allowed
+  decision with a posted result is an accountable outcome. Throws
+  `DecisionError` when refused.
 - `fetchApiKeyIdentity()` — validate the configured key (`GET /api/api-keys/me`).
 
 ## Divergence from the Python SDK

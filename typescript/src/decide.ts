@@ -98,6 +98,13 @@ export interface DecideOptions {
   surface?: string;
   /** Idempotency key — replays return the original sealed decision. */
   requestId?: string;
+  /**
+   * The workload this decision belongs to, e.g. `"invoice-approval"`. The
+   * Tokens-to-Outcomes page groups by it. Left out of the request when empty.
+   */
+  workloadId?: string;
+  /** The model that produced the payload. Left out of the request when empty. */
+  modelId?: string;
   /** FR-11 product identifier (`name@version`). */
   product?: string;
   /** Advisory context recorded alongside the decision. */
@@ -106,6 +113,21 @@ export interface DecideOptions {
   timeoutMs?: number;
   /** Test seam / custom transport. Defaults to global `fetch`. */
   fetchImpl?: FetchLike;
+}
+
+/**
+ * A workload or model id as the server takes it: trimmed, at most 80
+ * characters, no control characters. Empty is allowed.
+ */
+function dimensionId(value: string | undefined): string {
+  const text = String(value ?? "").trim();
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f]/.test(text)) {
+    throw new DecisionError(
+      "Decision request not sent: workloadId and modelId cannot include control characters.",
+    );
+  }
+  return text.slice(0, 80);
 }
 
 export async function decide(options: DecideOptions): Promise<DecisionResponse> {
@@ -132,7 +154,13 @@ export async function decide(options: DecideOptions): Promise<DecisionResponse> 
     throw new DecisionError("No fetch implementation available (Node >= 18 required).");
   }
 
-  const body = {
+  const workload = dimensionId(options.workloadId);
+  const model = dimensionId(options.modelId);
+  const body: Record<string, unknown> = {
+    // Sent only when named, as the Python SDK does: an engine older than the
+    // fields never sees them.
+    ...(workload ? { workload_id: workload } : {}),
+    ...(model ? { model_id: model } : {}),
     agent_did: options.agentDid ?? "cognexus-sdk-ts",
     action: options.action,
     target: options.target,

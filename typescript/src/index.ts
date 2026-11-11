@@ -9,7 +9,9 @@ export type {
   FetchLike,
   PayloadKind,
 } from "./decide.js";
-export { postSdkEvent } from "./events.js";
-export type { SdkEventOptions } from "./events.js";
+export { postGenerationOutcome, postSdkEvent } from "./events.js";
+export type { GenerationOutcomeOptions, SdkEventOptions } from "./events.js";
+export { postDecisionResult } from "./result.js";
+export type { DecisionResult } from "./result.js";
 export { fetchApiKeyIdentity } from "./identity.js";
 export type { ApiKeyIdentity } from "./identity.js";
