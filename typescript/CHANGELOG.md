@@ -4,6 +4,27 @@ All notable changes to `@cognexuslabs/artzain`. Headings are the bare
 version (`## 0.1.5`): the mirror's `publish-npm.yml` cuts the GitHub release
 notes for tag `sdk-ts-v<version>` from the matching section.
 
+## 0.1.11
+
+### Added
+
+- **What Tokens-to-Outcomes needs, as the Python SDK sends it.**
+  - `decide()` takes `workloadId` and `modelId`, the workload and the model a
+    decision belongs to. Both are trimmed, cut to 80 characters and left out
+    of the request when empty. A control character in one is a
+    `DecisionError` before anything is sent.
+  - `postSdkEvent()` takes `tokensIn` and `tokensOut`. They go into the
+    payload as `tokens_in` and `tokens_out`, over any the payload holds. It
+    also takes `source`, and `level` accepts `"success"`.
+  - `postGenerationOutcome()` reports one model call and its token counts.
+    Like `postSdkEvent()` it never throws. A `decision_id` passed as
+    `requestId` is sent in upper case, the form the server stores, so the
+    tokens count on that decision; any other id is sent in lower case.
+  - `postDecisionResult()` posts the business result of a sealed decision
+    (`POST /api/v1/decisions/{decision_id}/result`). It validates the id and
+    the reference before sending, does not follow a redirect, and reports a
+    failed request by its kind, as `decide()` does.
+
 ## 0.1.10
 
 ### Changed
