@@ -34,7 +34,7 @@
    "  leaves checked:     3",
    "  seals checked:      0",
    "  signatures checked: 5",
-   "  ! 2 seq gaps (filtered export; linkage across gaps not checked offline)",
+   "  Expected: 2 seq gaps (filtered export; linkage across gaps not checked offline)",
    "  (--verbose lists the 2 per-record warnings)",
    "",
    "FAILED at seq 7: proof does not reach merkle_root of seal S0"
@@ -178,6 +178,10 @@
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: leaf seq 1 lacks a certificate valid at signing time"
   ]
  },
@@ -216,6 +220,10 @@
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: certificate chain is malformed, so provenance was not checked"
   ]
  },
@@ -254,6 +262,10 @@
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -290,7 +302,9 @@
    "  certificates:       2 checked",
    "",
    "VERIFIED, ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
-   "The signing keys chain to the CogNEXUS Evidence Root, certified at signing time."
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signing keys chain to the CogNEXUS Labs Evidence Root, certified at signing time."
   ]
  },
  "certified_attested": {
@@ -327,6 +341,8 @@
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
    "",
    "VERIFIED, ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
    "The signing keys chain to the root you supplied, certified at signing time."
   ]
  },
@@ -364,6 +380,10 @@
    "  signatures checked: 7",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no Evidence Root fingerprint pinned (pre-ceremony verifier)"
   ]
  },
@@ -402,9 +422,11 @@
    "  certificates:       2 checked",
    "",
    "VERIFIED, ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
    "Notes on the certificate chain:",
    "  - attested under retired root <root>, certified before the re-root",
-   "The signing keys chain to a retired CogNEXUS Evidence Root, certified at signing time."
+   "The signing keys chain to a retired CogNEXUS Labs root, certified at signing time."
   ]
  },
  "certified_under_a_root_no_longer_pinned": {
@@ -441,6 +463,10 @@
    "  signatures checked: 7",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: root public key fingerprint mismatch for the pinned Evidence Root"
   ]
  },
@@ -479,9 +505,13 @@
    "  seals checked:      1",
    "  signatures checked: 6",
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
-   "  ! certified bundle without a signed manifest",
+   "  Check: certified bundle without a signed manifest",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no verifiable signed manifest, so the record set is not attested"
   ]
  },
@@ -553,6 +583,10 @@
    "  signatures checked: 6",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -590,9 +624,12 @@
    "  leaves checked:     5",
    "  seals checked:      1",
    "  signatures:         SKIPPED (install 'artzain[verify]')",
-   "  ! cryptography not installed; signatures not verified (pip install 'artzain[verify]')",
+   "  Check: cryptography not installed; signatures not verified (pip install 'artzain[verify]')",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "No signature was checked: install 'artzain[verify]' and run again before relying on this.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -630,6 +667,10 @@
    "  signatures checked: 7",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -803,6 +844,10 @@
    "  signatures checked: 7",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -843,8 +888,8 @@
    "  seals checked:      1",
    "  signatures checked: 5",
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
-   "  ! 2 seq gaps (filtered export; linkage across gaps not checked offline)",
-   "  ! seal S0: 3/9 leaves present, root not recomputed",
+   "  Expected: 2 seq gaps (filtered export; linkage across gaps not checked offline)",
+   "  Expected: seal S0: 3/9 leaves present, root not recomputed",
    "  (--verbose lists the 2 per-record warnings)",
    "",
    "FAILED at seq 3: records suppressed or substituted",
@@ -883,7 +928,7 @@
    "  leaves checked:     4",
    "  seals checked:      0",
    "  signatures checked: 6",
-   "  ! seq gap 2->4 (filtered export; linkage across the gap not checked offline)",
+   "  Expected: seq gap 2->4 (filtered export; linkage across the gap not checked offline)",
    "",
    "FAILED at seq 3: deleted leaf, seal S0 lacks seq 3"
   ]
@@ -920,7 +965,7 @@
    "  leaves checked:     4",
    "  seals checked:      0",
    "  signatures checked: 5",
-   "  ! seq gap 3->5 (filtered export; linkage across the gap not checked offline)",
+   "  Expected: seq gap 3->5 (filtered export; linkage across the gap not checked offline)",
    "",
    "FAILED at seq 4: deleted leaf, seal S0 lacks seq 4"
   ]
@@ -959,9 +1004,11 @@
    "  signatures checked: 5",
    "  certificates:       2 checked",
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
-   "  ! seal S0: 3/9 leaves present, root not recomputed",
+   "  Expected: seal S0: 3/9 leaves present, root not recomputed",
    "",
    "VERIFIED, ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
    "The signing keys chain to the root you supplied, certified at signing time."
   ]
  },
@@ -1068,7 +1115,7 @@
    "  seals checked:      0",
    "  signatures checked: 4",
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
-   "  ! seq gap 2->4 (filtered export; linkage across the gap not checked offline)",
+   "  Expected: seq gap 2->4 (filtered export; linkage across the gap not checked offline)",
    "",
    "FAILED at seq 5: duplicate leaf seq 5 (record set padded)"
   ]
@@ -1182,11 +1229,15 @@
    "  signatures checked: 5",
    "  certificates:       2 checked",
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
-   "  ! 2 seq gaps (filtered export; linkage across gaps not checked offline)",
-   "  ! seal S0: 3/9 leaves present, root not recomputed",
+   "  Expected: 2 seq gaps (filtered export; linkage across gaps not checked offline)",
+   "  Expected: seal S0: 3/9 leaves present, root not recomputed",
    "  (--verbose lists the 2 per-record warnings)",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no leaves_digest, so the exact leaf set is not bound"
   ]
  },
@@ -1224,6 +1275,10 @@
    "  signatures checked: 7",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -1264,12 +1319,15 @@
    "  leaves checked:     3",
    "  seals checked:      1",
    "  signatures:         SKIPPED (install 'artzain[verify]')",
-   "  ! cryptography not installed; signatures not verified (pip install 'artzain[verify]')",
-   "  ! signed manifest not verified (cryptography missing); its records are still compared",
-   "  ! key handovers are checked for self-consistency only; the manifest is not trusted",
-   "  ! key handover <retiring>-><successor> not verified (cryptography missing)",
+   "  Check: cryptography not installed; signatures not verified (pip install 'artzain[verify]')",
+   "  Check: signed manifest not verified (cryptography missing); its records are still compared",
+   "  Check: key handovers are checked for self-consistency only; the manifest is not trusted",
+   "  Check: key handover <retiring>-><successor> not verified (cryptography missing)",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "No signature was checked: install 'artzain[verify]' and run again before relying on this.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -1341,9 +1399,13 @@
    "  leaves checked:     3",
    "  seals checked:      1",
    "  signatures checked: 7",
-   "  ! handover <retiring>-><successor> sound; no public key for <retiring>",
+   "  Expected: handover <retiring>-><successor> sound; no public key for <retiring>",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -1483,9 +1545,13 @@
    "  leaves checked:     3",
    "  seals checked:      1",
    "  signatures checked: 6",
-   "  ! key handovers are checked for self-consistency only; the manifest is not trusted",
+   "  Check: key handovers are checked for self-consistency only; the manifest is not trusted",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -1523,6 +1589,10 @@
    "  signatures checked: 7",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -1595,7 +1665,7 @@
    "  leaves checked:     3",
    "  seals checked:      0",
    "  signatures checked: 5",
-   "  ! 2 seq gaps (filtered export; linkage across gaps not checked offline)",
+   "  Expected: 2 seq gaps (filtered export; linkage across gaps not checked offline)",
    "  (--verbose lists the 2 per-record warnings)",
    "",
    "FAILED at seq 4: proof does not reach merkle_root of seal S0"
@@ -1636,7 +1706,7 @@
    "  leaves checked:     3",
    "  seals checked:      0",
    "  signatures checked: 4",
-   "  ! 2 seq gaps (filtered export; linkage across gaps not checked offline)",
+   "  Expected: 2 seq gaps (filtered export; linkage across gaps not checked offline)",
    "  (--verbose lists the 2 per-record warnings)",
    "",
    "FAILED at seq 3: inclusion proof for seq 3, but no such leaf is in the bundle"
@@ -1677,7 +1747,7 @@
    "  leaves checked:     3",
    "  seals checked:      0",
    "  signatures checked: 4",
-   "  ! 2 seq gaps (filtered export; linkage across gaps not checked offline)",
+   "  Expected: 2 seq gaps (filtered export; linkage across gaps not checked offline)",
    "  (--verbose lists the 2 per-record warnings)",
    "",
    "FAILED at seq 7: malformed inclusion proof for seq 7"
@@ -1718,7 +1788,7 @@
    "  leaves checked:     3",
    "  seals checked:      0",
    "  signatures checked: 4",
-   "  ! 2 seq gaps (filtered export; linkage across gaps not checked offline)",
+   "  Expected: 2 seq gaps (filtered export; linkage across gaps not checked offline)",
    "  (--verbose lists the 2 per-record warnings)",
    "",
    "FAILED at seq 4: proof names seal S9 not in the bundle"
@@ -1760,8 +1830,8 @@
    "  leaves checked:     3",
    "  seals checked:      1",
    "  signatures checked: 5",
-   "  ! 2 seq gaps (filtered export; linkage across gaps not checked offline)",
-   "  ! seal S0: 3/8 leaves present, proved by inclusion",
+   "  Expected: 2 seq gaps (filtered export; linkage across gaps not checked offline)",
+   "  Expected: seal S0: 3/8 leaves present, proved by inclusion",
    "  (--verbose lists the 2 per-record warnings)",
    "",
    "FAILED: inclusion proof set does not match the signed manifest (proofs_digest mismatch)"
@@ -1803,8 +1873,8 @@
    "  leaves checked:     3",
    "  seals checked:      1",
    "  signatures checked: 5",
-   "  ! 2 seq gaps (filtered export; linkage across gaps not checked offline)",
-   "  ! seal S0: 3/8 leaves present, root not recomputed",
+   "  Expected: 2 seq gaps (filtered export; linkage across gaps not checked offline)",
+   "  Expected: seal S0: 3/8 leaves present, root not recomputed",
    "  (--verbose lists the 2 per-record warnings)",
    "",
    "FAILED: inclusion proof set does not match the signed manifest (proofs_digest mismatch)"
@@ -1853,11 +1923,13 @@
    "  signatures checked: 9",
    "  certificates:       2 checked",
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
-   "  ! 3 seq gaps (filtered export; linkage across gaps not checked offline)",
-   "  ! 4 seals partly present (filtered export; roots not recomputed)",
+   "  Expected: 3 seq gaps (filtered export; linkage across gaps not checked offline)",
+   "  Expected: 4 seals partly present (filtered export; roots not recomputed)",
    "  (--verbose lists the 7 per-record warnings)",
    "",
    "VERIFIED, ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
    "The signing keys chain to the root you supplied, certified at signing time."
   ]
  },
@@ -1897,7 +1969,7 @@
    "  leaves checked:     4",
    "  seals checked:      0",
    "  signatures checked: 6",
-   "  ! 3 seq gaps (filtered export; linkage across gaps not checked offline)",
+   "  Expected: 3 seq gaps (filtered export; linkage across gaps not checked offline)",
    "  (--verbose lists the 3 per-record warnings)",
    "",
    "FAILED at seq 4: deleted leaf, seal S1 lacks seq 4"
@@ -1939,6 +2011,10 @@
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: leaf seq 1 lacks a certificate valid at signing time"
   ]
  },
@@ -2184,9 +2260,13 @@
    "  seals checked:      1",
    "  signatures checked: 6",
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
-   "  ! certified bundle without a signed manifest",
+   "  Check: certified bundle without a signed manifest",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no verifiable signed manifest, so the record set is not attested"
   ]
  },
@@ -2261,9 +2341,13 @@
    "  leaves checked:     3",
    "  seals checked:      1",
    "  signatures checked: 7",
-   "  ! key <notary>: no handover names it (second process, or not authorized)",
+   "  Check: key <notary>: no handover names it (second process, or not authorized)",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -2402,7 +2486,7 @@
    "  seals checked:      1",
    "  signatures checked: 5",
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
-   "  ! seal S0: 3/5 leaves present, root not recomputed",
+   "  Expected: seal S0: 3/5 leaves present, root not recomputed",
    "",
    "FAILED at seq 3: records suppressed or substituted (leaf_count 4, expected 3)"
   ]
@@ -2474,7 +2558,7 @@
    "  seals checked:      1",
    "  signatures checked: 6",
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
-   "  ! seal S0: 4/5 leaves present, root not recomputed",
+   "  Expected: seal S0: 4/5 leaves present, root not recomputed",
    "",
    "FAILED at seq 2: records suppressed or substituted",
    "  first_seq 1, expected 2",
@@ -2516,6 +2600,10 @@
    "  signatures checked: 9",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -2657,9 +2745,13 @@
    "  signatures checked: 6",
    "  certificates:       2 checked",
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
-   "  ! seal S0: 4/5 leaves present, root not recomputed",
+   "  Expected: seal S0: 4/5 leaves present, root not recomputed",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: manifest signer is not a certified deployment key"
   ]
  },
@@ -2698,9 +2790,11 @@
    "  certificates:       2 checked",
    "",
    "VERIFIED, ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
    "Notes on the certificate chain:",
    "  - attested under retired root <root>, certified before the re-root",
-   "The signing keys chain to a retired CogNEXUS Evidence Root, certified at signing time."
+   "The signing keys chain to a retired CogNEXUS Labs root, certified at signing time."
   ]
  },
  "rotations_digest_mismatch": {
@@ -2771,9 +2865,13 @@
    "  leaves checked:     5",
    "  seals checked:      2",
    "  signatures checked: 7",
-   "  ! seal chain gap before S1 (earlier seal not in bundle)",
+   "  Expected: seal chain gap before S1 (earlier seal not in bundle)",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -2882,9 +2980,13 @@
    "  leaves checked:     3",
    "  seals checked:      1",
    "  signatures checked: 7",
-   "  ! key <sealer>: no handover names it (second process, or not authorized)",
+   "  Check: key <sealer>: no handover names it (second process, or not authorized)",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -2955,7 +3057,7 @@
    "  leaves checked:     4",
    "  seals checked:      0",
    "  signatures checked: 5",
-   "  ! seq gap 2->4 (filtered export; linkage across the gap not checked offline)",
+   "  Expected: seq gap 2->4 (filtered export; linkage across the gap not checked offline)",
    "",
    "FAILED at seq 3: deleted leaf, seal S0 lacks seq 3"
   ]
@@ -2995,9 +3097,13 @@
    "  seals checked:      0",
    "  signatures checked: 0",
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
-   "  ! signed manifest key <stranger> is not in the bundle, so custody is not verified",
+   "  Check: signed manifest key <stranger> is not in the bundle, so custody is not verified",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -3037,10 +3143,13 @@
    "  seals checked:      1",
    "  signatures:         SKIPPED (install 'artzain[verify]')",
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
-   "  ! cryptography not installed; signatures not verified (pip install 'artzain[verify]')",
-   "  ! signed manifest not verified (cryptography missing); its records are still compared",
+   "  Check: cryptography not installed; signatures not verified (pip install 'artzain[verify]')",
+   "  Check: signed manifest not verified (cryptography missing); its records are still compared",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "No signature was checked: install 'artzain[verify]' and run again before relying on this.",
    "  self-attested because: cryptography not installed, chain not checked"
   ]
  },
@@ -3080,9 +3189,13 @@
    "  leaves checked:     5",
    "  seals checked:      1",
    "  signatures checked: 9",
-   "  ! key <attacker>: no handover names it (second process, or not authorized)",
+   "  Check: key <attacker>: no handover names it (second process, or not authorized)",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -3124,11 +3237,13 @@
    "  signatures checked: 5",
    "  certificates:       2 checked",
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
-   "  ! 2 seq gaps (filtered export; linkage across gaps not checked offline)",
-   "  ! seal S0: 3/8 leaves present, proved by inclusion",
+   "  Expected: 2 seq gaps (filtered export; linkage across gaps not checked offline)",
+   "  Expected: seal S0: 3/8 leaves present, proved by inclusion",
    "  (--verbose lists the 2 per-record warnings)",
    "",
    "VERIFIED, ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
    "The signing keys chain to the root you supplied, certified at signing time."
   ]
  },
@@ -3172,13 +3287,16 @@
    "  leaves checked:     3",
    "  seals checked:      1",
    "  signatures:         SKIPPED (install 'artzain[verify]')",
-   "  ! cryptography not installed; signatures not verified (pip install 'artzain[verify]')",
-   "  ! 2 seq gaps (filtered export; linkage across gaps not checked offline)",
-   "  ! signed manifest not verified (cryptography missing); its records are still compared",
-   "  ! seal S0: 3/8 leaves present, proved by inclusion",
+   "  Check: cryptography not installed; signatures not verified (pip install 'artzain[verify]')",
+   "  Expected: 2 seq gaps (filtered export; linkage across gaps not checked offline)",
+   "  Check: signed manifest not verified (cryptography missing); its records are still compared",
+   "  Expected: seal S0: 3/8 leaves present, proved by inclusion",
    "  (--verbose lists the 2 per-record warnings)",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "No signature was checked: install 'artzain[verify]' and run again before relying on this.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -3220,11 +3338,13 @@
    "  signatures checked: 5",
    "  certificates:       2 checked",
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
-   "  ! 2 seq gaps (filtered export; linkage across gaps not checked offline)",
-   "  ! seal S0: 3/8 leaves present, root not recomputed",
+   "  Expected: 2 seq gaps (filtered export; linkage across gaps not checked offline)",
+   "  Expected: seal S0: 3/8 leaves present, root not recomputed",
    "  (--verbose lists the 2 per-record warnings)",
    "",
    "VERIFIED, ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
    "The signing keys chain to the root you supplied, certified at signing time."
   ]
  },
@@ -3264,6 +3384,10 @@
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: leaf seq 1 lacks a certificate valid at signing time"
   ]
  },
@@ -3303,6 +3427,8 @@
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
    "",
    "VERIFIED, ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
    "Notes on the certificate chain:",
    "  - issuing certificate ISS-TAMPERED signature invalid",
    "The signing keys chain to the root you supplied, certified at signing time."
@@ -3412,11 +3538,14 @@
    "  leaves checked:     3",
    "  seals checked:      1",
    "  signatures:         SKIPPED (install 'artzain[verify]')",
-   "  ! cryptography not installed; signatures not verified (pip install 'artzain[verify]')",
-   "  ! signed manifest not verified (cryptography missing); its records are still compared",
-   "  ! seal S0: 3/5 leaves present, root not recomputed",
+   "  Check: cryptography not installed; signatures not verified (pip install 'artzain[verify]')",
+   "  Check: signed manifest not verified (cryptography missing); its records are still compared",
+   "  Expected: seal S0: 3/5 leaves present, root not recomputed",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "No signature was checked: install 'artzain[verify]' and run again before relying on this.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -3487,7 +3616,7 @@
    "  leaves checked:     5",
    "  seals checked:      0",
    "  signatures:         SKIPPED (install 'artzain[verify]')",
-   "  ! cryptography not installed; signatures not verified (pip install 'artzain[verify]')",
+   "  Check: cryptography not installed; signatures not verified (pip install 'artzain[verify]')",
    "",
    "FAILED: malformed bundle (TypeError)"
   ]
@@ -3561,6 +3690,10 @@
    "  signatures checked: 6",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no certificate chain in bundle"
   ]
  },
@@ -3597,7 +3730,7 @@
    "  seals checked:      1",
    "  signatures checked: 2",
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
-   "  ! seal S0: 0/5 leaves present, root not recomputed",
+   "  Expected: seal S0: 0/5 leaves present, root not recomputed",
    "",
    "FAILED: records suppressed or substituted",
    "  first_seq 1, expected None",
@@ -3639,9 +3772,11 @@
    "  signatures checked: 5",
    "  certificates:       2 checked",
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
-   "  ! seal S0: 3/5 leaves present, root not recomputed",
+   "  Expected: seal S0: 3/5 leaves present, root not recomputed",
    "",
    "VERIFIED, ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
    "The signing keys chain to the root you supplied, certified at signing time."
   ]
  },
@@ -3681,6 +3816,10 @@
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no leaves_digest, so the exact leaf set is not bound"
   ]
  },
@@ -3753,6 +3892,10 @@
    "  ! This attests to your root, not the published CogNEXUS Evidence Root.",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: root public key fingerprint mismatch for the pinned Evidence Root"
   ]
  },
@@ -3790,6 +3933,10 @@
    "  signatures checked: 6",
    "",
    "VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
+   "Every entry matches its hash and links to the one before, and each seal covers its",
+   "entries.",
+   "The signatures check against keys in this bundle; nothing yet ties those keys to the",
+   "CogNEXUS Labs Evidence Root.",
    "  self-attested because: no certificate chain in bundle"
   ]
  }

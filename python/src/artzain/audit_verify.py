@@ -749,6 +749,33 @@ def _handover_unregistered_warning(retiring: str, successor: str,
     return f"{pair}; neither key is in the bundle"
 
 
+#: The warnings a filtered export always shows, matched whole: what the text
+#: path labels ``Expected:``. Everything else, a warning a later release adds
+#: included, is ``Check:`` (auditor journey plan, WP 2.5). The summaries and
+#: the single-record lines each kind prints before it is summarised.
+_EXPECTED_WARNINGS = tuple(
+    re.compile(re.escape(summary).replace(re.escape("{n}"), r"[0-9][0-9,]*") + r"\Z")
+    for summary in (*_PER_RECORD_SUMMARIES.values(), _SEAL_CHAIN_GAPS_COVERING)
+) + tuple(re.compile(p) for p in (
+    r"seq gap [0-9]+->[0-9]+ \(filtered export; linkage across the gap not checked offline\)\Z",
+    r"seal chain gap before \S+ \(earlier seal not in bundle\)\Z",
+    r"gap before \S+ \(bundle carries only seals over these records\)\Z",
+    r"seal \S+: [0-9]+/[0-9]+ leaves present, (?:proved by inclusion|root not recomputed)\Z",
+    r"handover \S+->\S+ sound; (?:no public key for \S+|neither key is in the bundle)\Z",
+))
+
+
+def warning_label(warning: str) -> str:
+    """``"Expected"`` for a warning every filtered export shows (a seq gap, a
+    seal chain gap, a partly present seal, a sound handover whose key the
+    export does not carry), ``"Check"`` for any other: something to act on
+    before relying on the result. The text path prints it before the
+    warning; ``warnings`` and ``--json`` keep the text alone."""
+    if any(p.match(warning) for p in _EXPECTED_WARNINGS):
+        return "Expected"
+    return "Check"
+
+
 def _record_set_error(verified: bool, clauses: list[str]) -> str:
     if verified:
         summary = "records suppressed or substituted"

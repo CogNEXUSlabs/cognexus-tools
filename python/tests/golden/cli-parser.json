@@ -387,7 +387,7 @@
           "parser": {
            "prog": "artzain audit verify",
            "usage": null,
-           "description": "Recompute every leaf hash, check hash-chain linkage and Merkle roots,\nand verify Ed25519 signatures against the bundle's public keys, with\nzero network. Those keys come from the bundle, so trust in the\nproducing server drops out only at VERIFIED, ATTESTED, which needs the\nsigning keys to chain to the pinned CogNEXUS Evidence Root. This\nrelease pins no Evidence Root: an intact bundle reports\nVERIFIED, SELF-ATTESTED unless --root-fingerprint supplies a test root.\nOnce pinned, a root stays pinned through a re-root, so bundles\ncertified under it keep attesting, named as under a retired root.\nDownload a bundle from GET /api/v1/audit/export. Signature checks\nrequire 'artzain[verify]'.",
+           "description": "Recompute every leaf hash, check hash-chain linkage and Merkle roots,\nand verify Ed25519 signatures against the bundle's public keys, with\nzero network. Those keys come from the bundle, so trust in the\nproducing server drops out only at VERIFIED, ATTESTED, which needs the\nsigning keys to chain to the pinned CogNEXUS Evidence Root. This\nrelease pins no Evidence Root: an intact bundle reports\nVERIFIED, SELF-ATTESTED unless --root-fingerprint supplies a test root.\nOnce pinned, a root stays pinned through a re-root, so bundles\ncertified under it keep attesting, named as under a retired root.\nDownload a bundle from GET /api/v1/audit/export. Signature checks\nrequire 'artzain[verify]'. Under the verdict, two lines say what held\nand what the keys are tied to; each warning starts Expected: (what a\nfiltered export always shows) or Check: (act on it first).",
            "epilog": null,
            "formatter_class": "RawDescriptionHelpFormatter",
            "add_help": true,
@@ -495,6 +495,141 @@
              "required": false,
              "help": "Verify against this Evidence Root fingerprint alone, in place of the pinned set (test roots only — the output states when a root outside the pins is in use).",
              "metavar": "SHA256HEX",
+             "choices": null
+            }
+           ]
+          }
+         },
+         {
+          "name": "sample",
+          "help": "Pick a seeded, reproducible sample of a bundle's decisions.csv.",
+          "parser": {
+           "prog": "artzain audit sample",
+           "usage": null,
+           "description": "Pick N rows of an evidence bundle's decisions.csv. The same seed picks\nthe same rows whoever runs it: each row's key is the SHA-256 of the\nseed, a newline and its leaf_id, and the N smallest keys are the\nsample. Writes <out>.csv (the rows) and <out>.json (the seed, the\nmethod, the population and the selection). Verify the bundle first.",
+           "epilog": null,
+           "formatter_class": "RawDescriptionHelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_audit_sample>"
+           },
+           "groups": [
+            [
+             "bundle"
+            ],
+            [
+             "help",
+             "size",
+             "seed",
+             "outcome",
+             "out",
+             "json"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [],
+             "dest": "bundle",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": "Bundle folder, bundle .zip, or decisions.csv itself.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--size"
+             ],
+             "dest": "size",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": "<int>",
+             "required": true,
+             "help": "How many rows to pick (all of them when N is the population or more).",
+             "metavar": "N",
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--seed"
+             ],
+             "dest": "seed",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "The seed (any text on one line). Drawn and recorded when omitted.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--outcome"
+             ],
+             "dest": "outcome",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Sample only rows with these outcomes, comma separated (e.g. deny,review).",
+             "metavar": "LIST",
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--out"
+             ],
+             "dest": "out",
+             "nargs": null,
+             "const": null,
+             "default": "sample",
+             "type": null,
+             "required": false,
+             "help": "Write PREFIX.csv and PREFIX.json (default: sample). Never overwrites.",
+             "metavar": "PREFIX",
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--json"
+             ],
+             "dest": "json",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": "Print the record as JSON.",
+             "metavar": null,
              "choices": null
             }
            ]
@@ -615,6 +750,7 @@
         ],
         "choices": [
          "verify",
+         "sample",
          "export"
         ]
        }
