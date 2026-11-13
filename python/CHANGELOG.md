@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.6.68
+
+### Added
+
+- **`artzain audit sample` picks a seeded, reproducible sample of a bundle's
+  `decisions.csv`.** `artzain audit sample <bundle> --size 25 --seed q3-2026`
+  writes `sample.csv` (the selected rows, the bundle's own header and cells)
+  and `sample.json` (the seed, the method, the population, the SHA-256 of the
+  file sampled and the selected rows). The same seed picks the same rows for
+  anyone, whatever order the rows are in: each row's key is the SHA-256 of
+  the seed, a newline and its `leaf_id`, and the smallest keys are the
+  sample. `--outcome deny,review` samples only those rows; without `--seed`
+  one is drawn and recorded. When the bundle's signed manifest commits
+  `decisions.csv`, a file that does not match it is refused. The command does
+  not verify the bundle: run `artzain audit verify` first.
+
+### Changed
+
+- **`artzain audit verify` says what its verdict means, and labels each
+  warning.** The verdict line is unchanged, its `VERIFIED, SELF-ATTESTED`
+  token included. Under it the text output now says, in plain words, that
+  every entry matches its hash and links to the one before and each seal
+  covers its entries, and then what the keys are tied to: keys in the bundle
+  with nothing yet tying them to the CogNEXUS Labs Evidence Root
+  (SELF-ATTESTED), the Evidence Root (ATTESTED), or no signature checked
+  (without `artzain[verify]`). Each warning starts `Expected:` (what a
+  filtered export always shows: seq gaps, seal chain gaps, partly present
+  seals) or `Check:` (anything to act on before relying on the result) in
+  place of `!`. The ATTESTED line names the CogNEXUS Labs Evidence Root.
+  `--json`, `VerifyResult.warnings` and the exit codes are unchanged; from
+  Python, `artzain.audit_verify.warning_label(text)` gives the label.
+
 ## 0.6.67
 
 ### Changed

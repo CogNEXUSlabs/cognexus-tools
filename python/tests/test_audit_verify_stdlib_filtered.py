@@ -261,6 +261,6 @@ def test_cli_verifies_an_intact_tenant_export_without_cryptography(
     code, out = _run_cli(capsys, ["audit", "verify", str(d)])
     assert code == 0, out
     assert "  signatures:         SKIPPED (install 'artzain[verify]')" in out
-    assert f"  ! {_UNVERIFIED}" in out
+    assert f"  Check: {_UNVERIFIED}" in out
     assert ("VERIFIED, SELF-ATTESTED: leaf hashes, chain links, Merkle roots "
             "intact.") in out

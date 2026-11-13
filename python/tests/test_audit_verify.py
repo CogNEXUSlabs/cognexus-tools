@@ -951,8 +951,8 @@ def test_cli_attested_under_a_retired_root_says_so(
     assert "VERIFIED, ATTESTED" in out
     assert "Notes on the certificate chain:" in out
     assert f"  - {note}" in out
-    assert "The signing keys chain to a retired CogNEXUS Evidence Root" in out
-    assert "The signing keys chain to the CogNEXUS Evidence Root" not in out
+    assert "The signing keys chain to a retired CogNEXUS Labs root" in out
+    assert "The signing keys chain to the CogNEXUS Labs Evidence Root" not in out
     assert "NON-DEFAULT" not in out
 
     code, raw = _run_cli(capsys, ["audit", "verify", str(d), "--json"])
@@ -972,7 +972,7 @@ def test_cli_attested_under_the_current_root_is_unchanged_by_retired_pins(
     d = _certified_bundle(tmp_path, signer, authority)
     code, out = _run_cli(capsys, ["audit", "verify", str(d)])
     assert code == 0
-    assert "The signing keys chain to the CogNEXUS Evidence Root" in out
+    assert "The signing keys chain to the CogNEXUS Labs Evidence Root" in out
     assert "retired" not in out
     code, raw = _run_cli(capsys, ["audit", "verify", str(d), "--json"])
     assert json.loads(raw)["evidence_root_retired"] is False
@@ -1508,7 +1508,7 @@ def test_cli_attested_against_the_pinned_root_names_the_cognexus_root(
         code, out = _run_cli(capsys, ["audit", "verify", str(d), *extra])
         assert code == 0
         assert "VERIFIED, ATTESTED" in out
-        assert "The signing keys chain to the CogNEXUS Evidence Root" in out
+        assert "The signing keys chain to the CogNEXUS Labs Evidence Root" in out
         assert "NON-DEFAULT" not in out
 
 

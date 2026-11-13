@@ -953,6 +953,30 @@ def verified_line(state: str, signatures_skipped: bool) -> str:
             f"{signatures} intact.")
 
 
+#: What the verdict line means, in plain words (auditor journey plan, WP 2.5;
+#: decision D8). The verdict line itself, with its machine-read token, does
+#: not change.
+_HELD_LINE = ("Every entry matches its hash and links to the one before, and each seal "
+              "covers its entries.")
+_SELF_ATTESTED_LINE = ("The signatures check against keys in this bundle; nothing yet ties "
+                       "those keys to the CogNEXUS Labs Evidence Root.")
+_SIGNATURES_SKIPPED_LINE = ("No signature was checked: install 'artzain[verify]' and run "
+                            "again before relying on this.")
+
+
+def _wrapped(text: str) -> list[str]:
+    """*text* in lines of at most 90 columns, as every line of the report is."""
+    import textwrap
+
+    return textwrap.wrap(text, width=90)
+
+
+def _warning_line(warning: str) -> str:
+    from artzain.audit_verify import warning_label
+
+    return f"  {warning_label(warning)}: {warning}"
+
+
 def _signing_keys_line(root: str) -> str:
     return f"The signing keys chain to {root}, certified at signing time."
 
@@ -1049,10 +1073,12 @@ def audit_verify_sample_lines() -> list[str]:
     lines.append("  - " + _retired_root_note("ab" * 32))
     for root in (
         "the root you supplied",
-        "a retired CogNEXUS Evidence Root",
-        "the CogNEXUS Evidence Root",
+        "a retired CogNEXUS Labs root",
+        "the CogNEXUS Labs Evidence Root",
     ):
         lines.append(_signing_keys_line(root))
+    for sentence in (_HELD_LINE, _SELF_ATTESTED_LINE, _SIGNATURES_SKIPPED_LINE):
+        lines.extend(_wrapped(sentence))
     clauses = [
         f"first_seq {prev}, expected {seq}",
         f"last_seq {seq}, expected {other}",
@@ -1185,7 +1211,7 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
     if result.root_fingerprint_overridden:
         print(_ROOT_OVERRIDE_LINE)
     for w in result.warnings:
-        print(f"  ! {w}")
+        print(_warning_line(w))
     if result.warning_details:
         if getattr(args, "verbose", False):
             print("  per-record warnings:")
@@ -1198,6 +1224,14 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
     if result.ok:
         state = result.attestation or "SELF-ATTESTED"
         print(verified_line(state, result.signatures_skipped))
+        explanation = [_HELD_LINE]
+        if result.signatures_skipped:
+            explanation.append(_SIGNATURES_SKIPPED_LINE)
+        elif state != "ATTESTED":
+            explanation.append(_SELF_ATTESTED_LINE)
+        for sentence in explanation:
+            for line in _wrapped(sentence):
+                print(line)
         if state == "ATTESTED":
             if result.attestation_reasons:
                 # A tampered issuing certificate beside a valid one is recorded
@@ -1212,9 +1246,9 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
             elif result.evidence_root_retired:
                 # Still ATTESTED: the pin is kept for exactly this bundle. The
                 # note above names the root.
-                root = "a retired CogNEXUS Evidence Root"
+                root = "a retired CogNEXUS Labs root"
             else:
-                root = "the CogNEXUS Evidence Root"
+                root = "the CogNEXUS Labs Evidence Root"
             print(_signing_keys_line(root))
         else:
             for reason in result.attestation_reasons:
@@ -1755,6 +1789,34 @@ def _download(url: str, creds: ResolvedCredentials) -> bytes:
     # Only a request no request can be made with gets here. Raised out here,
     # not in the handler, as in _http_json.
     raise SystemExit(_NOT_SENT)
+
+
+def cmd_audit_sample(args: argparse.Namespace) -> None:
+    """Pick a seeded sample of a bundle's ``decisions.csv`` (auditor journey
+    plan, WP 5.3) and write it with the record of how it was chosen."""
+    from artzain.audit_sample import SampleError, sample_bundle, write_sample
+
+    outcomes = [o.strip() for o in args.outcome.split(",") if o.strip()] if args.outcome else None
+    try:
+        sample = sample_bundle(args.bundle, size=args.size, seed=args.seed, outcomes=outcomes)
+        csv_path, json_path = write_sample(sample, args.out)
+    except SampleError as exc:
+        print(f"FAILED: {exc}")
+        raise SystemExit(1) from None
+    record = sample.record
+    if getattr(args, "json", False):
+        print(json.dumps(record, indent=2))
+        raise SystemExit(0)
+    population = record["population"]
+    scope = f" (outcome {', '.join(population['outcomes'])})" if population["outcomes"] else ""
+    print(f"Sample: {record['size_selected']} of {population['sampled_from']} rows{scope}")
+    drawn = " (drawn for this run: keep it with the sample)" if record["seed_drawn"] else ""
+    print(f"  seed: {record['seed']}{drawn}")
+    print(f"  method: {record['method']}")
+    if not record["source"]["checked_against_manifest"]:
+        print("  ! decisions.csv was not checked against a manifest digest")
+    print(f"  wrote: {csv_path}, {json_path}")
+    raise SystemExit(0)
 
 
 def cmd_audit_export(args: argparse.Namespace) -> None:
@@ -2320,7 +2382,7 @@ _AUDIT_EXPORT_PROFILES: tuple[str, ...] = (
 
 
 def _add_audit_parser(sub: argparse._SubParsersAction) -> None:
-    """``artzain audit verify`` and ``export``."""
+    """``artzain audit verify``, ``sample`` and ``export``."""
     p_audit = sub.add_parser(
         "audit",
         help="Audit evidence tooling (offline bundle verification).",
@@ -2340,7 +2402,9 @@ def _add_audit_parser(sub: argparse._SubParsersAction) -> None:
             "Once pinned, a root stays pinned through a re-root, so bundles\n"
             "certified under it keep attesting, named as under a retired root.\n"
             "Download a bundle from GET /api/v1/audit/export. Signature checks\n"
-            "require 'artzain[verify]'."
+            "require 'artzain[verify]'. Under the verdict, two lines say what held\n"
+            "and what the keys are tied to; each warning starts Expected: (what a\n"
+            "filtered export always shows) or Check: (act on it first)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -2365,6 +2429,30 @@ def _add_audit_parser(sub: argparse._SubParsersAction) -> None:
              "outside the pins is in use).",
     )
     p_verify.set_defaults(func=cmd_audit_verify)
+
+    p_sample = audit_sub.add_parser(
+        "sample",
+        help="Pick a seeded, reproducible sample of a bundle's decisions.csv.",
+        description=(
+            "Pick N rows of an evidence bundle's decisions.csv. The same seed picks\n"
+            "the same rows whoever runs it: each row's key is the SHA-256 of the\n"
+            "seed, a newline and its leaf_id, and the N smallest keys are the\n"
+            "sample. Writes <out>.csv (the rows) and <out>.json (the seed, the\n"
+            "method, the population and the selection). Verify the bundle first."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_sample.add_argument("bundle", help="Bundle folder, bundle .zip, or decisions.csv itself.")
+    p_sample.add_argument("--size", type=int, required=True, metavar="N",
+                          help="How many rows to pick (all of them when N is the population or more).")
+    p_sample.add_argument("--seed", default=None,
+                          help="The seed (any text on one line). Drawn and recorded when omitted.")
+    p_sample.add_argument("--outcome", default=None, metavar="LIST",
+                          help="Sample only rows with these outcomes, comma separated (e.g. deny,review).")
+    p_sample.add_argument("--out", default="sample", metavar="PREFIX",
+                          help="Write PREFIX.csv and PREFIX.json (default: sample). Never overwrites.")
+    p_sample.add_argument("--json", action="store_true", help="Print the record as JSON.")
+    p_sample.set_defaults(func=cmd_audit_sample)
 
     p_export = audit_sub.add_parser(
         "export",

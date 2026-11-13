@@ -261,7 +261,9 @@ def _cli(capsys, d: Path, *extra: str) -> tuple[int, str]:
 
 
 def _bang_lines(out: str) -> list[str]:
-    return [line[len("  ! "):] for line in out.splitlines() if line.startswith("  ! ")]
+    # Each warning line starts with its label (WP 2.5): "Expected:" or "Check:".
+    return [line.split(": ", 1)[1] for line in out.splitlines()
+            if line.startswith(("  Expected: ", "  Check: "))]
 
 
 def test_cli_prints_one_line_per_kind(tmp_path, signer, capsys):

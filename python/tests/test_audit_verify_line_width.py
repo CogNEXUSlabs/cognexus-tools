@@ -2,7 +2,7 @@
 
 The lines are the ones the command prints, rendered with the widest realistic
 values: a 6-digit seq, a 26-character seal id, a 16-character key id, and a
-count of 12,105. The indent is part of the line (``  ! `` before a warning,
+count of 12,105. The indent is part of the line (``  Expected: `` or ``  Check: `` before a warning,
 ``    - `` before a ``--verbose`` detail).
 """
 
