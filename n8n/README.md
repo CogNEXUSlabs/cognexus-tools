@@ -36,6 +36,17 @@ id — `n8n-<uuid>-<item>` — so the key is still unique per call. Either way
 the value is cut to the server's cap of 64 characters before it is sent as
 `request_id`.
 
+## Session ID (Decision node, 0.1.9)
+
+Each decision carries the session it belongs to as `session_id`. The engine
+signs it into the decision's record, and a decision trace groups decisions
+by it. Leave **Session ID** (`sessionId`) empty and the session is the
+execution: `n8n:<instance>:<execution>`, or `n8n:<execution>` on an n8n that
+names no instance. Set it to group by something else, for example a
+conversation id from the trigger. It is cut to 128 characters and left out
+when there is nothing to send. It is not the idempotency key: that is
+**Request ID**.
+
 ## Kept connection (0.1.7)
 
 Both nodes keep their connection to the engine open for 60 s between

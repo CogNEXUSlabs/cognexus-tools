@@ -17,6 +17,8 @@ export interface DecisionRequest {
   target: string;
   payload: string;
   requestId?: string;
+  /** `session_id`: the gateway run this tool call belongs to. Left out when empty. */
+  sessionId?: string;
 }
 
 export interface Decision {
@@ -75,6 +77,7 @@ export async function decide(request: DecisionRequest, env: NodeJS.ProcessEnv = 
         payload_kind: "tool_call",
         surface: "mcp",
         request_id: request.requestId ?? randomUUID(),
+        ...(request.sessionId ? { session_id: request.sessionId } : {}),
         product: `artzain-mcp-gateway@${VERSION}`,
       }),
     });

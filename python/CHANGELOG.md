@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.67
+
+### Changed
+
+- **`artzain audit verify` checks a bundle's framework profile folder.** An
+  export made with a profile (`--profile eu-ai-act`, and the other six) now
+  commits every file of its `<profile>/` folder in the signed manifest, by the
+  SHA-256 of the file's bytes under `profile_files`. The verifier fails a
+  bundle whose folder was edited, had a file removed, or had a file added
+  after export, and names the file. A bundle exported before this, which has
+  no `profile_files`, verifies as before and its folder is not checked.
+- **`artzain audit verify --report` lists every failure.** A plain run stops
+  at the first failure. With `--report` the verifier goes on, past each
+  failing leaf, seal and committed file and through every later step, and
+  prints how many failures it found and each one with its seq; `--json
+  --report` carries them under `failures`. The verdict, `error`,
+  `first_bad_seq` and the exit code are those of a plain run. From Python:
+  `verify_bundle(path, report=True)`, then `result.failures`, a list of
+  `(seq, error)`.
+
 ## 0.6.66
 
 ### Fixed

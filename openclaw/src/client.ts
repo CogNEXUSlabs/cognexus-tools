@@ -145,8 +145,26 @@ export interface PostDecisionOptions {
   payload: string;
   agentDid: string;
   requestId?: string;
+  /** `session_id`: the session this tool call belongs to. Left out when empty. */
+  sessionId?: string;
+  /** `tool_call_id`: the tool call this decision screens. Left out when empty. */
+  toolCallId?: string;
   timeoutMs?: number;
   fetchImpl?: FetchLike;
+}
+
+/**
+ * A lineage id as the Decision API takes it: a string, trimmed and cut to
+ * `width`. Anything else is the empty string, and the field is then left
+ * out: the server answers a control character with a 422, and a lineage id
+ * is not worth a refused decision.
+ */
+export function lineageId(value: unknown, width: number): string {
+  if (typeof value !== "string") return "";
+  const text = value.trim();
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f]/.test(text)) return "";
+  return text.slice(0, width);
 }
 
 function trimBase(url: string): string {
@@ -225,6 +243,10 @@ export async function postDecision(
           payload_kind: "tool_call",
           surface: "openclaw",
           request_id: options.requestId ?? null,
+          // Sent only when the host named them, so an engine older than the
+          // fields sees the body it always saw.
+          ...(lineageId(options.sessionId, 128) ? { session_id: lineageId(options.sessionId, 128) } : {}),
+          ...(lineageId(options.toolCallId, 128) ? { tool_call_id: lineageId(options.toolCallId, 128) } : {}),
           context: {},
         }),
         signal: controller.signal,

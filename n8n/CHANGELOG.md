@@ -2,6 +2,20 @@
 
 All notable changes to `@cognexuslabs/n8n-nodes-artzain`.
 
+## 0.1.9
+
+### Added
+
+- **The Decision node sends the session its decisions belong to.** Each
+  decision carries `session_id`, which the engine signs into the decision's
+  record; a decision trace groups an execution's decisions by it. With the
+  new **Session ID** parameter empty, the session is the execution:
+  `n8n:<instance>:<execution>`, or `n8n:<execution>` on an n8n that names no
+  instance. Set **Session ID** to group by something else, such as a
+  conversation. The field is left out when there is no execution id and no
+  Session ID, or the value holds a control character. The node names no
+  parent decision. **Request ID** is unchanged.
+
 ## 0.1.8
 
 ### Changed

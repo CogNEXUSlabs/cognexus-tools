@@ -1125,10 +1125,16 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
     from artzain.audit_verify import verify_bundle
 
     override = getattr(args, "root_fingerprint", None)
-    result = verify_bundle(args.bundle, root_fingerprint=override)
+    # --report (auditor journey plan, WP 2.6): go on past the first failure
+    # and list every one. The verdict and the exit code are a plain run's.
+    report = bool(getattr(args, "report", False))
+    if report:
+        result = verify_bundle(args.bundle, root_fingerprint=override, report=True)
+    else:
+        result = verify_bundle(args.bundle, root_fingerprint=override)
 
     if getattr(args, "json", False):
-        print(json.dumps({
+        payload = {
             "ok": result.ok,
             "attestation": result.attestation,
             "attestation_reasons": result.attestation_reasons,
@@ -1161,7 +1167,10 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
             # True when that root is a pin a later re-root replaced: still
             # ATTESTED, under the root that certified the bundle.
             "evidence_root_retired": result.evidence_root_retired,
-        }, indent=2))
+        }
+        if report:
+            payload["failures"] = [{"seq": seq, "error": error} for seq, error in result.failures]
+        print(json.dumps(payload, indent=2))
         raise SystemExit(0 if result.ok else 1)
 
     print(f"Audit bundle: {args.bundle}")
@@ -1213,6 +1222,13 @@ def cmd_audit_verify(args: argparse.Namespace) -> None:
         raise SystemExit(0)
     for line in failure_lines(result.first_bad_seq, result.error or ""):
         print(line)
+    if report:
+        failures = result.failures
+        print()
+        print(f"{len(failures)} failure{'' if len(failures) == 1 else 's'}:")
+        for seq, error in failures:
+            for line in failure_lines(seq, error):
+                print(f"  {line}")
     raise SystemExit(1)
 
 
@@ -2335,6 +2351,12 @@ def _add_audit_parser(sub: argparse._SubParsersAction) -> None:
         help="Also list each seq gap, seal chain gap and partly present seal "
              "of a filtered export, which the report otherwise counts on one "
              "line per kind (--json always carries them, as warning_details).",
+    )
+    p_verify.add_argument(
+        "--report", action="store_true",
+        help="Go on past the first failure and list every failing leaf, seal "
+             "and file, with a count. The verdict and the exit code are the same "
+             "(with --json, the list is under failures).",
     )
     p_verify.add_argument(
         "--root-fingerprint", metavar="SHA256HEX",

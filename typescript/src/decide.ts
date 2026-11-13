@@ -105,6 +105,25 @@ export interface DecideOptions {
   workloadId?: string;
   /** The model that produced the payload. Left out of the request when empty. */
   modelId?: string;
+  /**
+   * Decisions this one follows, by `decision_id`: the decision a retry
+   * answers, the one a sub-agent was started from. Empty and repeated ids
+   * are dropped and at most 16 are sent. The engine signs them into the
+   * decision's record, and a decision trace is drawn from them.
+   */
+  parentDecisionIds?: string[];
+  /** The session or run this decision belongs to (at most 128 characters). */
+  sessionId?: string;
+  /** Trace id, e.g. the W3C trace id of the request (at most 64 characters). */
+  traceId?: string;
+  /** Span id within the trace (at most 32 characters). */
+  spanId?: string;
+  /** The tool call this decision screens (at most 128 characters). */
+  toolCallId?: string;
+  /** Who the agent acts for, e.g. `"user:ana"` (at most 160 characters). */
+  onBehalfOf?: string;
+  /** The reviewer, when this decision records an approval (at most 160 characters). */
+  approverDid?: string;
   /** FR-11 product identifier (`name@version`). */
   product?: string;
   /** Advisory context recorded alongside the decision. */
@@ -128,6 +147,46 @@ function dimensionId(value: string | undefined): string {
     );
   }
   return text.slice(0, 80);
+}
+
+/**
+ * A lineage string as the server takes it: trimmed and cut to `width`, no
+ * control characters. Empty is allowed, and is then left out of the request.
+ */
+function lineageText(value: unknown, width: number, name: string): string {
+  const text = String(value ?? "").trim();
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f]/.test(text)) {
+    throw new DecisionError(
+      `Decision request not sent: ${name} cannot include control characters.`,
+    );
+  }
+  return text.slice(0, width);
+}
+
+/** The lineage fields of the body, as the Python SDK builds them: only the ones given. */
+function lineageFields(options: DecideOptions): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  const parents: string[] = [];
+  for (const item of options.parentDecisionIds ?? []) {
+    const id = lineageText(item, 64, "parentDecisionIds");
+    if (id && !parents.includes(id)) parents.push(id);
+    if (parents.length === 16) break;
+  }
+  if (parents.length) fields.parent_decision_ids = parents;
+  const scalars: [string, number, string, unknown][] = [
+    ["session_id", 128, "sessionId", options.sessionId],
+    ["trace_id", 64, "traceId", options.traceId],
+    ["span_id", 32, "spanId", options.spanId],
+    ["tool_call_id", 128, "toolCallId", options.toolCallId],
+    ["on_behalf_of", 160, "onBehalfOf", options.onBehalfOf],
+    ["approver_did", 160, "approverDid", options.approverDid],
+  ];
+  for (const [key, width, name, raw] of scalars) {
+    const text = lineageText(raw, width, name);
+    if (text) fields[key] = text;
+  }
+  return fields;
 }
 
 export async function decide(options: DecideOptions): Promise<DecisionResponse> {
@@ -161,6 +220,7 @@ export async function decide(options: DecideOptions): Promise<DecisionResponse> 
     // fields never sees them.
     ...(workload ? { workload_id: workload } : {}),
     ...(model ? { model_id: model } : {}),
+    ...lineageFields(options),
     agent_did: options.agentDid ?? "cognexus-sdk-ts",
     action: options.action,
     target: options.target,
