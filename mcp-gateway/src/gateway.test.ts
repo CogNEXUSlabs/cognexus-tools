@@ -37,6 +37,8 @@ interface SeenDecision {
     payload_kind?: string;
     surface?: string;
     product?: string;
+    session_id?: string;
+    parent_decision_ids?: string[];
   };
   sawKey: boolean;
 }
@@ -224,6 +226,25 @@ describe("a fake upstream", () => {
     expect(raw).not.toContain("arguments");
     expect(raw).not.toContain(API_KEY);
     expect(raw).not.toContain(UPSTREAM_TOKEN);
+  });
+
+  it("sends one session for the gateway's whole run, and names no parent decision", async () => {
+    // One gateway process serves one client connection: that is the session
+    // a decision trace groups its tool calls by. Denied, so that nothing
+    // reaches the upstream or the action log the other tests read.
+    mode = "deny";
+    const before = seen.length;
+    for (const path of ["one.txt", "two.txt"]) {
+      await request("tools/call", { name: "notes__write_file", arguments: { path } });
+    }
+    mode = "allow";
+    const sessions = seen.slice(before).map((decision) => decision.body.session_id);
+    expect(sessions).toHaveLength(2);
+    expect(sessions[0]).toMatch(/^mcp:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(sessions[1]).toBe(sessions[0]);
+    // Every decision of this run so far carries it, whatever its outcome.
+    expect(new Set(seen.map((decision) => decision.body.session_id)).size).toBe(1);
+    for (const decision of seen) expect(decision.body).not.toHaveProperty("parent_decision_ids");
   });
 
   it("reports the version in package.json to the client, the Decision API and the upstream", async () => {

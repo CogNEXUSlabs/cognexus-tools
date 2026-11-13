@@ -380,7 +380,8 @@ and the outcome is recorded only. An entry older than 48 hours is dropped,
 with a note. `--model` and `--workload` are `model_id` and `workload_id`.
 `--session`, `--parent` and `--on-behalf-of` are sent in `context`. The
 engine seals them on leaf version 2 as `session_id`, `parent_decision_ids`
-and `on_behalf_of`. `--cites-review` stays in `context`. The rest of
+and `on_behalf_of`. `--cites-review` stays in `context`, and the decision
+it names is sealed as a parent too. The rest of
 `context` is not in the signed leaf.
 
 Cooperative skill (pattern C): Grok Bot has no host `before_tool_call`

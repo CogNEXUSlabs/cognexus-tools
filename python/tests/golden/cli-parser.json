@@ -403,6 +403,7 @@
              "help",
              "json",
              "verbose",
+             "report",
              "root_fingerprint"
             ]
            ],
@@ -463,6 +464,21 @@
              "type": null,
              "required": false,
              "help": "Also list each seq gap, seal chain gap and partly present seal of a filtered export, which the report otherwise counts on one line per kind (--json always carries them, as warning_details).",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--report"
+             ],
+             "dest": "report",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": "Go on past the first failure and list every failing leaf, seal and file, with a count. The verdict and the exit code are the same (with --json, the list is under failures).",
              "metavar": null,
              "choices": null
             },

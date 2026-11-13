@@ -4,6 +4,7 @@
  * outage, is isError and the upstream is not called.
  */
 
+import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 
 import { appendActionLine, defaultActionLog, type ActionLine } from "./actionlog.js";
@@ -50,6 +51,13 @@ function refusal(decision: Decision): string {
 export class Gateway {
   private readonly sessions = new Map<string, Upstream>();
   private readonly actionLog = defaultActionLog();
+  /**
+   * One gateway process serves one client connection: that is the session
+   * its decisions belong to. The engine signs it into each decision's
+   * record, and a decision trace groups the run's tool calls by it. No
+   * parent decision is named.
+   */
+  private readonly sessionId = `mcp:${randomUUID()}`;
 
   constructor(private readonly config: GatewayConfig) {}
 
@@ -91,6 +99,7 @@ export class Gateway {
         action,
         target: classified.target,
         payload,
+        sessionId: this.sessionId,
       });
     } catch (err) {
       const message = err instanceof DecisionError ? err.message : "decision unavailable (Error). Failing closed.";

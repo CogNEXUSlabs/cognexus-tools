@@ -4,6 +4,19 @@ All notable changes to `@cognexuslabs/openclaw-artzain`. Headings are the
 bare version (`## 0.2.2`): the mirror's `publish-npm.yml` cuts the GitHub
 release notes for tag `openclaw-v<version>` from the matching section.
 
+## 0.2.10
+
+### Added
+
+- **The gate sends the session a tool call belongs to.** Each decision now
+  carries `session_id`: the host's session key, else its session id, else
+  the run. It also carries `tool_call_id` when the host names the tool call.
+  The engine signs both into the decision's record, and a decision trace
+  groups a run's decisions by them. Nothing to configure. A field is left
+  out when the host does not give it, or gives a value the server would
+  refuse (a control character), so no tool call is blocked over it. The gate
+  names no parent decision. `request_id` is unchanged.
+
 ## 0.2.9
 
 ### Changed

@@ -4,6 +4,20 @@ All notable changes to `@cognexuslabs/artzain`. Headings are the bare
 version (`## 0.1.5`): the mirror's `publish-npm.yml` cuts the GitHub release
 notes for tag `sdk-ts-v<version>` from the matching section.
 
+## 0.1.12
+
+### Added
+
+- **Lineage on `decide()`, as the Python SDK sends it.** `decide()` takes
+  `parentDecisionIds` (the decisions this one follows), `sessionId`,
+  `traceId`, `spanId`, `toolCallId`, `onBehalfOf` and `approverDid`. The
+  engine signs them into the decision's record (leaf version 2), and a
+  decision trace is drawn from them. Each is trimmed, cut to the width the
+  server keeps and left out of the request when empty; empty and repeated
+  parents are dropped and at most 16 are sent. A control character in one is
+  a `DecisionError` before anything is sent, naming the option. `context` is
+  sent as given.
+
 ## 0.1.11
 
 ### Added

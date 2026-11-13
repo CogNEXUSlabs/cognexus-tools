@@ -180,7 +180,7 @@ from artzain.prompt_injection import (
     load_prompt_injection_config,
 )
 
-__version__ = "0.6.66"
+__version__ = "0.6.67"
 
 __all__ = [
     # Version

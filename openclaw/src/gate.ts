@@ -1,6 +1,7 @@
 import {
   DecisionError,
   DECIDE_TIMEOUT_MS,
+  lineageId,
   postDecision,
   resolveApiKey,
   resolveBaseUrlSetting,
@@ -106,7 +107,24 @@ export interface ToolCallEvent {
 
 export interface ToolCallCtx {
   agentId?: string;
+  /** The host's key for the conversation this tool call belongs to, where it gives one. */
+  sessionKey?: string;
+  /** The host's session id, where it gives one. */
+  sessionId?: string;
   pluginConfig?: PluginConfig;
+}
+
+/**
+ * The session a tool call belongs to: the host's session key, else its
+ * session id, else the run. The first that can be sent. No parent decision
+ * is named: order within a session is given by the session and the seal time.
+ */
+function sessionOf(event: ToolCallEvent, ctx: ToolCallCtx): string {
+  for (const candidate of [ctx.sessionKey, ctx.sessionId, event.runId]) {
+    const id = lineageId(candidate, 128);
+    if (id) return id;
+  }
+  return "";
 }
 
 export type BlockResult = { block: true; blockReason: string };
@@ -163,6 +181,8 @@ export async function handleBeforeToolCall(
       payload: payloadFor(toolName, event.params),
       agentDid,
       requestId: requestId || undefined,
+      sessionId: sessionOf(event, ctx),
+      toolCallId: lineageId(event.toolCallId, 128),
       timeoutMs: DECIDE_TIMEOUT_MS,
       fetchImpl,
     });

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3
+
+### Added
+
+- **Each decision carries the gateway's session.** One gateway process serves one client connection, and every decision it asks for carries the same `session_id` (`mcp:<uuid>`, made when the process starts). The engine signs it into the decision's record, and a decision trace groups the run's tool calls by it. Nothing to configure. The gateway names no parent decision.
+
 ## 0.1.2
 
 ### Added

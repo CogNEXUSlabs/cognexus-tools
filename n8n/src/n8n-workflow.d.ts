@@ -23,6 +23,8 @@ declare module "n8n-workflow" {
     getNode(): unknown;
     /** Present on every current n8n; optional here so callers guard it. */
     getExecutionId?(): string;
+    /** Names this n8n instance; optional here so callers guard it. */
+    getInstanceId?(): string;
   }
 
   export interface INodeType {

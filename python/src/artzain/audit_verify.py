@@ -94,7 +94,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Optional, Union
+from typing import Any, ClassVar, Iterable, Optional, Union
 
 _GENESIS_HASH = "0" * 64
 
@@ -212,6 +212,23 @@ class VerifyResult:
     #: not evaluated, reached the current pin, or reached an override.
     evidence_root_retired: bool = False
 
+    #: ``True`` on a report run (``verify_bundle(..., report=True)``): a
+    #: failure is recorded and the run goes on to the next leaf, seal, file
+    #: and step instead of stopping. A class attribute, not a field, so the
+    #: result's fields (and what ``dataclasses.asdict`` gives) do not change.
+    _report: ClassVar[bool] = False
+
+    @property
+    def failures(self) -> list[tuple[Optional[int], str]]:
+        """Every failure recorded, as ``(seq, error)`` in the order found.
+
+        A plain run stops at the first, so it lists one (or none); a report
+        run lists each. ``error`` and ``first_bad_seq`` are always the first
+        entry's. Not a field: kept beside the fields, so the result's shape
+        is what it was (auditor journey plan, WP 2.6).
+        """
+        return list(self.__dict__.get("_failures", ()))
+
     def _fail(self, seq: Optional[int], msg: str) -> "VerifyResult":
         self.ok = False
         self.attestation = None
@@ -219,7 +236,14 @@ class VerifyResult:
             self.first_bad_seq = seq
         if self.error is None:
             self.error = msg
+        self.__dict__.setdefault("_failures", []).append((seq, msg))
         return self
+
+
+def _halt(res: VerifyResult) -> bool:
+    """``True`` when a failure ends the run (a plain run); ``False`` on a
+    report run, which records it and goes on."""
+    return not res._report
 
 
 #: What one line says for every warning of a kind a filtered export repeats
@@ -454,6 +478,31 @@ _COMPANION_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
 def _companion_name_ok(name: Any) -> bool:
     return isinstance(name, str) and _COMPANION_NAME.match(name) is not None
+
+
+def _profile_name_ok(name: Any, profile: Any) -> bool:
+    """A file of the ``<profile>/`` folder: one plain file name under it,
+    with no further folder (auditor journey plan, WP 2.4)."""
+    if not (isinstance(name, str) and _companion_name_ok(profile)):
+        return False
+    head, sep, base = name.partition("/")
+    return bool(sep) and head == profile and _companion_name_ok(base)
+
+
+def _profile_folder_files(path: Path, profile: Any) -> list[str]:
+    """Every file the bundle holds under ``<profile>/``, as ``<profile>/<name>``
+    with forward slashes, at any depth, so a file added in a subfolder is
+    named too. Empty when the manifest names no plain profile."""
+    if not _companion_name_ok(profile):
+        return []
+    prefix = f"{profile}/"
+    if path.is_dir():
+        folder = path / profile
+        if not folder.is_dir():
+            return []
+        return sorted(prefix + p.relative_to(folder).as_posix() for p in folder.rglob("*") if p.is_file())
+    with zipfile.ZipFile(path) as zf:
+        return sorted(n for n in zf.namelist() if n.startswith(prefix) and not n.endswith("/"))
 
 
 def _companion_file_digest(path: Path, name: str) -> Optional[str]:
@@ -1167,9 +1216,22 @@ def _load_bundle(path: Path) -> dict[str, Any]:
         for name in (listed if isinstance(listed, dict) else ())
         if _companion_name_ok(name)
     }
+    # The framework profile folder the manifest commits under
+    # ``profile_files`` (WP 2.4): each listed file's digest, and every file
+    # the folder holds, so one added after export is named. Only names of
+    # the folder are read (_verify_profile_files refuses any other).
+    profile = manifest.get("profile")
+    committed = manifest.get("profile_files")
+    profile_files = {
+        name: _companion_file_digest(path, name)
+        for name in (committed if isinstance(committed, dict) else ())
+        if _profile_name_ok(name, profile)
+    }
+    profile_present = _profile_folder_files(path, profile) if "profile_files" in manifest else []
     return {"leaves": leaves, "seals": seals, "keys": keys,
             "manifest": manifest, "certificates": certificates,
-            "rotations": rotations, "proofs": proofs, "companions": companions}
+            "rotations": rotations, "proofs": proofs, "companions": companions,
+            "profile_files": profile_files, "profile_present": profile_present}
 
 
 # ---------------------------------------------------------------------------
@@ -1178,8 +1240,16 @@ def _load_bundle(path: Path) -> dict[str, Any]:
 
 
 def verify_bundle(bundle_path: str | Path,
-                  root_fingerprint: Optional[str] = None) -> VerifyResult:
+                  root_fingerprint: Optional[str] = None, *,
+                  report: bool = False) -> VerifyResult:
     """Verify a bundle directory or .zip. Returns a :class:`VerifyResult`.
+
+    *report*: go on past a failure and record every one in
+    ``result.failures`` (``artzain audit verify --report``). The verdict is
+    the same either way: any failure fails the bundle, and ``error`` and
+    ``first_bad_seq`` name the first. The counts (``leaves_checked`` and
+    the others) then count every leaf and seal that held, not those before
+    the first failure.
 
     *root_fingerprint* replaces the pinned set (:func:`pinned_root_fingerprints`)
     with that one root (test roots only). Comparison ignores case and
@@ -1189,6 +1259,8 @@ def verify_bundle(bundle_path: str | Path,
     """
     path = Path(bundle_path)
     res = VerifyResult()
+    if report:
+        res._report = True
     # Record which root this run actually pinned against, before any early
     # return, so even a FAILED result carries it. A caller-supplied
     # fingerprint that is in none of the pinned set once both sides are
@@ -1247,7 +1319,7 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
     # 1) Per-leaf hash + signature + 2) chain linkage on contiguous seq runs.
     leaf_by_seq: dict[int, dict[str, Any]] = {}
     failed = _verify_leaves(res, leaves, pubkeys, leaf_by_seq, per_record)
-    if failed is not None:
+    if failed is not None and _halt(res):
         return failed
 
     # 3) Verify the signed manifest's custody signature UP FRONT (the record-set
@@ -1261,7 +1333,7 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
     manifest = bundle.get("manifest") or {}
     failed, manifest_trusted, manifest_signer_kid, manifest_unverified = \
         _verify_manifest_signature(res, manifest, bundle, pubkeys)
-    if failed is not None:
+    if failed is not None and _halt(res):
         return failed
     # A trusted manifest that commits a content digest binds the exact present
     # (seq, leaf_hash) set — the flag the attestation gate below keys off.
@@ -1279,7 +1351,7 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
     failed = _verify_key_custody(res, bundle, manifest, leaves, seals, pubkeys,
                                  manifest_trusted=manifest_trusted,
                                  manifest_signer_kid=manifest_signer_kid)
-    if failed is not None:
+    if failed is not None and _halt(res):
         return failed
 
     # 4) Seals, and the inclusion proofs of the leaves under them.
@@ -1287,7 +1359,7 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
     per_record.covering = manifest.get("seal_scope") == "covering"
     failed = _verify_seals(res, seals, leaf_by_seq, pubkeys, seals_defer_to_manifest, proofs,
                            per_record)
-    if failed is not None:
+    if failed is not None and _halt(res):
         return failed
 
     # 5) The record set a trusted signed manifest commits to, or one signed by
@@ -1295,9 +1367,16 @@ def _verify_bundle_body(res: VerifyResult, path: Path,
     if manifest_trusted or manifest_unverified:
         failed = _verify_manifest_record_set(res, manifest, leaf_by_seq, leaves, seals, proofs,
                                              verified=manifest_trusted,
-                                             companions=bundle.get("companions") or {})
-        if failed is not None:
+                                             companions=bundle.get("companions") or {},
+                                             profile_files=bundle.get("profile_files") or {},
+                                             profile_present=bundle.get("profile_present") or [])
+        if failed is not None and _halt(res):
             return failed
+
+    # A report run that recorded a failure ends here: provenance is read
+    # only for an intact bundle, as on a plain run.
+    if not res.ok:
+        return res
 
     # 5) Provenance (WS-4): does the intact chain also chain to a pinned
     #    Evidence Root?  Never fails the bundle — caps the claim instead.
@@ -1339,59 +1418,78 @@ def _verify_leaves(res: VerifyResult, leaves: list[dict[str, Any]], pubkeys,
     for leaf in leaves:
         seq = _as_int(leaf.get("seq"))
         if seq is None:
-            return res._fail(None, "non-integer leaf seq (malformed record)")
+            res._fail(None, "non-integer leaf seq (malformed record)")
+            if _halt(res):
+                return res
+            continue
         if seq in leaf_by_seq:
             # A well-formed log has exactly one leaf per seq. A duplicate lets
             # an attacker delete a genuine interior leaf and pad the record
             # count back with a copy of another, so first_seq/last_seq/
             # leaf_count still match while a record is suppressed.
-            return res._fail(seq, f"duplicate leaf seq {seq} (record set padded)")
+            res._fail(seq, f"duplicate leaf seq {seq} (record set padded)")
+            if _halt(res):
+                return res
+            continue
         leaf_by_seq[seq] = leaf
-
-        recomputed = _leaf_hash(leaf)
-        if recomputed != leaf.get("leaf_hash"):
-            return res._fail(seq, "leaf_hash mismatch (record tampered)")
-
-        # ``seq`` is not part of the signed leaf body, so a genuine,
-        # certified-key-signed leaf can be relabelled into another seq slot
-        # without breaking its hash or signature. Two leaves sharing a
-        # leaf_hash therefore means one is a copy dropped into a deleted
-        # record's slot — decision_id/leaf_id are unique, so a genuine log
-        # never repeats a leaf_hash. (This closes the same-bundle copy of the
-        # boundary-seal content-substitution forge; the general case also
-        # needs a server-committed content digest in the signed manifest.)
-        lh = leaf.get("leaf_hash")
-        if lh in seen_leaf_hashes:
-            return res._fail(
-                seq, "duplicate leaf_hash (record copied into another slot)")
-        seen_leaf_hashes.add(lh)
-
-        if prev_seq is not None and seq == prev_seq + 1:
-            if leaf.get("prev_leaf_hash") != prev_hash:
-                return res._fail(seq, "chain linkage broken")
-        elif prev_seq is not None and seq != prev_seq + 1:
-            per_record.add(
-                "seq_gaps",
-                _seq_gap_detail(prev_seq, seq)
-            )
-
-        if pubkeys is not None:
-            kid = leaf.get("signer_key_id")
-            pk = pubkeys.get(kid)
-            if pk is None:
-                return res._fail(seq, f"no public key {kid} for leaf seq {seq}")
-            if not _verify_sig(pk, leaf["leaf_hash"], leaf.get("sig", "")):
-                return res._fail(seq, "bad leaf signature")
-            res.signatures_checked += 1
-
-        failed = _verify_leaf_attrs(res, leaf, seq, pubkeys)
-        if failed is not None:
-            return failed
-
+        failed = _verify_one_leaf(res, leaf, seq, prev_hash, prev_seq, seen_leaf_hashes,
+                                  pubkeys, per_record)
+        # The next leaf links to this one's stored hash, so on a report run
+        # one edited leaf is one failure, not two.
         prev_hash = leaf.get("leaf_hash")
         prev_seq = seq
+        if failed is not None:
+            if _halt(res):
+                return failed
+            continue
         res.leaves_checked += 1
-    return None
+    return None if res.ok else res
+
+
+def _verify_one_leaf(res: VerifyResult, leaf: dict[str, Any], seq: int,
+                     prev_hash: Optional[str], prev_seq: Optional[int],
+                     seen_leaf_hashes: set[str], pubkeys,
+                     per_record: _PerRecord) -> Optional[VerifyResult]:
+    """One leaf's hash, its link to the leaf before, its signature and its
+    request attributes. Returns the failed result at the first that does
+    not hold, or ``None``."""
+    recomputed = _leaf_hash(leaf)
+    if recomputed != leaf.get("leaf_hash"):
+        return res._fail(seq, "leaf_hash mismatch (record tampered)")
+
+    # ``seq`` is not part of the signed leaf body, so a genuine,
+    # certified-key-signed leaf can be relabelled into another seq slot
+    # without breaking its hash or signature. Two leaves sharing a
+    # leaf_hash therefore means one is a copy dropped into a deleted
+    # record's slot — decision_id/leaf_id are unique, so a genuine log
+    # never repeats a leaf_hash. (This closes the same-bundle copy of the
+    # boundary-seal content-substitution forge; the general case also
+    # needs a server-committed content digest in the signed manifest.)
+    lh = leaf.get("leaf_hash")
+    if lh in seen_leaf_hashes:
+        return res._fail(
+            seq, "duplicate leaf_hash (record copied into another slot)")
+    seen_leaf_hashes.add(lh)
+
+    if prev_seq is not None and seq == prev_seq + 1:
+        if leaf.get("prev_leaf_hash") != prev_hash:
+            return res._fail(seq, "chain linkage broken")
+    elif prev_seq is not None and seq != prev_seq + 1:
+        per_record.add(
+            "seq_gaps",
+            _seq_gap_detail(prev_seq, seq)
+        )
+
+    if pubkeys is not None:
+        kid = leaf.get("signer_key_id")
+        pk = pubkeys.get(kid)
+        if pk is None:
+            return res._fail(seq, f"no public key {kid} for leaf seq {seq}")
+        if not _verify_sig(pk, leaf["leaf_hash"], leaf.get("sig", "")):
+            return res._fail(seq, "bad leaf signature")
+        res.signatures_checked += 1
+
+    return _verify_leaf_attrs(res, leaf, seq, pubkeys)
 
 
 def _verify_leaf_attrs(res: VerifyResult, leaf: dict[str, Any], seq: int,
@@ -1619,37 +1717,51 @@ def _verify_seals(res: VerifyResult, seals: list[dict[str, Any]],
     # hostile last_seq like 10**15), and iterating that range would hang.
     present_sorted = sorted(leaf_by_seq)
     failed, proofs_by_seal = _index_proofs(res, proofs, leaf_by_seq, seals)
-    if failed is not None:
+    if failed is not None and _halt(res):
         return failed
     prev_seal_hash: Optional[str] = None
     for seal in sorted(seals, key=lambda r: _as_int(r.get("first_seq")) or 0):
+        # The next seal links to this one's stored hash, so on a report run
+        # one edited seal is one failure.
+        link_from, prev_seal_hash = prev_seal_hash, seal.get("seal_hash")
         if _seal_hash(seal) != seal.get("seal_hash"):
-            return res._fail(None, f"seal_hash mismatch for seal {seal.get('seal_id')}")
+            res._fail(None, f"seal_hash mismatch for seal {seal.get('seal_id')}")
+            if _halt(res):
+                return res
+            continue
 
         if pubkeys is not None:
             kid = seal.get("signer_key_id")
             pk = pubkeys.get(kid)
             if pk is None:
-                return res._fail(None, f"no public key {kid} for seal {seal.get('seal_id')}")
+                res._fail(None, f"no public key {kid} for seal {seal.get('seal_id')}")
+                if _halt(res):
+                    return res
+                continue
             if not _verify_sig(pk, seal["seal_hash"], seal.get("sig", "")):
-                return res._fail(None, f"bad seal signature for {seal.get('seal_id')}")
+                res._fail(None, f"bad seal signature for {seal.get('seal_id')}")
+                if _halt(res):
+                    return res
+                continue
             res.signatures_checked += 1
 
-        if prev_seal_hash is not None and seal.get("prev_seal_hash") != prev_seal_hash:
+        if link_from is not None and seal.get("prev_seal_hash") != link_from:
             per_record.add(
                 "seal_chain_gaps",
                 _seal_chain_gap_detail(seal.get("seal_id"),
                                        covering=per_record.covering)
             )
-        prev_seal_hash = seal.get("seal_hash")
 
         first_seq = _as_int(seal.get("first_seq"))
         last_seq = _as_int(seal.get("last_seq"))
         if first_seq is None or last_seq is None:
-            return res._fail(
+            res._fail(
                 None,
                 f"non-integer seal range for seal {seal.get('seal_id')} "
                 "(malformed record)")
+            if _halt(res):
+                return res
+            continue
         expected = last_seq - first_seq + 1
         covered_seqs = [s for s in present_sorted if first_seq <= s <= last_seq]
         covered = [leaf_by_seq[s] for s in covered_seqs]
@@ -1661,15 +1773,22 @@ def _verify_seals(res: VerifyResult, seals: list[dict[str, Any]],
         # shape; the bundle carried it as evidence of this leaf.
         seal_id = seal.get("seal_id")
         seal_proofs = proofs_by_seal.get(seal_id, {}) if isinstance(seal_id, str) else {}
+        proof_failed = False
         for seq in sorted(seal_proofs):
             if not first_seq <= seq <= last_seq:
-                return res._fail(
+                res._fail(
                     seq, f"seal {seal_id} commits {first_seq}..{last_seq}, "
                          "not this seq")
-            if not _verify_inclusion(leaf_by_seq[seq].get("leaf_hash"), seal_proofs[seq],
-                                     seal.get("merkle_root")):
-                return res._fail(
+                proof_failed = True
+            elif not _verify_inclusion(leaf_by_seq[seq].get("leaf_hash"), seal_proofs[seq],
+                                       seal.get("merkle_root")):
+                res._fail(
                     seq, f"proof does not reach merkle_root of seal {seal_id}")
+                proof_failed = True
+            if proof_failed and _halt(res):
+                return res
+        if proof_failed:
+            continue
         within_window = (
             bundle_min is not None and bundle_max is not None
             and first_seq >= bundle_min and last_seq <= bundle_max
@@ -1680,7 +1799,10 @@ def _verify_seals(res: VerifyResult, seals: list[dict[str, Any]],
         if len(covered) == expected:
             root = _merkle_root([c["leaf_hash"] for c in covered])
             if root != seal.get("merkle_root"):
-                return res._fail(first_seq, f"merkle root mismatch for seal {seal.get('seal_id')}")
+                res._fail(first_seq, f"merkle root mismatch for seal {seal.get('seal_id')}")
+                if _halt(res):
+                    return res
+                continue
         elif within_window and not manifest_binds_content:
             # The bundle spans this seal's range but leaves are missing → looks
             # like a deletion.  Only a sound signal WITHOUT a trusted content
@@ -1700,10 +1822,13 @@ def _verify_seals(res: VerifyResult, seals: list[dict[str, Any]],
                 if s != first_seq + i:
                     missing_seq = first_seq + i
                     break
-            return res._fail(
+            res._fail(
                 missing_seq,
                 f"deleted leaf, seal {seal.get('seal_id')} lacks seq {missing_seq}",
             )
+            if _halt(res):
+                return res
+            continue
         elif dense and seal_starts_inside and not manifest_binds_content:
             # Contiguous export whose seal commits to leaves past the last one
             # present → looks like tail truncation.  Same as the deletion branch:
@@ -1712,11 +1837,14 @@ def _verify_seals(res: VerifyResult, seals: list[dict[str, Any]],
             # with a signed leaves_digest binding the present set this is a
             # boundary seal; real truncation changes last_seq + leaves_digest,
             # caught by the manifest cross-check.
-            return res._fail(
+            res._fail(
                 bundle_max + 1 if bundle_max is not None else first_seq,
                 f"truncated log, seal {seal.get('seal_id')}, leaves end at "
                 f"{bundle_max}",
             )
+            if _halt(res):
+                return res
+            continue
         elif covered and all(s in seal_proofs for s in covered_seqs):
             # Every present leaf under this boundary seal proved above. The
             # root itself is still not recomputed (the other leaves are not
@@ -1733,7 +1861,7 @@ def _verify_seals(res: VerifyResult, seals: list[dict[str, Any]],
                     seal.get("seal_id"), len(covered), expected, proved=False)
             )
         res.seals_checked += 1
-    return None
+    return None if res.ok else res
 
 
 def _verify_manifest_record_set(res: VerifyResult, manifest: dict[str, Any],
@@ -1743,6 +1871,8 @@ def _verify_manifest_record_set(res: VerifyResult, manifest: dict[str, Any],
                                 proofs: list[dict[str, Any]], *,
                                 verified: bool = True,
                                 companions: Optional[dict[str, Optional[str]]] = None,
+                                profile_files: Optional[dict[str, Optional[str]]] = None,
+                                profile_present: Optional[list[str]] = None,
                                 ) -> Optional[VerifyResult]:
     """Step 5, for a trusted manifest: the record set it commits to against
     the leaves, seals and inclusion proofs present, then the readable
@@ -1793,7 +1923,9 @@ def _verify_manifest_record_set(res: VerifyResult, manifest: dict[str, Any],
     if md is not None and md != _leaves_digest(leaves):
         mism.append("leaves_digest mismatch (exported leaf set altered)")
     if mism:
-        return res._fail(exp_first, _record_set_error(verified, mism))
+        res._fail(exp_first, _record_set_error(verified, mism))
+        if _halt(res):
+            return res
     # ``proofs_digest`` commits the exact inclusion proof set. Each proof was
     # checked in step 4 (so an altered one has already failed with its seq);
     # what is left to catch is a proof dropped, so that its seal reads as
@@ -1801,25 +1933,25 @@ def _verify_manifest_record_set(res: VerifyResult, manifest: dict[str, Any],
     # export from before proofs existed commits none, and is read as before.
     pd = manifest.get("proofs_digest")
     if pd is not None and pd != _proofs_digest(proofs):
-        if verified:
-            return res._fail(
-                None, "inclusion proof set does not match the signed manifest "
-                      "(proofs_digest mismatch)")
-        return res._fail(
-            None, "inclusion proofs differ (proofs_digest mismatch, "
+        res._fail(
+            None, "inclusion proof set does not match the signed manifest "
+                  "(proofs_digest mismatch)" if verified else
+                  "inclusion proofs differ (proofs_digest mismatch, "
                   "signature not verified)")
+        if _halt(res):
+            return res
     # ``seals_digest`` commits the seals that ship. A covering export omits
     # a seal with no exported leaf, and the digest is what stops one of the
     # seals that did ship from being dropped or replaced. A bundle from
     # before the field existed commits none, and is read as before.
     sd = manifest.get("seals_digest")
     if sd is not None and sd != _seals_digest(seals):
-        if verified:
-            return res._fail(
-                None, "seal set does not match the signed manifest "
-                      "(seals_digest mismatch)")
-        return res._fail(
-            None, "seals differ (seals_digest mismatch, signature not verified)")
+        res._fail(
+            None, "seal set does not match the signed manifest "
+                  "(seals_digest mismatch)" if verified else
+                  "seals differ (seals_digest mismatch, signature not verified)")
+        if _halt(res):
+            return res
     # ``attrs_digest`` commits the leaves that carry request attributes. Each
     # signature was checked in step 1 (an edited one has failed at its seq);
     # what is left to catch is a signed pair dropped from a leaf, so that it
@@ -1827,14 +1959,59 @@ def _verify_manifest_record_set(res: VerifyResult, manifest: dict[str, Any],
     # from before the field existed commits none, and is read as before.
     ad = manifest.get("attrs_digest")
     if ad is not None and ad != _attrs_digest(leaves):
-        if verified:
-            return res._fail(
-                None, "request attribute set does not match the signed manifest "
-                      "(attrs_digest mismatch)")
-        return res._fail(
-            None, "request attributes differ (attrs_digest mismatch, "
+        res._fail(
+            None, "request attribute set does not match the signed manifest "
+                  "(attrs_digest mismatch)" if verified else
+                  "request attributes differ (attrs_digest mismatch, "
                   "signature not verified)")
-    return _verify_companions(res, manifest, companions or {}, verified=verified)
+        if _halt(res):
+            return res
+    failed = _verify_companions(res, manifest, companions or {}, verified=verified)
+    if failed is not None and _halt(res):
+        return failed
+    return _verify_profile_files(res, manifest, profile_files or {}, profile_present or [],
+                                 verified=verified)
+
+
+def _verify_profile_files(res: VerifyResult, manifest: dict[str, Any],
+                          found: dict[str, Optional[str]], present: list[str], *,
+                          verified: bool = True) -> Optional[VerifyResult]:
+    """The framework profile folder against ``profile_files`` (auditor
+    journey plan, WP 2.4): each file the signed manifest lists must be a file
+    of the ``<profile>/`` folder, present, and hash to its committed value,
+    and every file the folder holds must be listed, so one edited, removed or
+    added after export fails the bundle. A manifest from before the field
+    existed lists none, and its folder is read as before: unchecked, and
+    said nothing about. Checked last, after the companions.
+    """
+    if "profile_files" not in manifest:
+        return None
+    unverified = "" if verified else " (signature not verified)"
+    listed = manifest.get("profile_files")
+    if not isinstance(listed, dict):
+        return res._fail(None, "profile_files is not a map of file names to digests" + unverified)
+    profile = manifest.get("profile")
+    if listed and not _companion_name_ok(profile):
+        return res._fail(None, "profile_files is set but the manifest names no profile" + unverified)
+    for name in sorted(listed):
+        if not _profile_name_ok(name, profile):
+            res._fail(None, f"profile file {ascii(name)} is not a file of the {profile}/ folder"
+                      + unverified)
+        elif (digest := found.get(name)) is None:
+            res._fail(None, f"profile file {name} missing" + unverified)
+        elif digest != listed[name]:
+            detail = "digest mismatch" if verified else "digest mismatch, signature not verified"
+            res._fail(None, f"profile file {name} altered ({detail})")
+        else:
+            continue
+        if _halt(res):
+            return res
+    for name in present:
+        if name not in listed:
+            res._fail(None, f"profile file {name} is not committed by the manifest" + unverified)
+            if _halt(res):
+                return res
+    return None if res.ok else res
 
 
 def _verify_companions(res: VerifyResult, manifest: dict[str, Any],
@@ -1854,12 +2031,15 @@ def _verify_companions(res: VerifyResult, manifest: dict[str, Any],
         return res._fail(None, "companions is not a map of file names to digests" + unverified)
     for name in sorted(listed):
         if not _companion_name_ok(name):
-            return res._fail(None, f"companion {ascii(name)} is not a plain file name"
-                             + unverified)
-        digest = found.get(name)
-        if digest is None:
-            return res._fail(None, f"companion {name} missing" + unverified)
-        if digest != listed[name]:
+            res._fail(None, f"companion {ascii(name)} is not a plain file name"
+                      + unverified)
+        elif (digest := found.get(name)) is None:
+            res._fail(None, f"companion {name} missing" + unverified)
+        elif digest != listed[name]:
             detail = "digest mismatch" if verified else "digest mismatch, signature not verified"
-            return res._fail(None, f"companion {name} altered ({detail})")
-    return None
+            res._fail(None, f"companion {name} altered ({detail})")
+        else:
+            continue
+        if _halt(res):
+            return res
+    return None if res.ok else res

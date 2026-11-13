@@ -61,6 +61,16 @@ a dashboard JWT and **not** an envelope `cnxe_…` key). Optional:
 | HTTP 503 / 401 / 422 / missing key | `{ block: true }` (fail closed) |
 | a redirect (HTTP 3xx) | `{ block: true }`: not followed, so the key stays with the configured host |
 
+## Session (v0.2.10)
+
+Each decision carries the session the tool call belongs to as `session_id`:
+the host's session key, else its session id, else the run. When the host
+names the tool call, its id goes as `tool_call_id`. The engine signs both
+into the decision's record, and a decision trace groups a run's decisions by
+them. There is nothing to configure. A field is left out when the host does
+not give it or gives a value the server would refuse, so a tool call is
+never blocked over it. The gate names no parent decision.
+
 ## Kept connection (v0.2.8, default on)
 
 The plugin keeps its connection to the Decision API open for 60 s between

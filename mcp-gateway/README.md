@@ -44,6 +44,10 @@ From a checkout, `node dist/cli.js --config gateway.json` is the same command.
 
 Point an MCP client at that process over stdio. Logs stay on stderr, and stderr does not include upstream credentials or the API key.
 
+## Session
+
+One gateway process serves one client connection. Every decision it asks for carries the same `session_id` (`mcp:<uuid>`, made when the process starts). The engine signs it into the decision's record, and a decision trace groups the run's tool calls by it. There is nothing to configure.
+
 ## Action log
 
 Each `tools/call` the gateway forwards after an allow appends one JSON line to `ARTZAIN_GATEWAY_LOG`, or by default `~/.config/artzain-mcp-gateway/gateway.jsonl` (on Windows, `%APPDATA%\artzain-mcp-gateway\gateway.jsonl`):

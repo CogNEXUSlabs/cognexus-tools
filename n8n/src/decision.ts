@@ -28,7 +28,43 @@ export interface DecisionBody {
   payload_kind: string;
   surface: string;
   request_id: string | null;
+  /** The session this decision belongs to. Absent when there is none to send. */
+  session_id?: string;
   context: Record<string, unknown>;
+}
+
+/** The server keeps 128 characters of a session id. */
+export const SESSION_ID_MAX_LENGTH = 128;
+
+/**
+ * A session id as the Decision API takes it: trimmed and cut to the server's
+ * width. One with a control character is the empty string, and the field is
+ * then left out: the server answers it with a 422, and a session id is not
+ * worth a refused decision.
+ */
+function sessionText(value: string | undefined): string {
+  const text = String(value ?? "").trim();
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f]/.test(text)) return "";
+  return text.slice(0, SESSION_ID_MAX_LENGTH);
+}
+
+/**
+ * The session of an execution's decisions: `n8n:<instance>:<execution>`, or
+ * `n8n:<execution>` on an n8n that names no instance. Execution ids count up
+ * per instance, so the instance keeps two instances on one account apart.
+ * Empty without an execution id (older n8n, unit tests): a random id would
+ * group nothing. The instance is cut, never the execution.
+ */
+export function executionSessionId(
+  instanceId: string | undefined,
+  executionId: string | undefined,
+): string {
+  const execution = sessionText(executionId);
+  if (!execution) return "";
+  const room = SESSION_ID_MAX_LENGTH - "n8n::".length - execution.length;
+  const instance = room > 0 ? sessionText(instanceId).slice(0, room) : "";
+  return sessionText(instance ? `n8n:${instance}:${execution}` : `n8n:${execution}`);
 }
 
 export function decisionsUrl(baseUrl: string): string {
@@ -42,9 +78,14 @@ export function buildDecisionBody(input: {
   payload: string;
   payloadKind: string;
   requestId: string;
+  sessionId?: string;
   extra?: Record<string, unknown>;
 }): DecisionBody {
+  const session = sessionText(input.sessionId);
   return {
+    // Sent only when there is one, so an engine older than the field sees
+    // the body it always saw.
+    ...(session ? { session_id: session } : {}),
     agent_did: input.agentDid,
     action: input.action,
     target: input.target,

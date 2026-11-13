@@ -8,6 +8,7 @@ import { NodeConnectionTypes, NodeOperationError } from "n8n-workflow";
 
 import {
   buildDecisionBody,
+  executionSessionId,
   decisionsUrl,
   fallbackRequestId,
   routeHttpDecision,
@@ -77,6 +78,14 @@ export class ArtzainDecision implements INodeType {
           "Idempotency key (max 64). For 48 h the server replays the sealed decision for a repeat of this key with the same inputs; different inputs are decided again. Empty derives n8n-<executionId>-<item>, unique per execution.",
       },
       {
+        displayName: "Session ID",
+        name: "sessionId",
+        type: "string",
+        default: "",
+        description:
+          "The session this decision belongs to (max 128), signed into its record: a decision trace groups decisions by it. Leave empty to use this execution.",
+      },
+      {
         displayName: "Timeout (ms)",
         name: "timeoutMs",
         type: "number",
@@ -104,6 +113,12 @@ export class ArtzainDecision implements INodeType {
     const executionId =
       typeof this.getExecutionId === "function" ? this.getExecutionId() : undefined;
 
+    // The session an empty Session ID stands for: this execution.
+    const executionSession = executionSessionId(
+      typeof this.getInstanceId === "function" ? this.getInstanceId() : undefined,
+      executionId,
+    );
+
     for (let i = 0; i < items.length; i++) {
       try {
         const action = String(this.getNodeParameter("action", i));
@@ -125,6 +140,7 @@ export class ArtzainDecision implements INodeType {
           payload,
           payloadKind,
           requestId,
+          sessionId: String(this.getNodeParameter("sessionId", i, "")).trim() || executionSession,
         });
         // The body is read once, as text: after resp.json() fails, the body
         // is spent and resp.text() throws, so a proxy's HTML error page

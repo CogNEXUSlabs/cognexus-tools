@@ -56,6 +56,9 @@ follow redirects either.
   with.
   `workloadId` and `modelId` name the workload and the model the decision
   belongs to; the Tokens-to-Outcomes page groups by them.
+  `parentDecisionIds`, `sessionId`, `traceId`, `spanId`, `toolCallId` and
+  `onBehalfOf` are the decision's lineage: the engine signs them into its
+  record, and a decision trace is drawn from them.
 - `postSdkEvent(options)` — fire-and-forget guard-event telemetry
   (`POST /api/events`); never throws. `tokensIn` and `tokensOut` attach token
   counts to the event.
