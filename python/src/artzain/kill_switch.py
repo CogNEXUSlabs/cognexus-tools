@@ -78,6 +78,8 @@ from artzain.destructive_action_guard import (
     ActionScreenResult,
     ActionSeverity,
     screen_action,
+    stage_outcome_rules,
+    staged_finding_lines,
 )
 
 logger = logging.getLogger("artzain.kill_switch")
@@ -470,6 +472,12 @@ def screen_agent_action(
     raised :class:`AgentKilledError` for CRITICAL ones if
     ``raise_on_critical`` is True (the default).
 
+    The guard's outcome rules (``OUTCOME_RULE_IDS``) are staged by
+    ``COGNEXUS_OUTCOME_RULES``, ``shadow`` unless set: a match is logged and
+    mirrored as what it would have decided, trips nothing, and is left out of
+    the result returned. ``enforce`` treats those rules as every other rule;
+    ``off`` leaves them out without a record.
+
     Args:
         payload: The about-to-execute model output (SQL / shell / tool args).
         run_id: The current agent-run identifier so a kill can target this run.
@@ -482,7 +490,31 @@ def screen_agent_action(
     """
     raise_if_killed(run_id)
 
-    result = screen_action(payload, surface=source)
+    # The outcome rules are staged (``COGNEXUS_OUTCOME_RULES``, shadow unless
+    # set): outside enforce they trip nothing, and the result returned is the
+    # one that decides. In shadow each would-be finding is logged and mirrored.
+    result, staged = stage_outcome_rules(screen_action(payload, surface=source))
+    if staged:
+        would = "; ".join(staged_finding_lines(staged))
+        logger.warning(
+            "OUTCOME_RULE_SHADOW run_id=%s user_id=%s agent_id=%s source=%s "
+            "rules=%s payload_sha256=%s",
+            run_id, user_id, agent_id, source,
+            ",".join(m.rule_id for m in staged[:5]),
+            result.payload_sha256[:16],
+        )
+        _cloud_log_agent_guard(
+            event_type="destructive_action_guard",
+            title="Outcome rule · SHADOW",
+            level="info",
+            outcome="shadowed",
+            reason=would,
+            run_id=run_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            source=source,
+            result=result,
+        )
 
     if result.severity == ActionSeverity.CRITICAL:
         # Trip without raising, mirror the kill, then raise: raising inside

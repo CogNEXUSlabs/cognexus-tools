@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 from bisect import bisect_left
 from collections.abc import Callable, Collection, Iterator, Sequence
@@ -122,7 +123,7 @@ class _ActionRule:
     rule_id: str
     name: str
     severity: ActionSeverity
-    pattern: re.Pattern[str] | _SqlPattern
+    pattern: re.Pattern[str] | _SqlPattern | _Finder
     owasp: str = "LLM06"
     #: Named group the finding's excerpt starts at (with the usual context
     #: either side), for a pattern whose match starts well before what it found
@@ -2472,6 +2473,403 @@ def _shell_normalize(text: str) -> str:
     return text
 
 
+# ---------------------------------------------------------------------------
+# Outcome rules: several commands that add up to one result
+# ---------------------------------------------------------------------------
+#
+# The rules above each read one command. The outcomes below take two or three:
+# a file is encrypted *and* its source removed, a home folder is archived *and*
+# sent somewhere, a script is written *and* run. No single command in them is
+# worth a finding (``gpg --encrypt`` alone is ordinary, and so is ``rm``), so
+# these rules look for the parts and then ask whether they stand together.
+#
+# Every part is a short token found in one pass over the text: a command word,
+# an option, a path. Whether an option belongs to a command word (same shell
+# segment, within reach), and whether the parts of an outcome stand near each
+# other, is then settled by position, with a binary search over what the
+# passes found. A text holding eighty thousand ``find`` words and no home
+# folder is therefore read a fixed number of times, where one regex spanning
+# a command and its argument would rescan the segment from every ``find``.
+#
+# These rules screen command *text*, as the ``rm`` rules do: prose that spells
+# out such a command is flagged with it. They read what a command says, not
+# what the files hold, so "the source" is the nearest reading a pattern can
+# give: a removal next to an encryption, a script run next to where it was
+# written.
+
+_SEGMENT_BREAK_RE = re.compile(r"[\n;&|]")
+#: The break positions of the text last asked about, so the parts of one scan
+#: share them. Read and replaced whole, so a second thread at worst recomputes.
+_segment_breaks_cache: tuple[str, list[int]] = ("", [])
+
+
+def _segment_breaks(text: str) -> list[int]:
+    global _segment_breaks_cache
+    cached_text, breaks = _segment_breaks_cache
+    if cached_text is text:
+        return breaks
+    breaks = [m.start() for m in _SEGMENT_BREAK_RE.finditer(text)]
+    _segment_breaks_cache = (text, breaks)
+    return breaks
+
+
+class _SpanMatch:
+    """What a finder found: a span, and the token match it ended on."""
+
+    __slots__ = ("_start", "_end", "_inner")
+
+    def __init__(self, start: int, end: int, inner: re.Match[str] | None = None) -> None:
+        self._start = start
+        self._end = end
+        self._inner = inner
+
+    def start(self, group: int | str = 0) -> int:
+        return self._start
+
+    def end(self, group: int | str = 0) -> int:
+        return self._end
+
+    def span(self, group: int | str = 0) -> tuple[int, int]:
+        return (self._start, self._end)
+
+    def group(self, name: int | str = 0) -> str:
+        return self._inner.group(name) if self._inner is not None else ""
+
+
+class _Finder:
+    """Something the screen loop can search with, as it does a compiled regex."""
+
+    def finditer(self, text: str) -> Iterator[_SpanMatch]:
+        raise NotImplementedError
+
+    def search(self, text: str) -> _SpanMatch | None:
+        return next(self.finditer(text), None)
+
+
+class _Token(_Finder):
+    """A regex whose every match is a hit."""
+
+    def __init__(self, pattern: str, flags: int = 0) -> None:
+        self._re = re.compile(pattern, flags)
+
+    def finditer(self, text: str) -> Iterator[_SpanMatch]:
+        for m in self._re.finditer(text):
+            yield _SpanMatch(m.start(), m.end(), m)
+
+
+class _With(_Finder):
+    """A command word and, after it in the same shell segment and within
+    *reach* characters, an argument. The hit runs from the word to the end of
+    the argument. *accept*, when given, has the last say."""
+
+    def __init__(self, verb: str, arg: str, *, reach: int = 200, flags: int = 0,
+                 accept: Callable[[str, int, re.Match[str]], bool] | None = None) -> None:
+        self._verb = re.compile(verb, flags)
+        self._arg = re.compile(arg, flags)
+        self._reach = reach
+        self._accept = accept
+
+    def finditer(self, text: str) -> Iterator[_SpanMatch]:
+        verbs = [(m.end(), m.start()) for m in self._verb.finditer(text)]
+        if not verbs:
+            return
+        breaks = _segment_breaks(text)
+        for m in self._arg.finditer(text):
+            at = bisect_left(verbs, (m.start() + 1, -1)) - 1
+            if at < 0:
+                continue
+            verb_end, verb_start = verbs[at]
+            if m.start() - verb_end > self._reach:
+                continue
+            cut = bisect_left(breaks, verb_end)
+            if cut < len(breaks) and breaks[cut] < m.start():
+                continue
+            if self._accept is not None and not self._accept(text, verb_end, m):
+                continue
+            yield _SpanMatch(verb_start, m.end(), m)
+
+
+class _Without(_Finder):
+    """A command word with no such argument after it in its shell segment."""
+
+    def __init__(self, verb: str, arg: str, *, reach: int = 200) -> None:
+        self._verb = re.compile(verb)
+        self._arg = re.compile(arg)
+        self._reach = reach
+
+    def finditer(self, text: str) -> Iterator[_SpanMatch]:
+        args: list[int] | None = None
+        breaks = _segment_breaks(text)
+        for m in self._verb.finditer(text):
+            if args is None:
+                args = [a.start() for a in self._arg.finditer(text)]
+            at = bisect_left(args, m.end() - 1)
+            if at < len(args) and args[at] - m.end() <= self._reach:
+                cut = bisect_left(breaks, m.end())
+                if not (cut < len(breaks) and breaks[cut] < args[at]):
+                    continue
+            yield _SpanMatch(m.start(), m.end(), m)
+
+
+class _Parts(_Finder):
+    """The hits of every one of *finders*."""
+
+    def __init__(self, *finders: _Finder) -> None:
+        self._finders = finders
+
+    def finditer(self, text: str) -> Iterator[_SpanMatch]:
+        return chain.from_iterable(f.finditer(text) for f in self._finders)
+
+
+class _Near(_Finder):
+    """Every one of *parts* found, the starts of one set of them within
+    *within* characters. The match is the first part's hit in that set."""
+
+    def __init__(self, *parts: _Finder, within: int) -> None:
+        self._parts = parts
+        self._within = within
+
+    def search(self, text: str) -> _SpanMatch | None:
+        hits: list[tuple[int, int, int]] = []
+        for kind, part in enumerate(self._parts):
+            found = [(m.start(), m.end(), kind) for m in part.finditer(text)]
+            if not found:
+                return None
+            hits.extend(found)
+        hits.sort()
+        kinds = len(self._parts)
+        counts = [0] * kinds
+        #: The most recent hit of each part inside the window.
+        latest: list[tuple[int, int]] = [(0, 0)] * kinds
+        have = 0
+        left = 0
+        for start, end, kind in hits:
+            if counts[kind] == 0:
+                have += 1
+            counts[kind] += 1
+            latest[kind] = (start, end)
+            while start - hits[left][0] > self._within:
+                gone = hits[left][2]
+                counts[gone] -= 1
+                if counts[gone] == 0:
+                    have -= 1
+                left += 1
+            if have == kinds:
+                return _SpanMatch(*latest[0])
+        return None
+
+    def finditer(self, text: str) -> Iterator[_SpanMatch]:
+        found = self.search(text)
+        if found is not None:
+            yield found
+
+
+class _ThenRuns(_Finder):
+    """A file is written (*writer*, group ``file``) and a command within
+    *within* characters after it runs a file of the same name.
+
+    *line_needs*, when given, must also be found on the writer's own line, in
+    the *lookback* characters before it: the cutting tool of a redirection.
+    """
+
+    def __init__(self, writer: _Finder, *, within: int = 600,
+                 line_needs: re.Pattern[str] | None = None, lookback: int = 300) -> None:
+        self._writer = writer
+        self._within = within
+        self._line_needs = line_needs
+        self._lookback = lookback
+
+    def finditer(self, text: str) -> Iterator[_SpanMatch]:
+        #: Where each file name is run, in order; built once, on the first
+        #: writer found, so many writers do not each reread what follows them.
+        runs: dict[str, list[int]] | None = None
+        for m in self._writer.finditer(text):
+            name = _base_name(m.group("file"))
+            if not name or name == "-":
+                continue
+            if self._line_needs is not None:
+                line_start = max(text.rfind("\n", 0, m.start()) + 1, m.start() - self._lookback)
+                if not self._line_needs.search(text, line_start, m.start()):
+                    continue
+            if runs is None:
+                runs = {}
+                for run in _RUNS_A_FILE.finditer(text):
+                    runs.setdefault(_base_name(run.group("file")), []).append(run.start())
+            starts = runs.get(name)
+            if not starts:
+                continue
+            at = bisect_left(starts, m.end())
+            if at < len(starts) and starts[at] <= m.end() + self._within:
+                yield m
+
+
+class _AnyOf(_Finder):
+    """The first of *finders* that finds anything."""
+
+    def __init__(self, *finders: _Finder) -> None:
+        self._finders = finders
+
+    def finditer(self, text: str) -> Iterator[_SpanMatch]:
+        for finder in self._finders:
+            found = finder.search(text)
+            if found is not None:
+                yield found
+                return
+
+
+def _base_name(path: str) -> str:
+    return path.rstrip("/").rsplit("/", 1)[-1]
+
+
+#: A command word standing as a command, not the tail of a path or a longer word.
+_WORD = r"(?<![\w./-])"
+#: An optional quote, as sent (``"``) or JSON-escaped (``\"``).
+_Q = r"\\?[\"']?"
+#: A file name as a command names it.
+_FILE = r"(?P<file>[\w./~${}-]{1,120})"
+#: A user's home, or a folder in it, as a command names one.
+_HOME_PATH = r"(?:(?<![\w.])~|\$HOME\b|\$\{HOME\}|/home/\w|/Users/\w|/root\b)"
+_USER_DIR = r"(?:" + _HOME_PATH + r"|\b(?:Documents|Desktop|Downloads)\b)"
+_CIPHER_NAME_RE = re.compile(r"\.(?:gpg|pgp|asc|enc|age|7z|zip)$")
+
+#: A command that runs the file it names: an interpreter and a script, ``./x``,
+#: ``chmod +x``, ``source``, or ``pip install`` of a local file.
+_RUNS_A_FILE = re.compile(
+    r"(?:" + _WORD + r"(?:(?:ba|z|da|k)?sh|python[0-9.]{0,5}|node|perl|ruby|php|pwsh"
+    r"|powershell|source|pip3?\s{1,3}install|chmod\s{1,3}\+x)\s{1,3}(?:-[\w-]{1,20}\s{1,3}){0,3}"
+    r"|(?<![\w.])(?=\./))" + _Q + _FILE
+)
+
+
+# -- an encryption, and the removal of what was encrypted --------------------
+def _onto_a_plain_name(text: str, verb_end: int, m: re.Match[str]) -> bool:
+    """An ``mv`` of a ciphertext whose destination is not one, and not a folder."""
+    dest = m.group("dest")
+    return not (dest.endswith("/") or _CIPHER_NAME_RE.search(dest))
+
+
+_ENCRYPTS = _Parts(
+    _With(r"\bgpg2?\b",
+          r"(?<=\s)(?:--encrypt\b|--symmetric\b|-[a-zA-Z]{0,5}[ec][a-zA-Z]{0,5}(?=[\s\"'\\]|$))"),
+    # ``openssl enc`` encrypts unless told to decrypt.
+    _Without(r"\bopenssl\s{1,3}enc\b", r"\s-d\b"),
+    _With(r"\bopenssl\s{1,3}(?:rsautl|pkeyutl)\b", r"\s-encrypt\b"),
+    _With(_WORD + r"age\s",
+          r"(?<=\s)(?:-[rRpe]\b|--recipient|--recipients-file|--passphrase|--encrypt)",
+          reach=100),
+    _With(_WORD + r"7za?\s{1,3}a\b", r"\s-p"),
+    _With(_WORD + r"zip\b", r"\s(?:-e\b|-P\b|--encrypt\b|--password\b)", reach=100),
+)
+#: ``rm``, ``shred`` or ``unlink`` (not ``git rm``), or an ``mv`` of a
+#: ciphertext onto a name that is not one.
+_REMOVES_SOURCE = _Parts(
+    _Token(r"(?<!git )" + _WORD + r"(?:rm|shred|unlink|srm)\s"),
+    _With(_WORD + r"mv\s",
+          r"(?<=\w)\.(?:gpg|pgp|asc|enc|age|7z|zip)" + _Q + r"\s{1,3}" + _Q
+          + r"(?P<dest>[^\s\"'\\;&|]{1,200})",
+          accept=_onto_a_plain_name),
+)
+
+# -- a walk over a user's folders, a loop, and a change to each file ----------
+_WALKS_USER_DIRS = _Parts(
+    _With(_WORD + r"find\s", _USER_DIR),
+    _With(r"\bfor\s{1,3}\w{1,40}\s{1,3}in\s", _USER_DIR),
+)
+_LOOPS = _Token(
+    r"\|\s{0,3}(?:while\b[^\n;]{0,40}?\bread\b|xargs\b|parallel\b)"
+    r"|\s-exec(?:dir)?\s|;\s{0,3}do\b|\bdo\s"
+)
+_CHANGES_FILES = _Token(
+    r"(?<!git )" + _WORD + r"(?:rm|mv|shred|unlink|chmod|chown|truncate|gpg2?|openssl|age|dd)\s"
+    r"|\bsed\s{1,3}-i"
+)
+
+# -- fetched from the network and run ----------------------------------------
+_FETCH_PIPED_TO_SHELL = _Parts(
+    _With(r"\b(?:curl|wget)\b",
+          r"\|\s{0,3}(?:sudo\s{1,3})?(?:(?:ba|z|da|k)?sh|python[0-9.]{0,5}|perl|ruby|node)\b",
+          reach=300),
+    _Token(_WORD + r"(?:ba|z|da|k)?sh\s{1,3}(?:-c\s{1,3})?" + _Q
+           + r"(?:<\(|\$\()\s{0,3}(?:curl|wget)\b"),
+    _With(r"\b(?:iwr|irm|invoke-webrequest|invoke-restmethod)\b",
+          r"\|\s{0,3}(?:iex|invoke-expression)\b", reach=300, flags=re.IGNORECASE),
+    _With(r"\bpip3?\s{1,3}install\b", r"(?:https?://|git\+|ftp://)"),
+)
+_DOWNLOADS_TO_FILE = _With(
+    r"\b(?:curl|wget)\b",
+    r"(?:\s(?:-o|-O|--output|--output-document)[\s=]{1,3}|>\s{0,3})" + _Q + _FILE,
+)
+_REDIRECTS_TO_SCRIPT = _Token(
+    r">\s{0,3}" + _Q + r"(?P<file>[\w./~${}-]{1,120}\.(?:py|sh|bash|zsh|rb|js|pl|php|ps1))\b"
+)
+_CUTS_TEXT = re.compile(_WORD + r"(?:sed|awk|grep|head|tail|cut|csplit)\s")
+
+# -- a home folder archived, and something sent out ---------------------------
+_ARCHIVES_HOME = _With(_WORD + r"(?:zip|tar|7za?|rar)\s", _HOME_PATH)
+_UPLOADS = _Parts(
+    _With(r"\bcurl\b",
+          r"\s(?:-F|-T|--form|--upload-file|--data-binary|(?:-d|--data)\s{0,3}" + _Q + r"@)",
+          reach=300),
+    _With(r"\bwget\b", r"--post-file"),
+    _With(_WORD + r"(?:scp|rsync|sftp)\s", r"(?<=[\w.-])@[\w.-]{1,120}:|rsync://"),
+    _With(_WORD + r"(?:nc|ncat|netcat)\s", r"\s\d{2,5}\b", reach=100),
+)
+
+# -- something left behind to run again ---------------------------------------
+_WRITES_TO = r"(?:>>?\s{0,3}|\btee\s{1,3}(?:-a\s{1,3})?)" + _Q
+_HOME_DIR = r"(?:~|\$HOME|\$\{HOME\}|/home/[\w.-]{1,64}|/Users/[\w.-]{1,64}|/root)"
+
+
+def _for_the_user(text: str, verb_end: int, m: re.Match[str]) -> bool:
+    """``systemctl ... enable`` with ``--user`` somewhere in the same command."""
+    breaks = _segment_breaks(text)
+    cut = bisect_left(breaks, m.end())
+    stop = min(breaks[cut] if cut < len(breaks) else len(text), m.end() + 120)
+    return "--user" in text[verb_end:stop]
+
+
+_PERSIST_CRONTAB = _Token(
+    r"\|\s{0,3}(?:sudo\s{1,3})?crontab\b(?!\s{1,3}-l\b)"
+    r"|" + _WORD + r"crontab\s{1,3}(?:-u\s{1,3}\S{1,64}\s{1,3})?(?:-(?=\s|$)|-e\b|[^\s|;&-])"
+    r"|" + _WRITES_TO + r"(?:/etc/cron|/var/spool/cron)"
+)
+_PERSIST_SYSTEMD = _With(_WORD + r"systemctl\b", r"\benable\b", reach=120, accept=_for_the_user)
+_PERSIST_LAUNCHCTL = _Token(_WORD + r"launchctl\s{1,3}(?:load|bootstrap)\b")
+_PERSIST_SHELL_RC = _Token(
+    _WRITES_TO + _HOME_DIR
+    + r"/\.(?:bashrc|bash_profile|bash_login|profile|zshrc|zprofile|zshenv|zlogin"
+    r"|config/fish/config\.fish)\b"
+)
+_PERSIST_AUTHORIZED_KEYS = _Token(_WRITES_TO + r"[^\s\"';|&]{0,200}authorized_keys\b")
+_PERSIST_GIT_HOOKS = _Parts(
+    _Token(r"(?:" + _WRITES_TO + r"|\bchmod\s{1,3}\+x\s{1,3}" + _Q
+           + r")[^\s\"';|&]{0,200}\.git/hooks/\w"),
+    _With(_WORD + r"(?:cp|mv|ln|install)\s", r"\.git/hooks/\w"),
+)
+
+# -- a key taken from the content --------------------------------------------
+_GPG_IMPORT = _With(
+    r"\bgpg2?\b",
+    r"--import(?:-ownertrust)?\b(?!-)|--trust-model[\s=]{1,3}always\b",
+)
+
+#: The rule ids of this section, for a caller that stages them apart from the
+#: rules that shipped before them.
+OUTCOME_RULE_IDS = frozenset({
+    "crypto.encrypt_overwrite",
+    "fs.bulk_user_dir_loop",
+    "exec.fetch_and_run",
+    "exfil.archive_upload",
+    "persist.crontab",
+    "persist.systemd_user_enable",
+    "persist.launchctl_load",
+    "persist.shell_rc_write",
+    "persist.authorized_keys",
+    "persist.git_hooks",
+    "gpg.import_untrusted",
+})
+
+
 _RULES: tuple[_ActionRule, ...] = (
     # ── SQL: irreversible schema / data destruction ──────────────────────
     # Gaps between keywords may hold comments; see "SQL statements" above.
@@ -2767,6 +3165,103 @@ _RULES: tuple[_ActionRule, ...] = (
         ),
         owasp="LLM06",
     ),
+    # ── outcomes: several commands that add up to one result ─────────────
+    # See "Outcome rules" above. Each is also read shell-normalized, so a
+    # single-quoted name or a `$(...)` between the parts does not part them.
+    _ActionRule(
+        rule_id="crypto.encrypt_overwrite",
+        name="encrypt a file and remove its source",
+        severity=ActionSeverity.CRITICAL,
+        # gpg, `openssl enc`, age or a password archive, with an rm, shred or
+        # unlink beside it, or an mv of the ciphertext onto a plain name.
+        pattern=_Near(_ENCRYPTS, _REMOVES_SOURCE, within=400),
+        normalize=True,
+    ),
+    _ActionRule(
+        rule_id="fs.bulk_user_dir_loop",
+        name="loop that changes files across a user's folders",
+        severity=ActionSeverity.HIGH,
+        # A find or a `for ... in` over a home folder, Documents, Desktop or
+        # Downloads, a loop, and a command in it that changes the files. A
+        # loop that only reads them (`wc`, `grep`) is not this.
+        pattern=_Near(_WALKS_USER_DIRS, _LOOPS, _CHANGES_FILES, within=500),
+        normalize=True,
+    ),
+    _ActionRule(
+        rule_id="exec.fetch_and_run",
+        name="fetch and run",
+        severity=ActionSeverity.CRITICAL,
+        # A download piped to a shell or interpreter, `pip install` of a URL,
+        # a downloaded file that the next commands run, or a script cut out
+        # of another file (sed, awk, ...) and run.
+        pattern=_AnyOf(
+            _FETCH_PIPED_TO_SHELL,
+            _ThenRuns(_DOWNLOADS_TO_FILE),
+            _ThenRuns(_REDIRECTS_TO_SCRIPT, line_needs=_CUTS_TEXT),
+        ),
+        normalize=True,
+    ),
+    _ActionRule(
+        rule_id="exfil.archive_upload",
+        name="archive a home folder and upload it",
+        severity=ActionSeverity.CRITICAL,
+        # zip, tar or 7z over a home path, with a curl upload, scp, rsync,
+        # sftp or netcat beside it.
+        pattern=_Near(_ARCHIVES_HOME, _UPLOADS, within=600),
+        normalize=True,
+    ),
+    _ActionRule(
+        rule_id="persist.crontab",
+        name="crontab install",
+        severity=ActionSeverity.HIGH,
+        # A crontab read from stdin or a file, or a write under /etc/cron*.
+        # `crontab -l` lists and is not this.
+        pattern=_PERSIST_CRONTAB,
+        normalize=True,
+    ),
+    _ActionRule(
+        rule_id="persist.systemd_user_enable",
+        name="systemctl --user enable",
+        severity=ActionSeverity.HIGH,
+        pattern=_PERSIST_SYSTEMD,
+        normalize=True,
+    ),
+    _ActionRule(
+        rule_id="persist.launchctl_load",
+        name="launchctl load",
+        severity=ActionSeverity.HIGH,
+        pattern=_PERSIST_LAUNCHCTL,
+        normalize=True,
+    ),
+    _ActionRule(
+        rule_id="persist.shell_rc_write",
+        name="write to a shell startup file",
+        severity=ActionSeverity.HIGH,
+        pattern=_PERSIST_SHELL_RC,
+        normalize=True,
+    ),
+    _ActionRule(
+        rule_id="persist.authorized_keys",
+        name="write to authorized_keys",
+        severity=ActionSeverity.HIGH,
+        pattern=_PERSIST_AUTHORIZED_KEYS,
+        normalize=True,
+    ),
+    _ActionRule(
+        rule_id="persist.git_hooks",
+        name="write to .git/hooks",
+        severity=ActionSeverity.HIGH,
+        pattern=_PERSIST_GIT_HOOKS,
+        normalize=True,
+    ),
+    _ActionRule(
+        rule_id="gpg.import_untrusted",
+        name="gpg key import or --trust-model always",
+        severity=ActionSeverity.MEDIUM,
+        # A key the content supplied, or trust given without a check.
+        pattern=_GPG_IMPORT,
+        normalize=True,
+    ),
 )
 
 
@@ -3049,10 +3544,10 @@ class DestructiveActionGuard:
 
 
 def _first_hit(
-    pattern: re.Pattern[str] | _SqlPattern,
+    pattern: re.Pattern[str] | _SqlPattern | _Finder,
     windows: list[str],
     sql_windows: list[_SqlWindow | None],
-) -> tuple[str, re.Match[str] | _SqlMatch] | None:
+) -> tuple[str, re.Match[str] | _SqlMatch | _SpanMatch] | None:
     """Return ``(window_text, match)`` for the first window *pattern* hits."""
     for i, text in enumerate(windows):
         if isinstance(pattern, _SqlPattern):
@@ -3195,6 +3690,75 @@ def combine_screens(
     )
 
 
+# ---------------------------------------------------------------------------
+# Staging the outcome rules
+# ---------------------------------------------------------------------------
+
+#: ``off``, ``shadow`` or ``enforce``: how a caller that decides on a screen
+#: treats the outcome rules. ``screen`` itself is not staged and returns every
+#: match.
+OUTCOME_RULES_ENV = "COGNEXUS_OUTCOME_RULES"
+_OUTCOME_RULES_MODES = ("off", "shadow", "enforce")
+_OUTCOME_RULES_DEFAULT = "shadow"
+
+
+def outcome_rules_mode() -> str:
+    """The value of :data:`OUTCOME_RULES_ENV`; ``shadow`` when it is unset or
+    not one of the three."""
+    raw = (os.environ.get(OUTCOME_RULES_ENV) or "").strip().lower()
+    return raw if raw in _OUTCOME_RULES_MODES else _OUTCOME_RULES_DEFAULT
+
+
+def stage_outcome_rules(
+    result: ActionScreenResult,
+    *,
+    disabled_rule_ids: Collection[str] = (),
+    mode: str | None = None,
+) -> tuple[ActionScreenResult, list[ActionMatch]]:
+    """Split one screen into the result that decides and the staged matches.
+
+    Under ``enforce`` the outcome rules decide with every other rule. Under
+    ``shadow`` they are taken out of the deciding result and returned beside
+    it, most severe first, for the caller to record. Under ``off`` they are
+    taken out and nothing is returned for them. Rules named in
+    *disabled_rule_ids* are in neither part.
+
+    With nothing to stage and nothing disabled, *result* comes back as it is.
+    A screen that failed internally is never staged away: it decides, as a
+    critical :data:`GUARD_ERROR_RULE_ID` match (see :func:`combine_screens`).
+    """
+    if mode is None:
+        mode = outcome_rules_mode()
+    holds_staged = mode != "enforce" and any(
+        m.rule_id in OUTCOME_RULE_IDS for m in result.matches)
+    if not holds_staged:
+        if not disabled_rule_ids:
+            return result, []
+        return combine_screens([result], disabled_rule_ids=disabled_rule_ids), []
+    staged: list[ActionMatch] = []
+    if mode == "shadow":
+        staged = [
+            m for m in combine_screens([result], disabled_rule_ids=disabled_rule_ids).matches
+            if m.rule_id in OUTCOME_RULE_IDS
+        ]
+    deciding = combine_screens(
+        [result], disabled_rule_ids=set(disabled_rule_ids) | OUTCOME_RULE_IDS)
+    return deciding, staged
+
+
+#: What a staged match would have drawn, by its severity.
+_WOULD_BY_SEVERITY = {ActionSeverity.CRITICAL: "deny", ActionSeverity.HIGH: "review"}
+
+
+def staged_finding_lines(staged: Sequence[ActionMatch]) -> list[str]:
+    """One line per staged match, saying what it would have decided."""
+    return [
+        f"would-{_WOULD_BY_SEVERITY.get(m.severity, 'record')} under "
+        f"{OUTCOME_RULES_ENV}=enforce: {m.rule_id}: {m.excerpt}"
+        for m in staged
+    ]
+
+
 def now_iso() -> str:
     """ISO 8601 UTC timestamp helper (re-exported for callers)."""
     return datetime.now(timezone.utc).isoformat()
@@ -3213,4 +3777,9 @@ __all__ = [
     "TRUNCATION_RULE_ID",
     "GUARD_ERROR_RULE_ID",
     "UNPAIRED_SURROGATE_RULE_ID",
+    "OUTCOME_RULE_IDS",
+    "OUTCOME_RULES_ENV",
+    "outcome_rules_mode",
+    "stage_outcome_rules",
+    "staged_finding_lines",
 ]

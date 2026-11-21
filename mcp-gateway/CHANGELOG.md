@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.4
+
+### Added
+
+- **What an upstream returns is decided before the client sees it.** After a forwarded call, the gateway sends the text of the result (its text parts, the text of embedded resources, resource links and structured content) for a second decision, with `payload_kind` `external_content` and the same `session_id`, agent, action and target as the call. Only an `allow` returns the result, exactly as the upstream sent it. A `deny`, a `review`, an unrecognised outcome and an outage return `isError` with `REFUSED: the upstream result was not returned.`, the reasons and the decision id. The call has already run by then: the refusal keeps its output away from the model and does not undo the call. 0.1.3 returned every result unread.
+
+### Changed
+
+- A forwarded call whose result holds text asks for two decisions, and both are sealed and metered. A result with no text (an image, audio, an empty reply) asks for one, as before.
+- A result with more than 256 KiB of text, an embedded binary resource, or a part of a type the gateway does not know is refused without a second decision.
+
 ## 0.1.3
 
 ### Added

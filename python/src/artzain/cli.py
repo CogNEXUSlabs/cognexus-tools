@@ -978,7 +978,7 @@ def _warning_line(warning: str) -> str:
 
 
 def _signing_keys_line(root: str) -> str:
-    return f"The signing keys chain to {root}, certified at signing time."
+    return f"The signing keys chain to {root}."
 
 
 _ROOT_OVERRIDE_LINE = (
@@ -1819,6 +1819,107 @@ def cmd_audit_sample(args: argparse.Namespace) -> None:
     raise SystemExit(0)
 
 
+def cmd_redteam_run(args: argparse.Namespace) -> None:
+    """Replay the engine's attack-pattern fixtures against the team's policy
+    and print which steps would be held. A dry run on the engine: nothing is
+    sealed or billed. Exits 0 when the replay ran, whatever it found."""
+    creds = _cli_credentials()
+    body: dict[str, Any] = {}
+    if args.bundle:
+        body["bundle_id"] = args.bundle
+    if args.agent:
+        body["agent_did"] = args.agent
+    status, report = _http_json(
+        "POST", f"{creds.base_url}/api/v1/redteam/replay",
+        headers=_policy_auth_headers(creds), body=body, timeout_sec=120.0)
+    if status != 200 or not isinstance(report, dict):
+        raise SystemExit(f"replay failed ({status}): {_format_api_error(report)}")
+    if args.json:
+        print(json.dumps(report, indent=2))
+        raise SystemExit(0)
+    policy = report.get("policy") or {}
+    fixtures = report.get("fixtures") or {}
+    print(report.get("notice", ""))
+    print(f"Policy: {policy.get('bundle')}   Agent: {report.get('agent_did')}   "
+          f"Fixtures: v{fixtures.get('version')}, {fixtures.get('scenarios')} scenarios, "
+          f"{fixtures.get('steps')} steps")
+    settings = report.get("settings") or {}
+    if settings:
+        print("Settings: " + ", ".join(f"{k}={v}" for k, v in settings.items()))
+    for scenario in report.get("scenarios") or []:
+        print(f"\n{scenario.get('id')}: {scenario.get('title')}")
+        for step in scenario.get("steps") or []:
+            now, enforced = step.get("outcome"), step.get("outcome_if_enforced")
+            reading = now if now == enforced else f"{now} (if enforced: {enforced})"
+            by = ", ".join(step.get("decided_by") or [])
+            print(f"  {step.get('id'):<8} {step.get('kind'):<17} expect {step.get('expect'):<8} "
+                  f"{reading}" + (f"   by {by}" if by else ""))
+    summary = report.get("summary") or {}
+    print(f"\nAttack steps held: {summary.get('held')} of {summary.get('attack_steps')} now, "
+          f"{summary.get('held_if_enforced')} if every staged control were enforced.")
+    print(f"Control steps allowed: {summary.get('controls_allowed')} of "
+          f"{summary.get('control_steps')} now, {summary.get('controls_allowed_if_enforced')} "
+          "if enforced.")
+    raise SystemExit(0)
+
+
+def cmd_skills_scan(args: argparse.Namespace) -> None:
+    """Scan an Agent Skill folder, offline, and list what a reviewer should
+    see (``artzain.skill_supply``). Exits 0 with no findings, 1 with any,
+    2 when there is nothing to scan."""
+    from artzain.skill_supply import SkillScanError, baseline_of, report_of, scan_path
+
+    try:
+        baseline = None
+        if args.baseline:
+            try:
+                baseline = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise SkillScanError(f"the baseline {args.baseline} could not be read: {exc}") from exc
+        scans = scan_path(args.path, baseline=baseline, allow_hosts=args.allow_host or [])
+    except SkillScanError as exc:
+        print(f"FAILED: {exc}")
+        raise SystemExit(2) from None
+
+    total = sum(len(scan.findings) for scan in scans)
+    written = ""
+    if args.write_baseline:
+        if total and not args.accept_findings:
+            written = ("baseline not written: review the findings, then pass "
+                       "--accept-findings to accept the skill as it is")
+        else:
+            target = Path(args.write_baseline)
+            target.write_text(json.dumps(baseline_of(scans), indent=2) + "\n", encoding="utf-8")
+            written = f"baseline written: {target}"
+    failed = bool(total) and not (args.write_baseline and args.accept_findings)
+
+    if args.json:
+        report = report_of(args.path, scans)
+        if written:
+            report["baseline"] = written
+        print(json.dumps(report, indent=2))
+        raise SystemExit(1 if failed else 0)
+    for scan in scans:
+        count = len(scan.files)
+        shape = f"{count} file{'s' if count != 1 else ''}, fingerprint {scan.fingerprint[:12]}"
+        label = scan.name if scan.root == "." else f"{scan.name} ({scan.root})"
+        if not scan.findings:
+            print(f"{label}: no findings ({shape})")
+        else:
+            n = len(scan.findings)
+            print(f"{label}: {n} finding{'s' if n != 1 else ''} ({shape})")
+        for finding in scan.findings:
+            where = finding.path if finding.line is None else f"{finding.path}:{finding.line}"
+            print(f"  {where}  {finding.rule_id}  {finding.detail}")
+        if scan.accepted:
+            print(f"  {scan.accepted} accepted with the baseline and not listed")
+    if written:
+        print(written)
+    if total:
+        print("A finding is something for a person to read, not a verdict on the skill.")
+    raise SystemExit(1 if failed else 0)
+
+
 def cmd_audit_export(args: argparse.Namespace) -> None:
     """Download an audit evidence bundle (ZIP) from the server to disk."""
     creds = _cli_credentials()
@@ -2392,7 +2493,8 @@ def _add_audit_parser(sub: argparse._SubParsersAction) -> None:
         "verify",
         help="Verify an exported audit evidence bundle (directory or .zip) offline.",
         description=(
-            "Recompute every leaf hash, check hash-chain linkage and Merkle roots,\n"
+            "Check every leaf hash and chain link, and prove each exported decision's\n"
+            "inclusion under its sealed Merkle root,\n"
             "and verify Ed25519 signatures against the bundle's public keys, with\n"
             "zero network. Those keys come from the bundle, so trust in the\n"
             "producing server drops out only at VERIFIED, ATTESTED, which needs the\n"
@@ -2627,7 +2729,7 @@ def _add_registry_parser(sub: argparse._SubParsersAction) -> None:
     rl = registry_sub.add_parser("list", help="List catalog entries.")
     rl.add_argument("--q", help="Search name / external id / framework.")
     rl.add_argument("--source", choices=["engine", "mcp", "kubernetes", "cicd", "microsoft",
-                                         "openai", "code_scan", "langgraph", "anthropic", "foundry", "agentforce", "n8n", "openclaw", "google", "a2a", "grokbot", "openshell"],
+                                         "openai", "code_scan", "langgraph", "anthropic", "foundry", "agentforce", "n8n", "openclaw", "google", "a2a", "grokbot", "openshell", "dots", "muse"],
                     help="Filter by origin.")
     rl.add_argument("--lifecycle", choices=["discovered", "sanctioned", "deprecated", "retired"],
                     help="Filter by lifecycle state.")
@@ -2638,7 +2740,7 @@ def _add_registry_parser(sub: argparse._SubParsersAction) -> None:
     re_ = registry_sub.add_parser("export", help="Download the catalog as CSV.")
     re_.add_argument("--q", help="Search filter applied to the export.")
     re_.add_argument("--source", choices=["engine", "mcp", "kubernetes", "cicd", "microsoft",
-                                          "openai", "code_scan", "langgraph", "anthropic", "foundry", "agentforce", "n8n", "openclaw", "google", "a2a", "grokbot", "openshell"])
+                                          "openai", "code_scan", "langgraph", "anthropic", "foundry", "agentforce", "n8n", "openclaw", "google", "a2a", "grokbot", "openshell", "dots", "muse"])
     re_.add_argument("--lifecycle", choices=["discovered", "sanctioned", "deprecated", "retired"])
     re_.add_argument("--out", help="Output CSV path (default: ./agent-catalog-<date>.csv).")
     re_.set_defaults(func=cmd_registry_export)
@@ -2887,6 +2989,86 @@ def _add_connect_parser(sub: argparse._SubParsersAction) -> None:
     c_doctor.set_defaults(func=cmd_connect_openshell)
 
 
+def _add_redteam_parser(sub: argparse._SubParsersAction) -> None:
+    """``artzain redteam run``."""
+    p_redteam = sub.add_parser(
+        "redteam",
+        help="Replay attack-pattern fixtures against your team's policy (dry run).",
+    )
+    redteam_sub = p_redteam.add_subparsers(dest="redteam_command", required=True)
+    p_run = redteam_sub.add_parser(
+        "run",
+        help="Run the engine's fixture set against the team's policy and report each step.",
+        description=(
+            "Ask the engine to replay its attack-pattern fixtures against your team's\n"
+            "policy and say which steps would be held for review or denied. It is a dry\n"
+            "run: nothing is sealed, billed or counted. Each step shows the outcome under\n"
+            "the deployment's current settings and the outcome if every staged control\n"
+            "were enforced. Owner or admin, at most six runs an hour for a team. The\n"
+            "result is self-attested: fixtures written by CogNEXUS Labs, replayed\n"
+            "against your policy on your deployment. It is not a benchmark score."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_run.add_argument(
+        "--bundle", metavar="ID",
+        help="A draft, shadow or active bundle to replay against, as its promotion "
+             "would leave the policy. Default: the team's active bundles.")
+    p_run.add_argument(
+        "--agent", metavar="DID",
+        help="The agent the replay runs as (a control boundary is keyed by agent). "
+             "Default: redteam-replay.")
+    p_run.add_argument("--json", action="store_true", help="Emit the report as JSON.")
+    p_run.set_defaults(func=cmd_redteam_run)
+
+
+def _add_skills_parser(sub: argparse._SubParsersAction) -> None:
+    """``artzain skills scan``."""
+    p_skills = sub.add_parser(
+        "skills",
+        help="Agent Skill tooling (offline supply-chain scan).",
+    )
+    skills_sub = p_skills.add_subparsers(dest="skills_command", required=True)
+    p_scan = skills_sub.add_parser(
+        "scan",
+        help="Scan an Agent Skill folder (SKILL.md and its files) before it is installed.",
+        description=(
+            "Read a skill folder, or a folder of skills, offline and list what a\n"
+            "reviewer should see: steps that download and run something, hosts the\n"
+            "skill names, lines that send the user to sign in or hand off to a\n"
+            "portal, lines that say to skip, hide or not mention a step, comments\n"
+            "and characters a rendered page does not show, and files that changed\n"
+            "since an accepted baseline. Nothing is fetched, run or sent. The rules\n"
+            "are patterns over text: a finding is for a person to read, and a skill\n"
+            "with no findings has not been shown to be safe. Exits 0 with no\n"
+            "findings, 1 with any, 2 when there is nothing to scan."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_scan.add_argument("path", help="A skill folder, or a folder that holds skills.")
+    p_scan.add_argument("--json", action="store_true", help="Emit a JSON report.")
+    p_scan.add_argument(
+        "--baseline", metavar="FILE",
+        help="Compare with this accepted baseline: a changed, added or removed "
+             "file is skill.drift, and findings accepted with the baseline are "
+             "not listed again.",
+    )
+    p_scan.add_argument(
+        "--write-baseline", metavar="FILE",
+        help="Write the baseline that accepts the skill as it is. Refused while "
+             "there are findings, unless --accept-findings is given.",
+    )
+    p_scan.add_argument(
+        "--accept-findings", action="store_true",
+        help="With --write-baseline: record the current findings as accepted.",
+    )
+    p_scan.add_argument(
+        "--allow-host", action="append", metavar="HOST",
+        help="A host the skill may name (exact, or *.suffix). Repeat for more.",
+    )
+    p_scan.set_defaults(func=cmd_skills_scan)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """The ``artzain`` command line: every command group, in the order
     ``artzain --help`` lists them."""
@@ -2899,6 +3081,8 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_getting_started_parsers(sub)
     _add_gui_parser(sub)
     _add_audit_parser(sub)
+    _add_skills_parser(sub)
+    _add_redteam_parser(sub)
     _add_licence_parser(sub)
     _add_policy_parser(sub)
     _add_registry_parser(sub)

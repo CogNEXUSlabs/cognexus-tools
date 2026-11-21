@@ -591,10 +591,18 @@ def _offline_destructive_vote(payload: str, kind: str, *, surface: str) -> dict[
     # reason with ``findings[0]``, so a critical vote named a high rule. The
     # screens of a tool call or a JSON reply are combined already; combining
     # them again changes nothing.
+    # The outcome rules are staged as the platform stages them
+    # (``COGNEXUS_OUTCOME_RULES``, shadow unless set): outside enforce they
+    # decide nothing, and in shadow each one that matched is listed as what it
+    # would have decided, after any finding that does decide.
+    from artzain.destructive_action_guard import stage_outcome_rules, staged_finding_lines
+
+    result, staged = stage_outcome_rules(result)
     result = combine_screens([result])
     severity = result.severity.value if result.is_destructive else "none"
     verdict = _SEVERITY_VERDICT.get(severity, "allow")
     findings = [f"{m.rule_id}: {m.excerpt}" for m in result.matches[:8]]
+    findings = (findings + staged_finding_lines(staged))[:8]
     return _vote("destructive-action", verdict, severity, findings=findings)
 
 
