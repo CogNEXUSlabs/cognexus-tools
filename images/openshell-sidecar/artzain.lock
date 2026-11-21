@@ -1,4 +1,4 @@
 # Written by scripts/lock_openshell_sidecar_image.py --artzain. Do not edit by hand.
-# The artzain wheel as PyPI serves it (artzain-0.6.68-py3-none-any.whl).
-artzain==0.6.68 \
-    --hash=sha256:ca08a843022fe70e96e6d359cc6ac9a373dff73751c056f98539e9473a596a05
+# The artzain wheel as PyPI serves it (artzain-0.6.69-py3-none-any.whl).
+artzain==0.6.69 \
+    --hash=sha256:aa728779ce9c5b6a1723dfbf36de67ffb789c923cc35f6e35a0dbfa42d60dd8c
