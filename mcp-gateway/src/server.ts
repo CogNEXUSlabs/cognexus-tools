@@ -2,6 +2,10 @@
  * The gateway speaks MCP on stdin and stdout. A tools/call is forwarded only
  * when the Decision API returns allow. Every other outcome, including an
  * outage, is isError and the upstream is not called.
+ *
+ * What the upstream returns is untrusted text on its way to a model, so its
+ * text is decided too, as external content in the same session. Only an
+ * allow returns the result to the client.
  */
 
 import { randomUUID } from "node:crypto";
@@ -15,6 +19,14 @@ import { openUpstream, UpstreamError, type Upstream } from "./upstream.js";
 import { VERSION } from "./version.js";
 
 const PROTOCOL = "2024-11-05";
+
+/**
+ * The most text of one result the gateway sends to be decided, in UTF-8
+ * bytes: the Decision API's own payload limit. A result with more is refused.
+ */
+const RESULT_TEXT_LIMIT = 262_144;
+
+const RESULT_REFUSED = "REFUSED: the upstream result was not returned.";
 
 interface ToolCall {
   upstream: UpstreamConfig;
@@ -46,6 +58,53 @@ function refusal(decision: Decision): string {
     return `REFUSED: ${reasons}${id}`;
   }
   return `REFUSED: unrecognised outcome ${JSON.stringify(decision.outcome)}. Failing closed.${id}`;
+}
+
+/**
+ * The text of a result that a model would read: its text parts and the text
+ * of its embedded resources, in order, and its structured content. Images and
+ * audio hold no text and are left out. `refused` says why a result cannot be
+ * screened at all.
+ */
+function resultText(result: object): { text: string } | { refused: string } {
+  const row = result as { content?: unknown; structuredContent?: unknown };
+  const texts: string[] = [];
+  if (row.content !== undefined && !Array.isArray(row.content)) {
+    return { refused: "Its content is not a list of parts." };
+  }
+  for (const part of (row.content as unknown[] | undefined) ?? []) {
+    if (!part || typeof part !== "object") return { refused: "It holds a part of a type that is not screened." };
+    const item = part as { type?: unknown; text?: unknown; resource?: unknown };
+    if (item.type === "image" || item.type === "audio") continue;
+    if (item.type === "text" && typeof item.text === "string") {
+      texts.push(item.text);
+    } else if (item.type === "resource") {
+      const resource = (item.resource ?? {}) as { text?: unknown; blob?: unknown };
+      if (typeof resource.text !== "string" || resource.blob !== undefined) {
+        return { refused: "It holds a binary resource, which is not screened." };
+      }
+      texts.push(resource.text);
+    } else if (item.type === "resource_link") {
+      texts.push(JSON.stringify(part));
+    } else {
+      return { refused: "It holds a part of a type that is not screened." };
+    }
+  }
+  if (row.structuredContent !== undefined) texts.push(JSON.stringify(row.structuredContent) ?? "");
+  return { text: texts.join("\n") };
+}
+
+function resultRefusal(decision: Decision): string {
+  const id = decision.decisionId ? `\n(decision ${decision.decisionId})` : "";
+  if (decision.outcome === "review") {
+    const reasons = decision.reasons.length > 0 ? decision.reasons.join("; ") : "policy holds this result for human review";
+    return `${RESULT_REFUSED} ${reasons}${id}`;
+  }
+  if (decision.outcome === "deny") {
+    const reasons = decision.reasons.length > 0 ? decision.reasons.join("; ") : "policy denied this result";
+    return `${RESULT_REFUSED} ${reasons}${id}`;
+  }
+  return `${RESULT_REFUSED} unrecognised outcome ${JSON.stringify(decision.outcome)}. Failing closed.${id}`;
 }
 
 export class Gateway {
@@ -113,15 +172,48 @@ export class Gateway {
       target: classified.target,
       decision_id: decision.decisionId,
     });
+    let result: unknown;
     try {
       const session = await this.session(routed.upstream);
-      const result = await session.callTool(routed.tool, args ?? {});
-      if (result && typeof result === "object") return result;
-      return textResult("the upstream returned an empty result", true);
+      result = await session.callTool(routed.tool, args ?? {});
     } catch (err) {
       const message = err instanceof UpstreamError ? err.message : "the upstream call failed";
       return textResult(`FAILED: ${message}`, true);
     }
+    if (!result || typeof result !== "object") return textResult("the upstream returned an empty result", true);
+    return this.screenResult(result, { agentId: routed.upstream.agentId, action, target: classified.target });
+  }
+
+  /**
+   * The call has run. Its result goes back to the client only when the text
+   * in it is allowed: one `external_content` decision for the whole result,
+   * in this run's session. A result with no text is returned without one. A
+   * result that cannot be screened, or cannot be decided, is not returned.
+   */
+  private async screenResult(
+    result: object,
+    call: { agentId: string; action: string; target: string },
+  ): Promise<unknown> {
+    const read = resultText(result);
+    if ("refused" in read) return textResult(`${RESULT_REFUSED} ${read.refused}`, true);
+    if (read.text.trim() === "") return result;
+    if (Buffer.byteLength(read.text, "utf8") > RESULT_TEXT_LIMIT) {
+      return textResult(`${RESULT_REFUSED} It holds more than 256 KiB of text.`, true);
+    }
+    let decision: Decision;
+    try {
+      decision = await decide({
+        ...call,
+        payload: read.text,
+        payloadKind: "external_content",
+        sessionId: this.sessionId,
+      });
+    } catch (err) {
+      const message = err instanceof DecisionError ? err.message : "decision unavailable (Error). Failing closed.";
+      return textResult(`${RESULT_REFUSED} ${message}`, true);
+    }
+    if (decision.outcome !== "allow") return textResult(resultRefusal(decision), true);
+    return result;
   }
 
   /** One line in the action log. A write that fails does not stop the call. */

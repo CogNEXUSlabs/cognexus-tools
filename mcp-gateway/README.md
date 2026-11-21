@@ -13,6 +13,24 @@ QUEUED FOR REVIEW: this call needs human approval before it runs.
 
 A deny includes the reason. An outage says the decision is unavailable and that the gateway is failing closed. There is no offline path.
 
+## The result is decided too
+
+What an upstream returns is untrusted text on its way to a model: a fetched page, a file, a ticket. After a forwarded call, the gateway sends the text of the result for a second decision, with `payload_kind` `external_content` and the same `session_id`, agent, action and target as the call. Only an `allow` returns the result, exactly as the upstream sent it. Any other outcome returns `isError`, and the text does not reach the client:
+
+```text
+REFUSED: the upstream result was not returned. <reasons>
+(decision <id>)
+```
+
+The call has already run by then. The refusal keeps its output away from the model; it does not undo the call.
+
+- **One decision for each result.** The text parts, the text of embedded resources, resource links and structured content are joined in order and decided once. A forwarded call whose result holds text therefore asks for two decisions, and both are sealed and metered. A result with no text (an image, audio, an empty reply) is returned without a second decision.
+- **256 KiB of text at most.** That is the Decision API's payload limit. A result with more is refused without a decision: `It holds more than 256 KiB of text.`
+- **Binary resources are refused.** An embedded resource with a `blob` cannot be screened, so the result is not returned. A part of a type the gateway does not know is refused the same way. Images and audio pass.
+- **An outage fails closed.** When the result cannot be decided, it is not returned: `REFUSED: the upstream result was not returned. decision unavailable (...). Failing closed.`
+
+A result the upstream marked `isError` is decided like any other. The gateway's own messages (`REFUSED:`, `QUEUED FOR REVIEW:`, `FAILED:`) are not.
+
 Connectors which Grok Bot authenticates with its own OAuth may not be routable through the gateway. The first release targets self-hosted and API-key MCP servers.
 
 ## Configure
@@ -46,7 +64,7 @@ Point an MCP client at that process over stdio. Logs stay on stderr, and stderr 
 
 ## Session
 
-One gateway process serves one client connection. Every decision it asks for carries the same `session_id` (`mcp:<uuid>`, made when the process starts). The engine signs it into the decision's record, and a decision trace groups the run's tool calls by it. There is nothing to configure.
+One gateway process serves one client connection. Every decision it asks for, for a call or for a result, carries the same `session_id` (`mcp:<uuid>`, made when the process starts). The engine signs it into the decision's record, and a decision trace groups the run's tool calls by it. There is nothing to configure.
 
 ## Action log
 

@@ -26,6 +26,8 @@ from artzain.audit_verify import VerifyResult, warning_label
 _HELD = "Every entry matches its hash and links to the one before, and each seal covers its entries."
 _SELF = ("The signatures check against keys in this bundle; nothing yet ties those keys to the "
          "CogNEXUS Labs Evidence Root.")
+#: Decision D8's line for ATTESTED, word for word.
+_ATTESTED = "The signing keys chain to the CogNEXUS Labs Evidence Root."
 
 
 def _run(monkeypatch, result: VerifyResult, *argv):
@@ -67,7 +69,7 @@ def test_an_attested_bundle_names_the_evidence_root_as_cognexus_labs(monkeypatch
 
     i = lines.index("VERIFIED, ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.")
     assert " ".join(lines[i + 1:i + 3]) == _HELD
-    assert lines[i + 3] == "The signing keys chain to the CogNEXUS Labs Evidence Root, certified at signing time."
+    assert lines[i + 3] == _ATTESTED
 
 
 def test_a_failed_bundle_gets_no_explanation_lines(monkeypatch):
@@ -130,3 +132,35 @@ def test_json_keeps_the_warning_text_as_it_was(monkeypatch):
     body = json.loads("\n".join(lines))
     assert body["warnings"] == [custody]
     assert "warning_labels" not in body and "explanation" not in body
+
+
+def test_the_attested_line_is_d8s_word_for_word(monkeypatch):
+    code, lines = _run(monkeypatch, _intact(attestation="ATTESTED"))
+
+    assert code == 0
+    assert lines[-1] == _ATTESTED
+    assert lines.count(_ATTESTED) == 1
+
+
+@pytest.mark.parametrize("root", ["the CogNEXUS Labs Evidence Root", "the root you supplied",
+                                  "a retired CogNEXUS Labs root"])
+def test_no_verdict_explanation_line_says_certified(root):
+    explanations = [cli._HELD_LINE, cli._SELF_ATTESTED_LINE, cli._signing_keys_line(root)]
+
+    assert cli._signing_keys_line(root) == f"The signing keys chain to {root}."
+    assert not [line for line in explanations if "certified" in line.lower()]
+
+
+def _verify_help() -> str:
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), pytest.raises(SystemExit):
+        cli.main(["audit", "verify", "--help"])
+    return " ".join(out.getvalue().split())
+
+
+def test_the_verify_help_says_what_the_merkle_check_proves():
+    text = _verify_help()
+
+    assert ("Check every leaf hash and chain link, and prove each exported decision's "
+            "inclusion under its sealed Merkle root") in text
+    assert "Recompute every" not in text

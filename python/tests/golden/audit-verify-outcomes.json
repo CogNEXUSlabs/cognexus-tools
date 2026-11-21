@@ -304,7 +304,7 @@
    "VERIFIED, ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
    "Every entry matches its hash and links to the one before, and each seal covers its",
    "entries.",
-   "The signing keys chain to the CogNEXUS Labs Evidence Root, certified at signing time."
+   "The signing keys chain to the CogNEXUS Labs Evidence Root."
   ]
  },
  "certified_attested": {
@@ -343,7 +343,7 @@
    "VERIFIED, ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
    "Every entry matches its hash and links to the one before, and each seal covers its",
    "entries.",
-   "The signing keys chain to the root you supplied, certified at signing time."
+   "The signing keys chain to the root you supplied."
   ]
  },
  "certified_no_pinned_root": {
@@ -426,7 +426,7 @@
    "entries.",
    "Notes on the certificate chain:",
    "  - attested under retired root <root>, certified before the re-root",
-   "The signing keys chain to a retired CogNEXUS Labs root, certified at signing time."
+   "The signing keys chain to a retired CogNEXUS Labs root."
   ]
  },
  "certified_under_a_root_no_longer_pinned": {
@@ -1009,7 +1009,7 @@
    "VERIFIED, ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
    "Every entry matches its hash and links to the one before, and each seal covers its",
    "entries.",
-   "The signing keys chain to the root you supplied, certified at signing time."
+   "The signing keys chain to the root you supplied."
   ]
  },
  "dense_window_truncated_without_digest": {
@@ -1930,7 +1930,7 @@
    "VERIFIED, ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
    "Every entry matches its hash and links to the one before, and each seal covers its",
    "entries.",
-   "The signing keys chain to the root you supplied, certified at signing time."
+   "The signing keys chain to the root you supplied."
   ]
  },
  "interior_per_batch_seals_without_digest": {
@@ -2794,7 +2794,7 @@
    "entries.",
    "Notes on the certificate chain:",
    "  - attested under retired root <root>, certified before the re-root",
-   "The signing keys chain to a retired CogNEXUS Labs root, certified at signing time."
+   "The signing keys chain to a retired CogNEXUS Labs root."
   ]
  },
  "rotations_digest_mismatch": {
@@ -3244,7 +3244,7 @@
    "VERIFIED, ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
    "Every entry matches its hash and links to the one before, and each seal covers its",
    "entries.",
-   "The signing keys chain to the root you supplied, certified at signing time."
+   "The signing keys chain to the root you supplied."
   ]
  },
  "sparse_export_with_inclusion_proofs_stdlib_only": {
@@ -3345,7 +3345,7 @@
    "VERIFIED, ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
    "Every entry matches its hash and links to the one before, and each seal covers its",
    "entries.",
-   "The signing keys chain to the root you supplied, certified at signing time."
+   "The signing keys chain to the root you supplied."
   ]
  },
  "substituted_keypair": {
@@ -3431,7 +3431,7 @@
    "entries.",
    "Notes on the certificate chain:",
    "  - issuing certificate ISS-TAMPERED signature invalid",
-   "The signing keys chain to the root you supplied, certified at signing time."
+   "The signing keys chain to the root you supplied."
   ]
  },
  "truncated_log": {
@@ -3777,7 +3777,7 @@
    "VERIFIED, ATTESTED: leaf hashes, chain links, Merkle roots and signatures intact.",
    "Every entry matches its hash and links to the one before, and each seal covers its",
    "entries.",
-   "The signing keys chain to the root you supplied, certified at signing time."
+   "The signing keys chain to the root you supplied."
   ]
  },
  "without_leaves_digest": {

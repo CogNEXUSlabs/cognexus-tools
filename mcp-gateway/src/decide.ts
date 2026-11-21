@@ -2,6 +2,9 @@
  * One Decision API call. A missing key, a transport failure, a redirect, or
  * any outcome other than allow is a block. This client has no offline path:
  * it never returns a synthetic allow.
+ *
+ * The gateway asks twice for a call it forwards: once for the tool call, and
+ * once for the text the upstream returned, as `external_content`.
  */
 
 import { randomUUID } from "node:crypto";
@@ -16,6 +19,8 @@ export interface DecisionRequest {
   action: string;
   target: string;
   payload: string;
+  /** `payload_kind`. A tool call unless the payload is what an upstream returned. */
+  payloadKind?: "tool_call" | "external_content";
   requestId?: string;
   /** `session_id`: the gateway run this tool call belongs to. Left out when empty. */
   sessionId?: string;
@@ -74,7 +79,7 @@ export async function decide(request: DecisionRequest, env: NodeJS.ProcessEnv = 
         action: request.action,
         target: request.target,
         payload: request.payload,
-        payload_kind: "tool_call",
+        payload_kind: request.payloadKind ?? "tool_call",
         surface: "mcp",
         request_id: request.requestId ?? randomUUID(),
         ...(request.sessionId ? { session_id: request.sessionId } : {}),

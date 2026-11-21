@@ -387,7 +387,7 @@
           "parser": {
            "prog": "artzain audit verify",
            "usage": null,
-           "description": "Recompute every leaf hash, check hash-chain linkage and Merkle roots,\nand verify Ed25519 signatures against the bundle's public keys, with\nzero network. Those keys come from the bundle, so trust in the\nproducing server drops out only at VERIFIED, ATTESTED, which needs the\nsigning keys to chain to the pinned CogNEXUS Evidence Root. This\nrelease pins no Evidence Root: an intact bundle reports\nVERIFIED, SELF-ATTESTED unless --root-fingerprint supplies a test root.\nOnce pinned, a root stays pinned through a re-root, so bundles\ncertified under it keep attesting, named as under a retired root.\nDownload a bundle from GET /api/v1/audit/export. Signature checks\nrequire 'artzain[verify]'. Under the verdict, two lines say what held\nand what the keys are tied to; each warning starts Expected: (what a\nfiltered export always shows) or Check: (act on it first).",
+           "description": "Check every leaf hash and chain link, and prove each exported decision's\ninclusion under its sealed Merkle root,\nand verify Ed25519 signatures against the bundle's public keys, with\nzero network. Those keys come from the bundle, so trust in the\nproducing server drops out only at VERIFIED, ATTESTED, which needs the\nsigning keys to chain to the pinned CogNEXUS Evidence Root. This\nrelease pins no Evidence Root: an intact bundle reports\nVERIFIED, SELF-ATTESTED unless --root-fingerprint supplies a test root.\nOnce pinned, a root stays pinned through a re-root, so bundles\ncertified under it keep attesting, named as under a retired root.\nDownload a bundle from GET /api/v1/audit/export. Signature checks\nrequire 'artzain[verify]'. Under the verdict, two lines say what held\nand what the keys are tied to; each warning starts Expected: (what a\nfiltered export always shows) or Check: (act on it first).",
            "epilog": null,
            "formatter_class": "RawDescriptionHelpFormatter",
            "add_help": true,
@@ -752,6 +752,343 @@
          "verify",
          "sample",
          "export"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "name": "skills",
+     "help": "Agent Skill tooling (offline supply-chain scan).",
+     "parser": {
+      "prog": "artzain skills",
+      "usage": null,
+      "description": null,
+      "epilog": null,
+      "formatter_class": "HelpFormatter",
+      "add_help": true,
+      "allow_abbrev": true,
+      "defaults": {},
+      "groups": [
+       [
+        "skills_command"
+       ],
+       [
+        "help"
+       ]
+      ],
+      "actions": [
+       {
+        "kind": "_HelpAction",
+        "option_strings": [
+         "-h",
+         "--help"
+        ],
+        "dest": "help",
+        "nargs": 0,
+        "const": null,
+        "default": "==SUPPRESS==",
+        "type": null,
+        "required": false,
+        "help": "show this help message and exit",
+        "metavar": null,
+        "choices": null
+       },
+       {
+        "kind": "_SubParsersAction",
+        "option_strings": [],
+        "dest": "skills_command",
+        "nargs": "A...",
+        "const": null,
+        "default": null,
+        "type": null,
+        "required": true,
+        "help": null,
+        "metavar": null,
+        "commands": [
+         {
+          "name": "scan",
+          "help": "Scan an Agent Skill folder (SKILL.md and its files) before it is installed.",
+          "parser": {
+           "prog": "artzain skills scan",
+           "usage": null,
+           "description": "Read a skill folder, or a folder of skills, offline and list what a\nreviewer should see: steps that download and run something, hosts the\nskill names, lines that send the user to sign in or hand off to a\nportal, lines that say to skip, hide or not mention a step, comments\nand characters a rendered page does not show, and files that changed\nsince an accepted baseline. Nothing is fetched, run or sent. The rules\nare patterns over text: a finding is for a person to read, and a skill\nwith no findings has not been shown to be safe. Exits 0 with no\nfindings, 1 with any, 2 when there is nothing to scan.",
+           "epilog": null,
+           "formatter_class": "RawDescriptionHelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_skills_scan>"
+           },
+           "groups": [
+            [
+             "path"
+            ],
+            [
+             "help",
+             "json",
+             "baseline",
+             "write_baseline",
+             "accept_findings",
+             "allow_host"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [],
+             "dest": "path",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": true,
+             "help": "A skill folder, or a folder that holds skills.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--json"
+             ],
+             "dest": "json",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": "Emit a JSON report.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--baseline"
+             ],
+             "dest": "baseline",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Compare with this accepted baseline: a changed, added or removed file is skill.drift, and findings accepted with the baseline are not listed again.",
+             "metavar": "FILE",
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--write-baseline"
+             ],
+             "dest": "write_baseline",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "Write the baseline that accepts the skill as it is. Refused while there are findings, unless --accept-findings is given.",
+             "metavar": "FILE",
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--accept-findings"
+             ],
+             "dest": "accept_findings",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": "With --write-baseline: record the current findings as accepted.",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_AppendAction",
+             "option_strings": [
+              "--allow-host"
+             ],
+             "dest": "allow_host",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "A host the skill may name (exact, or *.suffix). Repeat for more.",
+             "metavar": "HOST",
+             "choices": null
+            }
+           ]
+          }
+         }
+        ],
+        "choices": [
+         "scan"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "name": "redteam",
+     "help": "Replay attack-pattern fixtures against your team's policy (dry run).",
+     "parser": {
+      "prog": "artzain redteam",
+      "usage": null,
+      "description": null,
+      "epilog": null,
+      "formatter_class": "HelpFormatter",
+      "add_help": true,
+      "allow_abbrev": true,
+      "defaults": {},
+      "groups": [
+       [
+        "redteam_command"
+       ],
+       [
+        "help"
+       ]
+      ],
+      "actions": [
+       {
+        "kind": "_HelpAction",
+        "option_strings": [
+         "-h",
+         "--help"
+        ],
+        "dest": "help",
+        "nargs": 0,
+        "const": null,
+        "default": "==SUPPRESS==",
+        "type": null,
+        "required": false,
+        "help": "show this help message and exit",
+        "metavar": null,
+        "choices": null
+       },
+       {
+        "kind": "_SubParsersAction",
+        "option_strings": [],
+        "dest": "redteam_command",
+        "nargs": "A...",
+        "const": null,
+        "default": null,
+        "type": null,
+        "required": true,
+        "help": null,
+        "metavar": null,
+        "commands": [
+         {
+          "name": "run",
+          "help": "Run the engine's fixture set against the team's policy and report each step.",
+          "parser": {
+           "prog": "artzain redteam run",
+           "usage": null,
+           "description": "Ask the engine to replay its attack-pattern fixtures against your team's\npolicy and say which steps would be held for review or denied. It is a dry\nrun: nothing is sealed, billed or counted. Each step shows the outcome under\nthe deployment's current settings and the outcome if every staged control\nwere enforced. Owner or admin, at most six runs an hour for a team. The\nresult is self-attested: fixtures written by CogNEXUS Labs, replayed\nagainst your policy on your deployment. It is not a benchmark score.",
+           "epilog": null,
+           "formatter_class": "RawDescriptionHelpFormatter",
+           "add_help": true,
+           "allow_abbrev": true,
+           "defaults": {
+            "func": "<cmd_redteam_run>"
+           },
+           "groups": [
+            [],
+            [
+             "help",
+             "bundle",
+             "agent",
+             "json"
+            ]
+           ],
+           "actions": [
+            {
+             "kind": "_HelpAction",
+             "option_strings": [
+              "-h",
+              "--help"
+             ],
+             "dest": "help",
+             "nargs": 0,
+             "const": null,
+             "default": "==SUPPRESS==",
+             "type": null,
+             "required": false,
+             "help": "show this help message and exit",
+             "metavar": null,
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--bundle"
+             ],
+             "dest": "bundle",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "A draft, shadow or active bundle to replay against, as its promotion would leave the policy. Default: the team's active bundles.",
+             "metavar": "ID",
+             "choices": null
+            },
+            {
+             "kind": "_StoreAction",
+             "option_strings": [
+              "--agent"
+             ],
+             "dest": "agent",
+             "nargs": null,
+             "const": null,
+             "default": null,
+             "type": null,
+             "required": false,
+             "help": "The agent the replay runs as (a control boundary is keyed by agent). Default: redteam-replay.",
+             "metavar": "DID",
+             "choices": null
+            },
+            {
+             "kind": "_StoreTrueAction",
+             "option_strings": [
+              "--json"
+             ],
+             "dest": "json",
+             "nargs": 0,
+             "const": true,
+             "default": false,
+             "type": null,
+             "required": false,
+             "help": "Emit the report as JSON.",
+             "metavar": null,
+             "choices": null
+            }
+           ]
+          }
+         }
+        ],
+        "choices": [
+         "run"
         ]
        }
       ]
@@ -2382,7 +2719,9 @@
               "google",
               "a2a",
               "grokbot",
-              "openshell"
+              "openshell",
+              "dots",
+              "muse"
              ]
             },
             {
@@ -2524,7 +2863,9 @@
               "google",
               "a2a",
               "grokbot",
-              "openshell"
+              "openshell",
+              "dots",
+              "muse"
              ]
             },
             {
@@ -4539,6 +4880,8 @@
     "signup",
     "gui",
     "audit",
+    "skills",
+    "redteam",
     "licence",
     "policy",
     "registry",
