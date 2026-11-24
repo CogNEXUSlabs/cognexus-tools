@@ -1185,8 +1185,10 @@ describe("grokbot-artzain evidence", () => {
     expect(exportAt).toBeGreaterThanOrEqual(0);
     expect(verifyAt).toBeGreaterThan(exportAt);
     expect(run.stdout).toContain(
-      "Receipts verify as SELF-ATTESTED until the Evidence Root is published.",
+      "With artzain 0.6.70 or later, receipts verify as ATTESTED when the deployment " +
+        "holds a certificate under the Evidence Root, and as SELF-ATTESTED when it does not.",
     );
+    expect(run.stdout).not.toContain("until the Evidence Root is published");
     expect(run.stdout).not.toContain("VERIFIED");
     expect(run.stdout).not.toContain("allow");
     expect(run.stdout).not.toContain(key);

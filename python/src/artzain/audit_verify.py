@@ -6,8 +6,8 @@ hash-chain linkage and Merkle roots, and verifies Ed25519 signatures against the
 bundled public keys.  It is the Art. 12 "offline reconstruction" artifact.
 Because those keys come from the bundle, trust in the producing server drops
 out only at ``VERIFIED, ATTESTED``, once the Evidence Root is pinned
-(:data:`EVIDENCE_ROOT_FINGERPRINT`).  While that pin is ``None`` and the caller
-supplies no root, an intact bundle verifies ``SELF-ATTESTED``.  A re-root
+(:data:`EVIDENCE_ROOT_FINGERPRINT`, the bootstrap root since 0.6.70).  A
+bundle whose keys do not chain to a pinned root verifies ``SELF-ATTESTED``.  A re-root
 (ceremony runbook §14) appends to :data:`EVIDENCE_ROOT_FINGERPRINTS` instead
 of replacing the pin, so a bundle certified under the earlier root keeps
 verifying ATTESTED under it, and the result says which root it reached.
@@ -100,20 +100,25 @@ _GENESIS_HASH = "0" * 64
 
 #: Full SHA-256 hex fingerprint of the CogNEXUS Evidence Root public key
 #: (canonical SubjectPublicKeyInfo PEM): the CURRENT pin, always the last
-#: entry of :data:`EVIDENCE_ROOT_FINGERPRINTS`.  ``None`` until the root
-#: ceremony publishes it (docs/runbooks/evidence-root-ceremony.md); while
-#: ``None`` the verifier reports SELF-ATTESTED only.  Overriding at call time
-#: exists for test roots — the CLI states loudly when a non-default root is
-#: in use.
-EVIDENCE_ROOT_FINGERPRINT: Optional[str] = None
+#: entry of :data:`EVIDENCE_ROOT_FINGERPRINTS`.  Bootstrap root, to be retired
+#: by a hardware ceremony (target 15 February 2027); generated in software on
+#: an offline machine on 23 November 2026.  Its published record is
+#: ``security/evidence_root.json`` in the engine repository.  Overriding at
+#: call time exists for test roots — the CLI states loudly when a non-default
+#: root is in use.
+EVIDENCE_ROOT_FINGERPRINT: Optional[str] = (
+    "415fba7e5cb6729c65d72cfc1c398e1c533db3ec2de161aabe07b607765ba102")
 
 #: Every Evidence Root fingerprint this verifier pins, oldest first, the
 #: current one last.  A re-root (runbook §14) APPENDS the new fingerprint and
 #: moves :data:`EVIDENCE_ROOT_FINGERPRINT` onto it; it never replaces the
 #: tuple, because a bundle certified under the earlier root must keep
 #: verifying ATTESTED under that root.  An entry may be dropped only once no
-#: customer bundle was ever certified under it.  Empty until the ceremony.
-EVIDENCE_ROOT_FINGERPRINTS: tuple[str, ...] = ()
+#: customer bundle was ever certified under it.  First entry: the bootstrap
+#: root, to be retired by a hardware ceremony.
+EVIDENCE_ROOT_FINGERPRINTS: tuple[str, ...] = (
+    "415fba7e5cb6729c65d72cfc1c398e1c533db3ec2de161aabe07b607765ba102",
+)
 
 _ISSUING_CERT_FORMAT = "cognexus-issuing-certificate"
 _DEPLOYMENT_CERT_FORMAT = "cognexus-licence-certificate"
@@ -664,7 +669,7 @@ def pinned_root_fingerprints() -> tuple[str, ...]:
     Retired roots first, in :data:`EVIDENCE_ROOT_FINGERPRINTS` order, and the
     current pin (:data:`EVIDENCE_ROOT_FINGERPRINT`) last; blanks and repeats
     dropped.  Read at call time, so a test that sets the single name alone
-    pins exactly that root.  Empty before the ceremony.
+    pins exactly that root.  Empty only in a release before the first pin.
     """
     current = _normalised_root_fingerprint(EVIDENCE_ROOT_FINGERPRINT)
     pins: list[str] = []

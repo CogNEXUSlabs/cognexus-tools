@@ -35,6 +35,12 @@ Set `COGNEXUS_API_KEY` on the Gateway (sandbox key from `/get-a-key`, **not**
 a dashboard JWT and **not** an envelope `cnxe_…` key). Optional:
 `COGNEXUS_API_BASE_URL`, or plugin config `apiKey` / `baseUrl` / `agentDid`.
 
+On the hosted service the agent id on your decisions has to be one your
+account has declared, or every gated call comes back `deny` with
+`agent '<id>' not in registry`. Turn on announce (below) and move the
+agent's row to **sanctioned** in the Agent Catalog, or generate the key with
+**Bind to agent id** set to that id (dashboard, **API keys**).
+
 ```json5
 {
   plugins: {

@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.6.70
+
+### Changed
+
+- **`artzain audit verify` pins the CogNEXUS Labs Evidence Root.** Bootstrap
+  root, to be retired by a hardware ceremony. Target date for the hardware
+  ceremony: 15 February 2027. This key was generated in software on an
+  offline machine on 23 November 2026. Fingerprint
+  `415fba7e5cb6729c65d72cfc1c398e1c533db3ec2de161aabe07b607765ba102` (key id
+  `415fba7e5cb6729c`), published in `security/evidence_root.json` in the
+  engine repository. `EVIDENCE_ROOT_FINGERPRINT` and
+  `EVIDENCE_ROOT_FINGERPRINTS` in `artzain.audit_verify` hold it, so
+  `artzain audit verify` and `artzain licence verify` report
+  `VERIFIED, ATTESTED` for a bundle whose deployment certificate chains to
+  it, without `--root-fingerprint`. The hosted service holds such a
+  certificate from 24 November 2026; an export reaching back before then, and
+  any bundle from a deployment with no certificate, stays
+  `VERIFIED, SELF-ATTESTED`. A bundle certified under another root now says
+  "root public key fingerprint mismatch for the pinned Evidence Root". The
+  hardware ceremony appends its root and keeps this one pinned as retired, so
+  bundles certified under it keep attesting.
+- Docs: the README has a new "Go further with ArtzAIn" section after the
+  first samples, pointing at the free Open plan and the pricing page.
+- The once-per-process offline notice `decide()` prints when no API key is
+  set adds one line naming the free Open sign-up URL. Nothing else changes:
+  the same local guards run, nothing is sealed, and `COGNEXUS_QUIET=1` still
+  silences it.
+- Docs: the README says what the hosted service answers a decision from an
+  agent its account has not declared, and how a key bound to the agent's id
+  declares it.
+
 ## 0.6.69
 
 ### Added

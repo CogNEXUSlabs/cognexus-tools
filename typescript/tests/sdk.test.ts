@@ -271,6 +271,19 @@ describe("decide", () => {
     expect(err.message).toContain("No API key configured");
   });
 
+  it("names the Open sign-up URL when no API key is configured", async () => {
+    const err = await decide({
+      action: "a",
+      target: "t",
+      payload: "p",
+      fetchImpl: fakeFetch(200, ALLOW),
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(DecisionError);
+    expect(err.message).toContain(
+      "https://app.cognexuslabs.ai/?utm_source=sdk-ts&utm_medium=nokey",
+    );
+  });
+
   it("wraps transport failures", async () => {
     configure({ apiKey: "cnx_test" });
     const boom: FetchLike = async () => {

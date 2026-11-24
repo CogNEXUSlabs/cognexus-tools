@@ -2,6 +2,16 @@
 
 All notable changes to `@cognexuslabs/n8n-nodes-artzain`.
 
+## 0.1.10
+
+### Changed
+
+- Docs: the README says what the hosted service answers the Decision node
+  for an agent id its account has not declared (the item lands on **Deny**
+  with `agent '<id>' not in registry`), and how to declare it: a credential
+  whose key is bound to that id, or a sanctioned row from the n8n workflows
+  discovery source. The nodes' code is unchanged.
+
 ## 0.1.9
 
 ### Added

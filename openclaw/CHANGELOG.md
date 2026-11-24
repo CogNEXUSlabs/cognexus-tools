@@ -4,6 +4,16 @@ All notable changes to `@cognexuslabs/openclaw-artzain`. Headings are the
 bare version (`## 0.2.2`): the mirror's `publish-npm.yml` cuts the GitHub
 release notes for tag `openclaw-v<version>` from the matching section.
 
+## 0.2.11
+
+### Changed
+
+- Docs: the README says what the hosted service answers a gated call from
+  an agent its account has not declared (`deny`, with `agent '<id>' not in
+  registry`), and the two ways to declare the agent: turn on announce and
+  move its row to sanctioned in the Agent Catalog, or use a key bound to its
+  id. The plugin's code is unchanged.
+
 ## 0.2.10
 
 ### Added

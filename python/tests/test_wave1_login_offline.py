@@ -38,6 +38,25 @@ def test_offline_warns_once(monkeypatch, capsys):
     assert err.count("artzain login") == 1
 
 
+def test_offline_warning_names_the_open_signup_url(monkeypatch, capsys):
+    """The one-per-process offline notice points at the free Open plan with
+    the tagged sign-up URL, once, beside the ``artzain login`` nudge."""
+    import importlib
+    decide_mod = importlib.import_module("artzain.decide")
+
+    decide_mod._reset_offline_warn_for_tests()
+    monkeypatch.delenv("COGNEXUS_QUIET", raising=False)
+    _no_key_anywhere(monkeypatch)
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+
+    decide_mod.decide(action="noop", target="t", payload="hello", kind="user_input")
+    decide_mod.decide(action="noop", target="t", payload="hello", kind="user_input")
+    err = capsys.readouterr().err
+    assert err.count(
+        "https://app.cognexuslabs.ai/?utm_source=sdk-python&utm_medium=nokey"
+    ) == 1
+
+
 def test_offline_quiet_suppresses(monkeypatch, capsys):
     import importlib
     decide_mod = importlib.import_module("artzain.decide")

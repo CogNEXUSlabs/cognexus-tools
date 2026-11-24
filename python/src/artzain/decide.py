@@ -501,7 +501,8 @@ _offline_warned = False
 
 
 def _warn_offline_once() -> None:
-    """R2: one line per process — decision was not sealed; point at login."""
+    """R2: once per process: decision was not sealed; point at login and the
+    free Open plan."""
     global _offline_warned
     if _offline_warned:
         return
@@ -515,7 +516,9 @@ def _warn_offline_once() -> None:
         return
     print(
         "artzain: decision was not sealed (offline). "
-        "Run `artzain login` (~15s) to mint a key and seal decisions.",
+        "Run `artzain login` (~15s) to mint a key and seal decisions.\n"
+        "artzain: create a free Open account at "
+        "https://app.cognexuslabs.ai/?utm_source=sdk-python&utm_medium=nokey",
         file=sys.stderr,
     )
 

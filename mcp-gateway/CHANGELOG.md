@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5
+
+### Changed
+
+- Docs: the README says what the hosted service answers a call whose upstream `agent_id` its account has not declared (`isError` with `agent '<id>' not in registry`), and how to declare it: a key bound to that id. A bound key decides under one id, so the upstreams of one gateway share an `agent_id`, or each agent gets a gateway and a key of its own. The gateway's code is unchanged.
+
 ## 0.1.4
 
 ### Added

@@ -60,6 +60,8 @@ artzain-mcp-gateway --config gateway.json
 
 From a checkout, `node dist/cli.js --config gateway.json` is the same command.
 
+On the hosted service an upstream's `agent_id` has to be an agent your account has declared, or every call returns `isError` with `agent '<id>' not in registry`. Generate the gateway's key with **Bind to agent id** set to that id (dashboard, **API keys**). A bound key decides under that one id, so give the upstreams of one gateway the same `agent_id`, or run one gateway per agent, each with its own key.
+
 Point an MCP client at that process over stdio. Logs stay on stderr, and stderr does not include upstream credentials or the API key.
 
 ## Session

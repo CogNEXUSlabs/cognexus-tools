@@ -10,6 +10,14 @@ n8n community nodes that wrap ArtzAIn **Decision** (pattern A) and
 | **ArtzAIn Decision** | `POST /api/v1/decisions`. Three outputs: Allow / Review / Deny. HTTP 503 / 401 / 422 land on **Deny**, and so does a redirect (3xx), which is not followed. Review does **not** wait inside n8n — a human owns it in the dashboard Review Queue. Wire side effects only to Allow. |
 | **ArtzAIn Envelope** | `POST /api/v1/envelope/v1/chat/completions` with a `cnxe_…` key. Screens model traffic. It does **not** gate a later Stripe/Gmail node. |
 
+On the hosted service the Decision node's agent id has to be one your
+account has declared, or the item lands on **Deny** with
+`agent '<id>' not in registry`. Generate the credential's key with
+**Bind to agent id** set to that id (dashboard, **API keys**). A bound key
+decides under that one id, so workflows that send different ids each need a
+credential of their own, or a sanctioned row from the n8n workflows
+discovery source in the Agent Catalog.
+
 ## Request ID (Decision node)
 
 The Decision node's **Request ID** field is the server's idempotency key.
