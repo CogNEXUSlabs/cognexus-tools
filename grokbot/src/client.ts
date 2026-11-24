@@ -642,7 +642,7 @@ export async function getReviewStatus(options: {
  * not an error: the id is well formed and this account has no such leaf.
  * A redirect, a non-JSON body, and any other status throw. None of them is
  * a found decision, and this does not check the bundle. `artzain audit verify`
- * is what reports SELF-ATTESTED.
+ * is what reports ATTESTED or SELF-ATTESTED.
  */
 export async function lookupAuditDecision(options: {
   apiKey: string;

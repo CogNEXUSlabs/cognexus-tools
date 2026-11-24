@@ -8,6 +8,16 @@ From 0.1.10, a section starts with `Upgrade:` (`none`, `recommended` or
 be), then `### Added`, `### Fixed` and `### Changed`. One bullet says
 whether the command, the library or the skill text changed.
 
+## 0.1.11
+
+Upgrade: recommended
+Needs: artzain 0.6.70 or later for ATTESTED receipts. The skill text is unchanged apart from its two version lines; a saved skill can be compared again with `grokbot-artzain skill`.
+
+### Changed
+
+- **`grokbot-artzain evidence` says what the verifier now reports.** It used to print that receipts verify as SELF-ATTESTED until the Evidence Root is published. artzain 0.6.70 pins the CogNEXUS Labs Evidence Root (a bootstrap root, to be retired by a hardware ceremony), so the line now reads: with artzain 0.6.70 or later, receipts verify as ATTESTED when the deployment holds a certificate under the Evidence Root, and as SELF-ATTESTED when it does not. The command's lookup, output order and exit codes are unchanged. The README says the same.
+- **The command, the library, and the skill text:** the command's text changed; the library did not; the skill text changed only in its two version lines.
+
 ## 0.1.10
 
 Upgrade: recommended

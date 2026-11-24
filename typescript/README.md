@@ -25,6 +25,35 @@ if (decision.outcome === "allow") {
 }
 ```
 
+On the hosted service a decision from an agent your account has not declared
+comes back `deny`, with the finding `agent '<id>' not in registry`, and the
+default id, `cognexus-sdk-ts`, is undeclared like any other. Pass your agent's
+id as `agentDid` and use a key bound to it: in the dashboard, **API keys**,
+**Bind to agent id**.
+
+## Go further with ArtzAIn
+
+This client talks only to the hosted ArtzAIn engine. A free
+[Open](https://app.cognexuslabs.ai/?utm_source=npm&utm_medium=readme)
+account is enough to start: no card, the plan does not expire, and each
+`decide()` result is sealed as a signed, hash-chained receipt (30 days of
+receipts, 10,000 sealed decisions per month, a soft cap that never blocks a
+decision).
+
+- Create an Open account, set `COGNEXUS_API_KEY`, or run the Python CLI
+  `artzain login` and reuse `~/.artzain/credentials.toml`.
+- Gate an action and get `allow`, `deny`, or `review` back, already sealed.
+- Post the business result of an allowed decision with `postDecisionResult`,
+  and open Tokens-to-Outcomes for the workload those decisions belong to.
+- Export and check receipts offline with the Python CLI
+  (`pip install 'artzain[verify]'`, then `artzain audit verify`). From
+  artzain 0.6.70 a bundle whose deployment holds a certificate under the
+  CogNEXUS Labs Evidence Root verifies as attested; one without a certificate
+  verifies as self-attested.
+- Need a longer retention window, more volume, or the compliance bundles?
+  Paid plans start at Build. See
+  [pricing](https://cognexuslabs.ai/pricing?utm_source=npm&utm_medium=readme).
+
 ## Configuration
 
 | Source | Key |

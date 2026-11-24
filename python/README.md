@@ -26,6 +26,12 @@ if d["outcome"] == "allow":
     actually_send()
 ```
 
+On the hosted service a decision from an agent your account has not declared
+comes back `deny`, with the finding `agent '<id>' not in registry`, and the
+default id, `artzain-sdk`, is undeclared like any other. Pass your agent's id
+as `agent_did` and use a key bound to it: in the dashboard, **API keys**,
+**Bind to agent id**. `artzain quickstart` needs neither.
+
 ```bash
 artzain login                               # device-code grant → ~/.artzain/credentials.toml
 artzain quickstart                          # first sealed decision
@@ -33,10 +39,33 @@ artzain audit export --profile eu-ai-act    # evidence bundle (ZIP), optionally 
 artzain audit verify eu-evidence.zip        # offline; exit 1 on any integrity failure
 ```
 
-**The three verdicts.** `FAILED` — a check the bundle must pass did not. `VERIFIED, SELF-ATTESTED` — intact and internally consistent, but nothing ties its signing key to CogNEXUS. `VERIFIED, ATTESTED` — additionally, the signing key chains to the pinned CogNEXUS Evidence Root. That root fingerprint is `None` in this release because the root ceremony has not yet run, so every bundle currently verifies `SELF-ATTESTED`; the verifier says so rather than implying more. Without `cryptography` installed, hashes and structure still verify, signatures report as unchecked, and the verdict is capped at `SELF-ATTESTED`.
+**The three verdicts.** `FAILED` — a check the bundle must pass did not. `VERIFIED, SELF-ATTESTED` — intact and internally consistent, but nothing ties its signing key to CogNEXUS. `VERIFIED, ATTESTED` — additionally, the signing key chains to the pinned CogNEXUS Evidence Root. This release pins a bootstrap root, to be retired by a hardware ceremony (target date 15 February 2027; generated in software on an offline machine), with fingerprint `415fba7e5cb6729c65d72cfc1c398e1c533db3ec2de161aabe07b607765ba102`. A bundle from a deployment that holds no certificate under it verifies `SELF-ATTESTED`, and the verifier says why. Without `cryptography` installed, hashes and structure still verify, signatures report as unchecked, and the verdict is capped at `SELF-ATTESTED`.
 
-Putting `decide()` into an agent's tool loop? The next section, **Gating tool calls**,
-covers it. The rest of this README is the guard library.
+Putting `decide()` into an agent's tool loop? The **Gating tool calls** section
+below covers it. The rest of this README is the guard library.
+
+## Go further with ArtzAIn
+
+The local guards in this package stay free, offline, and unmetered. A free
+[Open](https://app.cognexuslabs.ai/?utm_source=pypi&utm_medium=readme)
+account adds the hosted control plane: each `decide()` result is sealed as a
+signed, hash-chained receipt you can export and check offline. Open needs no
+card, does not expire, and keeps receipts for 30 days (10,000 sealed
+decisions per month, a soft cap that never blocks a decision).
+
+- Create an Open account, then run `artzain login` to write a key to
+  `~/.artzain/credentials.toml`.
+- Get `allow`, `deny`, or `review` from the hosted engine, already sealed
+  when the answer comes back.
+- Open Account, Event Logs in the dashboard, and group work with the
+  Tokens-to-Outcomes view.
+- Export an evidence bundle with `artzain audit export --profile eu-ai-act`
+  and check it with `artzain audit verify` on a machine that never talks to
+  the server. Today every bundle verifies as self-attested, and the verifier
+  says so.
+- Need a longer retention window, more volume, or the compliance bundles?
+  Paid plans start at Build. See
+  [pricing](https://cognexuslabs.ai/pricing?utm_source=pypi&utm_medium=readme).
 
 ---
 

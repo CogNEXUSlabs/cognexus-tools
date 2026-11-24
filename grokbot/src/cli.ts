@@ -1011,11 +1011,15 @@ async function main(argv: string[]): Promise<number> {
         log("grokbot-artzain evidence: no sealed decision with that id for this account");
         return 2;
       }
-      // The verifier, not this command, reports the anchoring state. While
-      // the Evidence Root is unpublished that state is SELF-ATTESTED.
+      // The verifier, not this command, reports the anchoring state:
+      // ATTESTED from artzain 0.6.70 when the deployment holds a certificate
+      // under the Evidence Root, SELF-ATTESTED when it does not.
       print("artzain audit export");
       print("artzain audit verify");
-      print("Receipts verify as SELF-ATTESTED until the Evidence Root is published.");
+      print(
+        "With artzain 0.6.70 or later, receipts verify as ATTESTED when the deployment " +
+          "holds a certificate under the Evidence Root, and as SELF-ATTESTED when it does not.",
+      );
       return 0;
     } catch (err) {
       const detail = err instanceof DecisionError ? err.message : "audit log unavailable";

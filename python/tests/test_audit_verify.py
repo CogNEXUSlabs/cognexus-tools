@@ -467,12 +467,13 @@ def test_pre_certificate_bundle_stays_self_attested_and_does_not_fail(
 
 
 def test_no_pinned_root_stays_self_attested_even_with_chain(
-        tmp_path, signer, authority):
-    """Without a pinned fingerprint (the pre-ceremony state) a chain can
-    never upgrade the claim — otherwise the bundle would be vouching for
+        tmp_path, signer, authority, monkeypatch):
+    """Without a pinned fingerprint (a release before the first pin) a chain
+    can never upgrade the claim — otherwise the bundle would be vouching for
     its own root."""
+    _pin_roots(monkeypatch)
     d = _certified_bundle(tmp_path, signer, authority)
-    r = verify_bundle(d)  # no pin argument, module default is None
+    r = verify_bundle(d)  # no pin argument, and nothing pinned
     assert r.ok, r.error
     assert r.attestation == "SELF-ATTESTED"
     assert any("fingerprint" in w for w in r.attestation_reasons)
@@ -721,12 +722,14 @@ def test_root_fingerprint_override_is_flagged(tmp_path, signer, authority):
 
 
 def test_no_override_is_not_flagged(tmp_path, signer):
-    """The default pin (module EVIDENCE_ROOT_FINGERPRINT, None pre-ceremony)
-    is not an override."""
+    """The default pin (module EVIDENCE_ROOT_FINGERPRINT, the bootstrap root)
+    is not an override, and the result names it."""
+    import artzain.audit_verify as av
+
     d = _build_bundle(tmp_path, signer)
     r = verify_bundle(d)
     assert r.root_fingerprint_overridden is False
-    assert r.evidence_root_fingerprint is None
+    assert r.evidence_root_fingerprint == av.EVIDENCE_ROOT_FINGERPRINT
 
 
 def test_pinned_root_restated_with_case_or_whitespace_is_not_an_override(
@@ -790,17 +793,23 @@ def _pin_roots(monkeypatch, *fingerprints: str) -> None:
                         fingerprints[-1] if fingerprints else None)
 
 
-def test_no_evidence_root_is_pinned_before_the_ceremony():
-    """Both spellings of the pin are empty until the ceremony. The release
-    that pins the first root fills both: the single name is always the last
-    entry of the set."""
+#: The bootstrap Evidence Root, published in ``security/evidence_root.json``
+#: on 24 November 2026 (to be retired by a hardware ceremony). Restated here
+#: so that changing the pin is a visible, reviewed edit in two places.
+_BOOTSTRAP_ROOT = "415fba7e5cb6729c65d72cfc1c398e1c533db3ec2de161aabe07b607765ba102"
+
+
+def test_the_bootstrap_root_is_the_pinned_evidence_root():
+    """The first pin is the bootstrap root, in both spellings: the set holds
+    it alone and the single name is the set's last entry. A re-root appends
+    to the set and moves the single name; it never drops this entry while a
+    customer bundle certified under it exists."""
     import artzain.audit_verify as av
 
-    assert av.EVIDENCE_ROOT_FINGERPRINT is None
-    assert av.EVIDENCE_ROOT_FINGERPRINTS == ()
-    assert av.pinned_root_fingerprints() == ()
-    last = av.EVIDENCE_ROOT_FINGERPRINTS[-1] if av.EVIDENCE_ROOT_FINGERPRINTS else None
-    assert last == av.EVIDENCE_ROOT_FINGERPRINT
+    assert av.EVIDENCE_ROOT_FINGERPRINTS == (_BOOTSTRAP_ROOT,)
+    assert av.EVIDENCE_ROOT_FINGERPRINT == _BOOTSTRAP_ROOT
+    assert av.pinned_root_fingerprints() == (_BOOTSTRAP_ROOT,)
+    assert av.EVIDENCE_ROOT_FINGERPRINTS[-1] == av.EVIDENCE_ROOT_FINGERPRINT
 
 
 def test_pinned_root_fingerprints_is_the_set_in_comparison_form(monkeypatch):
@@ -1466,10 +1475,12 @@ def test_verify_help_and_docstrings_do_not_claim_zero_server_trust(capsys):
             assert claim not in flat, claim
     help_text = " ".join(out.split())
     assert "SELF-ATTESTED" in help_text
-    # The help says this release pins no Evidence Root. Pinning one must
-    # reword the help in the same change.
-    assert "pins no Evidence Root" in help_text
-    assert av.EVIDENCE_ROOT_FINGERPRINT is None
+    # The help names the root this release pins. Moving the pin must reword
+    # the help in the same change.
+    assert "pins no Evidence Root" not in help_text
+    assert "pins the bootstrap root" in help_text
+    assert f"key id {av.EVIDENCE_ROOT_FINGERPRINT[:16]}" in help_text
+    assert "retired by a hardware ceremony" in help_text
 
 
 def test_cli_attested_under_root_override_names_the_supplied_root(
@@ -1513,14 +1524,30 @@ def test_cli_attested_against_the_pinned_root_names_the_cognexus_root(
 
 
 def test_cli_default_run_is_self_attested_without_a_pinned_root(
-        tmp_path, signer, authority, capsys):
-    """Without an override this release pins no Evidence Root, so even a bundle
-    whose certificate chain would verify reports SELF-ATTESTED, and says why."""
+        tmp_path, signer, authority, capsys, monkeypatch):
+    """A verifier that pins no Evidence Root (a release before the first pin)
+    reports SELF-ATTESTED even for a bundle whose certificate chain would
+    verify, and says why."""
+    _pin_roots(monkeypatch)
     d = _certified_bundle(tmp_path, signer, authority)
     code, out = _run_cli(capsys, ["audit", "verify", str(d)])
     assert code == 0
     assert "VERIFIED, SELF-ATTESTED" in out
     assert "self-attested because: no Evidence Root fingerprint pinned" in out
+    assert "VERIFIED, ATTESTED" not in out
+    assert "NON-DEFAULT" not in out
+
+
+def test_cli_default_run_against_the_pinned_root_refuses_another_root(
+        tmp_path, signer, authority, capsys):
+    """With the bootstrap root pinned, a bundle whose chain ends at some other
+    root (here a test root) is intact but SELF-ATTESTED: the pinned root does
+    not vouch for it, and the report says the root does not match."""
+    d = _certified_bundle(tmp_path, signer, authority)
+    code, out = _run_cli(capsys, ["audit", "verify", str(d)])
+    assert code == 0
+    assert "VERIFIED, SELF-ATTESTED" in out
+    assert "root public key fingerprint mismatch for the pinned Evidence Root" in out
     assert "VERIFIED, ATTESTED" not in out
     assert "NON-DEFAULT" not in out
 

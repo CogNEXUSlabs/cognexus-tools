@@ -1208,12 +1208,13 @@ def _outcome(build: Callable[[Path], _Case], tmp: Path) -> dict[str, Any]:
     with patches:
         if case.stdlib_only:
             patches.enter_context(mock.patch.object(av, "_load_public_keys", lambda keys: None))
-        if case.pinned is not None or case.retired:
-            # As a release pins: the whole set, oldest first, the single name on
-            # its last entry.
-            pins = (*case.retired, *((case.pinned,) if case.pinned is not None else ()))
-            patches.enter_context(mock.patch.object(av, "EVIDENCE_ROOT_FINGERPRINTS", pins))
-            patches.enter_context(mock.patch.object(av, "EVIDENCE_ROOT_FINGERPRINT", case.pinned))
+        # As a release pins: the whole set, oldest first, the single name on
+        # its last entry. Always patched, so a scenario that pins nothing runs
+        # with nothing pinned whatever root the shipped verifier pins: the
+        # captured outcomes describe the scenario, not the current release.
+        pins = (*case.retired, *((case.pinned,) if case.pinned is not None else ()))
+        patches.enter_context(mock.patch.object(av, "EVIDENCE_ROOT_FINGERPRINTS", pins))
+        patches.enter_context(mock.patch.object(av, "EVIDENCE_ROOT_FINGERPRINT", case.pinned))
         result = av.verify_bundle(case.path, root_fingerprint=case.root)
         argv = ["audit", "verify", str(case.path)]
         if case.root is not None:

@@ -285,6 +285,6 @@ that runs before a tool, a host plugin replaces this skill.
 The skill text and the command are Apache-2.0. More:
 <https://www.npmjs.com/package/@cognexuslabs/grokbot-artzain>
 
-Skill text version: 0.1.10
+Skill text version: 0.1.11
 
-Skill text for grokbot-artzain 0.1.10
+Skill text for grokbot-artzain 0.1.11

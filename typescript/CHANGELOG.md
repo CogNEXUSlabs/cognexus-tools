@@ -4,6 +4,22 @@ All notable changes to `@cognexuslabs/artzain`. Headings are the bare
 version (`## 0.1.5`): the mirror's `publish-npm.yml` cuts the GitHub release
 notes for tag `sdk-ts-v<version>` from the matching section.
 
+## 0.1.13
+
+### Changed
+
+- Docs: the README says a receipt verifies as attested once its deployment
+  holds a certificate under the Evidence Root that artzain 0.6.70 pins, and
+  as self-attested without one.
+- Docs: the README has a new "Go further with ArtzAIn" section after the
+  first sample, pointing at the free Open plan and the pricing page.
+- The `DecisionError` thrown when no API key is configured now also names
+  the free Open sign-up URL. Only the message text changes: the error type
+  and the throw are the same.
+- Docs: the README says what the hosted service answers a decision from an
+  agent its account has not declared (`deny`, with `agent '<id>' not in
+  registry`), and how a key bound to the agent's id declares it.
+
 ## 0.1.12
 
 ### Added

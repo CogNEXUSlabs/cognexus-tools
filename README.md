@@ -46,6 +46,32 @@ Engine dual-home paths (private repo): `pypi-package/`, `sdk/typescript/`,
 `sdk/openclaw/`, `sdk/n8n/`, `sdk/grokbot/`, `sdk/mcp-gateway/`. Seed with `scripts/seed_cognexus_tools.sh` from
 the engine tree.
 
+## Go further with ArtzAIn
+
+The local guards in the `artzain` Python package stay free, offline, and
+unmetered. A free
+[Open](https://app.cognexuslabs.ai/?utm_source=github&utm_medium=readme)
+account adds the hosted control plane every client here talks to: each
+`decide()` result is sealed as a signed, hash-chained receipt you can export
+and check offline. Open needs no card, does not expire, and keeps receipts
+for 30 days (10,000 sealed decisions per month, a soft cap that never blocks
+a decision).
+
+- Create an Open account, then run `artzain login` to write a key to
+  `~/.artzain/credentials.toml`.
+- Get `allow`, `deny`, or `review` from the hosted engine, already sealed
+  when the answer comes back.
+- Open Account, Event Logs in the dashboard, and group work with the
+  Tokens-to-Outcomes view.
+- Export an evidence bundle with `artzain audit export --profile eu-ai-act`
+  and check it with `artzain audit verify` on a machine that never talks to
+  the server. From artzain 0.6.70 a bundle whose deployment holds a
+  certificate under the CogNEXUS Labs Evidence Root verifies as attested; one
+  without a certificate verifies as self-attested, and the verifier says so.
+- Need a longer retention window, more volume, or the compliance bundles?
+  Paid plans start at Build. See
+  [pricing](https://cognexuslabs.ai/pricing?utm_source=github&utm_medium=readme).
+
 ## Privacy and telemetry
 
 With no API key, the Python SDK sends nothing. `post_sdk_event` returns
@@ -554,6 +580,12 @@ Every request is a real decision: sealed into your audit chain and counted
 against your plan, so a plan with a daily cap spends it. A `429` is waited
 out for as long as the engine asks. The key is never printed. A long request,
 or one that needs the PII screen, takes the engine longer than this one.
+
+The benchmark decides as the agent `bench:latency`. The hosted service
+denies an agent your account has not declared, so with an ordinary key each
+of these decisions is timed and sealed as a `deny`. To measure an allowed
+decision, as the published figures do, use a key bound to that id: in the
+dashboard, **API keys**, **Bind to agent id** `bench:latency`.
 
 ## Development
 

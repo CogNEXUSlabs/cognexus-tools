@@ -530,8 +530,9 @@ cannot change the review. Exit 0 from `decide` is still the only allow.
 `GET /api/v1/audit/decisions?decision=<id>`. When this account has a leaf
 sealed under that id, it prints `artzain audit export` and then
 `artzain audit verify`. Those commands check the receipt. This command does
-not: the anchoring state is the verifier's. Receipts verify as
-SELF-ATTESTED until the Evidence Root is published. It exits 0 when the
+not: the anchoring state is the verifier's. With artzain 0.6.70 or later,
+receipts verify as ATTESTED when the deployment holds a certificate under the
+Evidence Root, and as SELF-ATTESTED when it does not. It exits 0 when the
 decision is in the log, and 2 when it is not or the log could not be read.
 That exit code is not an allow. `init` writes a profile and exits 0 when
 it wrote the file. That exit code is not an allow.
