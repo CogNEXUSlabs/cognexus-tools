@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.71
+
+### Fixed
+
+- **`artzain connect openshell` binds OpenShell 0.1.9, not 0.1.2.** NVIDIA's
+  advisory GHSA-94c7-w546-2p4f (medium, published 24 November 2026) covers
+  OpenShell 0.1.0 to 0.1.7: the sandbox reapplied its Landlock rules through
+  a symlink at the working directory, so a workload that could replace that
+  directory with a link widened its filesystem policy on the next exec
+  session. 0.1.8 fixed it. `PINNED_OPENSHELL` in
+  `artzain.openshell.interceptor` is now `v0.1.9`, the newest release
+  conformance has verified with this sidecar. On a host without OpenShell,
+  `artzain connect openshell up --install-openshell` installs NVIDIA's 0.1.9
+  deb or rpms, each checked against the SHA-256 the release publishes. A
+  gateway connected on 0.1.2 to 0.1.7 takes the fix by upgrading OpenShell
+  itself to 0.1.8 or later; its approval covers the whole 0.1 line, so no
+  new connect is needed.
+
 ## 0.6.70
 
 ### Changed

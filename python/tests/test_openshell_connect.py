@@ -56,7 +56,7 @@ REPORTED = {"reporting": True, "heartbeat": "ok", "inventory": "ok", "sandboxes"
 #: The deb a host without OpenShell is given, and the pins it is checked
 #: against in these tests (the real ones are install.DEB).
 PACKAGE = b"the openshell deb"
-PINNED_DEB = {"amd64": (("openshell_0.1.2-1_amd64.deb", hashlib.sha256(PACKAGE).hexdigest()),)}
+PINNED_DEB = {"amd64": (("openshell_0.1.9-1_amd64.deb", hashlib.sha256(PACKAGE).hexdigest()),)}
 RECEIPT = f"https://engine.example/dashboard.html?receipt={DECISION}"
 
 GATEWAY_TOML = """\
@@ -919,9 +919,9 @@ def test_without_openshell_up_says_how_to_install_it_and_spends_no_token(bare):
     with pytest.raises(connect.ConnectError) as caught:
         _up(bare)
     says = str(caught.value)
-    assert says.startswith("openshell-gateway is not on PATH: OpenShell 0.1.2 is not installed")
+    assert says.startswith("openshell-gateway is not on PATH: OpenShell 0.1.9 is not installed")
     assert "--install-openshell" in says
-    assert f"echo '{PINNED_DEB['amd64'][0][1]}  openshell_0.1.2-1_amd64.deb' | sha256sum -c -" in says
+    assert f"echo '{PINNED_DEB['amd64'][0][1]}  openshell_0.1.9-1_amd64.deb' | sha256sum -c -" in says
     assert "no token was spent" in says
     assert bare.posts == []
     assert not any(c[0] in ("curl", "sudo") for c in bare.calls)
@@ -935,7 +935,7 @@ def test_up_installs_openshell_when_told_to_then_binds_it(bare):
     # Installed, and its CLI answering, before the token is spent.
     assert sequence.index("sudo") < sequence.index("openshell-gateway")
     assert bare.posts[0]["url"].endswith(connect.REDEEM_PATH)
-    assert any("installing OpenShell 0.1.2 with apt-get under sudo" in line for line in said)
+    assert any("installing OpenShell 0.1.9 with apt-get under sudo" in line for line in said)
 
 
 @needs_tomllib
@@ -944,8 +944,8 @@ def test_up_asks_before_installing_and_a_yes_installs(bare, answer):
     asked = []
     record, _said = _up(bare, ask=lambda question: asked.append(question) or answer)
     (question,) = asked
-    assert "OpenShell 0.1.2 is not installed" in question
-    assert "openshell_0.1.2-1_amd64.deb" in question and PINNED_DEB["amd64"][0][1][:12] in question
+    assert "OpenShell 0.1.9 is not installed" in question
+    assert "openshell_0.1.9-1_amd64.deb" in question and PINNED_DEB["amd64"][0][1][:12] in question
     assert "sudo apt-get" in question and question.endswith("[y/N] ")
     assert record["connected"] is True and bare.openshell_installed
 
@@ -953,7 +953,7 @@ def test_up_asks_before_installing_and_a_yes_installs(bare, answer):
 @needs_tomllib
 @pytest.mark.parametrize("answer", ["", "n", "no", "maybe"])
 def test_anything_but_yes_installs_nothing(bare, answer):
-    with pytest.raises(connect.ConnectError, match="OpenShell 0.1.2 is not installed"):
+    with pytest.raises(connect.ConnectError, match="OpenShell 0.1.9 is not installed"):
         _up(bare, ask=lambda _question: answer)
     assert not any(c[0] in ("curl", "sudo") for c in bare.calls) and bare.posts == []
 
@@ -961,8 +961,8 @@ def test_anything_but_yes_installs_nothing(bare, answer):
 @needs_tomllib
 def test_a_package_that_is_not_its_pinned_build_stops_up_before_the_token(bare):
     bare.package = b"something else"
-    with pytest.raises(connect.ConnectError, match="installing OpenShell 0.1.2: "
-                                                   "openshell_0.1.2-1_amd64.deb is not the build"):
+    with pytest.raises(connect.ConnectError, match="installing OpenShell 0.1.9: "
+                                                   "openshell_0.1.9-1_amd64.deb is not the build"):
         _up(bare, install_openshell=True)
     assert not any(c[0] == "sudo" for c in bare.calls) and bare.posts == []
 

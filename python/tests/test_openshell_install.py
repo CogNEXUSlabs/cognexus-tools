@@ -47,15 +47,15 @@ def _table(names):
 def pinned(monkeypatch):
     """The pins, as tests can serve them: every package hashes to SHA."""
     monkeypatch.setattr(install, "DEB", {
-        "amd64": _table(["openshell_0.1.2-1_amd64.deb"]),
-        "arm64": _table(["openshell_0.1.2-1_arm64.deb"])})
+        "amd64": _table(["openshell_0.1.9-1_amd64.deb"]),
+        "arm64": _table(["openshell_0.1.9-1_arm64.deb"])})
     monkeypatch.setattr(install, "RPM", {
-        "x86_64": _table(["openshell-0.1.2-1.fc44.x86_64.rpm",
-                          "openshell-gateway-0.1.2-1.fc44.x86_64.rpm",
-                          "openshell-prover-0.1.2-1.fc44.x86_64.rpm"]),
-        "aarch64": _table(["openshell-0.1.2-1.fc44.aarch64.rpm",
-                           "openshell-gateway-0.1.2-1.fc44.aarch64.rpm",
-                           "openshell-prover-0.1.2-1.fc44.aarch64.rpm"])})
+        "x86_64": _table(["openshell-0.1.9-1.fc44.x86_64.rpm",
+                          "openshell-gateway-0.1.9-1.fc44.x86_64.rpm",
+                          "openshell-prover-0.1.9-1.fc44.x86_64.rpm"]),
+        "aarch64": _table(["openshell-0.1.9-1.fc44.aarch64.rpm",
+                           "openshell-gateway-0.1.9-1.fc44.aarch64.rpm",
+                           "openshell-prover-0.1.9-1.fc44.aarch64.rpm"])})
 
 
 class _Bare:
@@ -148,7 +148,7 @@ class _Bare:
 
 def test_the_release_is_the_one_this_artzain_binds():
     assert "v" + install.RELEASE == interceptor.PINNED_OPENSHELL
-    assert install.BASE_URL == "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.2/"
+    assert install.BASE_URL == "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.9/"
 
 
 def test_the_real_pins_name_each_package_once_by_a_whole_sha256(monkeypatch):
@@ -163,17 +163,17 @@ def test_the_real_pins_name_each_package_once_by_a_whole_sha256(monkeypatch):
     assert [len(p) for p in install.RPM.values()] == [3, 3]
     # The amd64 deb is the one the conformance run installs.
     assert install.DEB["amd64"] == (
-        ("openshell_0.1.2-1_amd64.deb",
-         "1f5416ea08f32fdc621f20a2cc0324298e60aba8bbe996459d9e3b44195f23df"),)
+        ("openshell_0.1.9-1_amd64.deb",
+         "5d3c758fe1860625cd28b0791865b25e25912acacdc99c8ce1c6071a95ef360b"),)
 
 
 @pytest.mark.parametrize("kind, arch, files", [
-    ("deb", "amd64", ["openshell_0.1.2-1_amd64.deb"]),
-    ("deb", "arm64", ["openshell_0.1.2-1_arm64.deb"]),
-    ("rpm", "x86_64", ["openshell-0.1.2-1.fc44.x86_64.rpm", "openshell-gateway-0.1.2-1.fc44.x86_64.rpm",
-                       "openshell-prover-0.1.2-1.fc44.x86_64.rpm"]),
-    ("rpm", "aarch64", ["openshell-0.1.2-1.fc44.aarch64.rpm", "openshell-gateway-0.1.2-1.fc44.aarch64.rpm",
-                        "openshell-prover-0.1.2-1.fc44.aarch64.rpm"]),
+    ("deb", "amd64", ["openshell_0.1.9-1_amd64.deb"]),
+    ("deb", "arm64", ["openshell_0.1.9-1_arm64.deb"]),
+    ("rpm", "x86_64", ["openshell-0.1.9-1.fc44.x86_64.rpm", "openshell-gateway-0.1.9-1.fc44.x86_64.rpm",
+                       "openshell-prover-0.1.9-1.fc44.x86_64.rpm"]),
+    ("rpm", "aarch64", ["openshell-0.1.9-1.fc44.aarch64.rpm", "openshell-gateway-0.1.9-1.fc44.aarch64.rpm",
+                        "openshell-prover-0.1.9-1.fc44.aarch64.rpm"]),
 ])
 def test_the_plan_is_this_hosts_format_and_architecture(kind, arch, files):
     bare = _Bare(kind, arch)
@@ -209,7 +209,7 @@ def test_a_host_with_neither_dpkg_nor_rpm_is_refused():
 def test_the_commands_said_for_a_person_check_each_package_first():
     plan = install.plan(_Bare().host())
     lines = plan.by_hand()
-    deb = "openshell_0.1.2-1_amd64.deb"
+    deb = "openshell_0.1.9-1_amd64.deb"
     assert lines[0] == f"curl -fsSLO {install.BASE_URL}{deb}"
     assert lines[1] == f"echo '{SHA}  {deb}' | sha256sum -c -"
     assert lines[-1] == f"sudo apt-get install -y --no-install-recommends ./{deb}"
@@ -228,11 +228,11 @@ def test_the_deb_is_checked_then_installed_then_its_gateway_started_and_register
     downloads = [c for c in bare.calls if c[0] == "curl"]
     assert len(downloads) == 1
     assert downloads[0][:6] == ["curl", "--proto", "=https", "--tlsv1.2", "-fsSL", "--retry"]
-    assert downloads[0][-1] == install.BASE_URL + "openshell_0.1.2-1_amd64.deb"
+    assert downloads[0][-1] == install.BASE_URL + "openshell_0.1.9-1_amd64.deb"
     assert bare.rooted() == [["sudo", "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install",
                               "-y", "--no-install-recommends", bare.rooted()[0][-1]]]
     assert [(name, body) for name, body, *_modes in bare.installed_from] == [
-        ("openshell_0.1.2-1_amd64.deb", BODY)]
+        ("openshell_0.1.9-1_amd64.deb", BODY)]
     tail = [" ".join(c) for c in bare.calls if c[0] != "curl" and c[0] != "sudo"]
     assert tail[:4] == ["dpkg --print-architecture", "systemctl --user daemon-reload",
                         "systemctl --user enable --now openshell-gateway",
@@ -249,8 +249,8 @@ def test_the_rpms_go_in_with_one_dnf_call():
     (call,) = bare.rooted()
     assert call[:4] == ["sudo", "dnf", "install", "-y"]
     assert [Path(p).name for p in call[4:]] == [
-        "openshell-0.1.2-1.fc44.x86_64.rpm", "openshell-gateway-0.1.2-1.fc44.x86_64.rpm",
-        "openshell-prover-0.1.2-1.fc44.x86_64.rpm"]
+        "openshell-0.1.9-1.fc44.x86_64.rpm", "openshell-gateway-0.1.9-1.fc44.x86_64.rpm",
+        "openshell-prover-0.1.9-1.fc44.x86_64.rpm"]
 
 
 @pytest.mark.parametrize("tools, command", [
@@ -278,17 +278,17 @@ def test_root_installs_without_sudo():
 
 def test_a_package_that_is_not_the_build_its_sha256_names_is_not_installed():
     bare = _Bare("rpm")
-    bare.served["openshell-gateway-0.1.2-1.fc44.x86_64.rpm"] = b"something else"
+    bare.served["openshell-gateway-0.1.9-1.fc44.x86_64.rpm"] = b"something else"
     with pytest.raises(install.InstallError,
-                       match="openshell-gateway-0.1.2-1.fc44.x86_64.rpm is not the build its SHA-256 names"):
+                       match="openshell-gateway-0.1.9-1.fc44.x86_64.rpm is not the build its SHA-256 names"):
         install.install(bare.host(), install.plan(bare.host()), say=lambda _m: None)
     assert bare.rooted() == [] and not bare.installed
 
 
 def test_a_download_that_fails_says_which():
     bare = _Bare()
-    bare.download_fails.add("openshell_0.1.2-1_amd64.deb")
-    with pytest.raises(install.InstallError, match="downloading openshell_0.1.2-1_amd64.deb.*404"):
+    bare.download_fails.add("openshell_0.1.9-1_amd64.deb")
+    with pytest.raises(install.InstallError, match="downloading openshell_0.1.9-1_amd64.deb.*404"):
         install.install(bare.host(), install.plan(bare.host()), say=lambda _m: None)
     assert bare.rooted() == []
 
@@ -301,7 +301,7 @@ def test_a_download_curl_says_failed_is_not_used_even_when_its_file_is_whole():
         done = real(argv, env, timeout)
         return _done(18, "", "curl: (18) transfer closed") if argv[0] == "curl" else done
 
-    with pytest.raises(install.InstallError, match="downloading openshell_0.1.2-1_amd64.deb failed"):
+    with pytest.raises(install.InstallError, match="downloading openshell_0.1.9-1_amd64.deb failed"):
         install.install(bare.host(runner=run), install.plan(bare.host()), say=lambda _m: None)
     assert bare.rooted() == []
 
@@ -310,7 +310,7 @@ def test_without_sudo_nothing_is_tried_and_the_commands_are_said():
     bare = _Bare(tools={"systemctl", "curl", "apt-get", "dpkg"})
     with pytest.raises(install.InstallError, match="sudo is not on PATH") as caught:
         install.install(bare.host(), install.plan(bare.host()), say=lambda _m: None)
-    assert "apt-get install -y --no-install-recommends ./openshell_0.1.2-1_amd64.deb" in str(caught.value)
+    assert "apt-get install -y --no-install-recommends ./openshell_0.1.9-1_amd64.deb" in str(caught.value)
     assert [c for c in bare.calls if c[0] in ("curl", "apt-get", "env")] == []
 
 
