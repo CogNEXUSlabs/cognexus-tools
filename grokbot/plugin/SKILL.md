@@ -98,6 +98,19 @@ that is not listed is the action `unknown_tool` and the target
   `GROKBOT_AGENT_ID`, and `COGNEXUS_AGENT_DID` when that is unset. A decide
   with no agent id uses `grokbot-agent` and says so on stderr. When
   `GROKBOT_REQUIRE_IDENTITY=1`, that decide exits 2 and you do not act.
+- Your agent id is the one this Bot is listed under in the ArtzAIn Agent
+  Catalog: the name of your profile on this computer, with nothing added.
+  It is not your display name with a title or a role, and it is not
+  `Grok Bot`. When you give an agent id, give exactly that one:
+  `--agent-did Mira`, never `--agent-did "Mira · Research lead"`. The
+  hosted service denies an agent id the account has not declared, whatever
+  the action is. The command compares the id with the ones this computer
+  announced. An announced id followed by a title is sent as the announced
+  id, and the answer's `notice` names it: use that id from then on. Any
+  other id that was not announced is sent as you gave it, and a deny then
+  carries a `notice` that says so. Ask again once with your announced id:
+  that corrects who is asking, and does not reword the action. If you do
+  not know your announced id, stop and ask the person who runs you.
 
 Describe the action as you will really take it. The decision is for that
 action and no other.
@@ -265,6 +278,13 @@ Bot, the skill): never prompts, conversations, `profile.json`, or
 `gateway.json`. The row waits in the Agent Catalog for review, as
 `grokbot-announce:…`.
 
+A `decide` must carry the name that row ends with, after `#agent:`. When
+Bots share a computer, one `GROKBOT_AGENT_ID` cannot name each of them:
+tell each Bot its agent id, and it passes `--agent-did <id>` on each
+`decide`. `announce` records the names it sent beside its enroll state,
+and `decide` compares the id it is given with those names and with the
+profiles on the computer.
+
 ### Record the action you took
 
 After you act on an allow, append one JSON line to the action journal. The file is `actions.jsonl` in the same directory as the enroll state: `~/.config/grokbot-artzain`, or `%APPDATA%\grokbot-artzain` on Windows. `GROKBOT_ACTION_JOURNAL`, when it is set, is that file instead.
@@ -285,6 +305,6 @@ that runs before a tool, a host plugin replaces this skill.
 The skill text and the command are Apache-2.0. More:
 <https://www.npmjs.com/package/@cognexuslabs/grokbot-artzain>
 
-Skill text version: 0.1.11
+Skill text version: 0.1.12
 
-Skill text for grokbot-artzain 0.1.11
+Skill text for grokbot-artzain 0.1.12

@@ -5,8 +5,10 @@
  * The file is `state.json` under `~/.config/grokbot-artzain`, or under
  * `%APPDATA%\grokbot-artzain` on Windows. An enroll entry is keyed by the
  * base URL, a SHA-256 fingerprint of the API key, and the agent id. An
- * announce entry adds the instance. Each stores the time. The key itself
- * is not stored.
+ * announce entry adds the instance. Each stores the time. An announce entry
+ * also stores the agent's name, and a hash of the base URL and the key's
+ * fingerprint, so a later `decide` can tell whether the agent id it was
+ * given is one this host announced. The key itself is not stored.
  *
  * A missing, corrupt or unreadable file is "enroll and rewrite". It is
  * never an error the gate reports.
@@ -44,6 +46,10 @@ export interface EnrollRecord {
 
 export interface AnnounceRecord {
   last_announce_at: string;
+  /** The name that was sent. Absent on a record 0.1.11 or earlier wrote. */
+  agent?: string;
+  /** `announceScope` of the base URL and key it was sent with. */
+  scope?: string;
 }
 
 export interface EnrollState {
@@ -104,6 +110,25 @@ export function announceStateKey(
     .digest("hex");
 }
 
+/**
+ * What the announces of one base URL and one key share, whatever the
+ * instance. Hashed so the file does not store the key or quote the URL.
+ */
+export function announceScope(baseUrl: string, apiKey: string): string {
+  return createHash("sha256")
+    .update(`announce-scope\0${baseUrl}\0${keyFingerprint(apiKey)}`, "utf8")
+    .digest("hex");
+}
+
+/** The names `announce` recorded for that scope, sorted. */
+export function announcedNames(state: EnrollState | null, scope: string): string[] {
+  const names = new Set<string>();
+  for (const row of Object.values(state?.announces ?? {})) {
+    if (row.scope === scope && row.agent) names.add(row.agent);
+  }
+  return [...names].sort((a, b) => a.localeCompare(b));
+}
+
 let versionCache: string | undefined;
 
 export function currentCliVersion(): string {
@@ -135,9 +160,13 @@ function asRecord(value: unknown): EnrollRecord | undefined {
 
 function asAnnounce(value: unknown): AnnounceRecord | undefined {
   if (!value || typeof value !== "object") return undefined;
-  const row = value as { last_announce_at?: unknown };
+  const row = value as { last_announce_at?: unknown; agent?: unknown; scope?: unknown };
   if (typeof row.last_announce_at !== "string") return undefined;
-  return { last_announce_at: row.last_announce_at };
+  const named =
+    typeof row.agent === "string" && row.agent && typeof row.scope === "string" && row.scope
+      ? { agent: row.agent, scope: row.scope }
+      : {};
+  return { last_announce_at: row.last_announce_at, ...named };
 }
 
 function readMap<T>(
@@ -338,10 +367,23 @@ export async function recordEnroll(key: string, version: string, at: Date): Prom
   });
 }
 
-/** Record the agents a call stored. An enroll record already in the file stays. */
-export async function recordAnnounces(keys: string[], at: Date): Promise<void> {
+/**
+ * Record the agents a call stored. An enroll record already in the file
+ * stays. `named.agents` are the names sent, in the order of `keys`.
+ */
+export async function recordAnnounces(
+  keys: string[],
+  at: Date,
+  named?: { scope: string; agents: string[] },
+): Promise<void> {
   const stamp = at.toISOString();
   await updateState((state) => {
-    for (const key of keys) state.announces[key] = { last_announce_at: stamp };
+    keys.forEach((key, i) => {
+      const agent = named?.agents[i];
+      state.announces[key] =
+        named && agent
+          ? { last_announce_at: stamp, agent, scope: named.scope }
+          : { last_announce_at: stamp };
+    });
   });
 }
