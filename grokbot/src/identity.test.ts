@@ -10,7 +10,14 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { agentIdForDecide, announcedAgentIds, announcedIdUnderTitle, checkAgentId } from "./identity.js";
+import type { AgentVote, DecisionResponse } from "./client.js";
+import {
+  agentIdForDecide,
+  announcedAgentIds,
+  announcedIdUnderTitle,
+  checkAgentId,
+  declaredByService,
+} from "./identity.js";
 import {
   announceScope,
   announceStateKey,
@@ -176,5 +183,51 @@ describe("a decide's agent id, read against this host", () => {
       agentDid: titled,
       replaced: false,
     });
+  });
+});
+
+describe("an allow that says the service knows the agent id", () => {
+  function vote(over: Partial<AgentVote>): AgentVote {
+    return {
+      name: "agent-registry",
+      verdict: "allow",
+      severity: "none",
+      score: null,
+      findings: [],
+      error: null,
+      ...over,
+    };
+  }
+
+  function answer(votes: AgentVote[], outcome: DecisionResponse["outcome"] = "allow"): DecisionResponse {
+    return {
+      outcome,
+      decision_id: "d1",
+      audit_block_id: "b1",
+      contributing_agents: votes,
+      policy_bundle_version: "v1",
+      resolution_policy: "strictest",
+      latency_ms: 1,
+      reasons: [],
+    };
+  }
+
+  it("is the registry's allow with no finding", () => {
+    expect(declaredByService(answer([vote({ name: "tool-call-contract" }), vote({})]))).toBe(true);
+  });
+
+  it("is not an allow that names the id as not in the registry", () => {
+    expect(declaredByService(answer([vote({ severity: "low", findings: ["agent 'Grok Bot' not in registry"] })])))
+      .toBe(false);
+  });
+
+  it("is not an answer without the registry's vote, or with a vote that failed or did not allow", () => {
+    expect(declaredByService(answer([vote({ name: "tool-call-contract" })]))).toBe(false);
+    expect(declaredByService(answer([]))).toBe(false);
+    expect(declaredByService({ ...answer([]), contributing_agents: undefined } as unknown as DecisionResponse))
+      .toBe(false);
+    expect(declaredByService(answer([vote({ error: "registry_unavailable" })]))).toBe(false);
+    expect(declaredByService(answer([vote({ verdict: "review", severity: "high" })]))).toBe(false);
+    expect(declaredByService(answer([vote({})], "review"))).toBe(false);
   });
 });

@@ -8,6 +8,19 @@ From 0.1.10, a section starts with `Upgrade:` (`none`, `recommended` or
 be), then `### Added`, `### Fixed` and `### Changed`. One bullet says
 whether the command, the library or the skill text changed.
 
+## 0.1.13
+
+Upgrade: recommended
+Needs: no engine change. The skill text is unchanged apart from its two version lines; a saved skill can be compared again with `grokbot-artzain skill --check <path>`.
+
+### Fixed
+
+- **No warning on an agent id the service allows as declared.** 0.1.12 compares the agent id a decide is given with the ids this host announced, and a name announced with 0.1.11 or earlier that is not a profile folder is on neither list. Each decide under such a name printed on stderr that the id is not announced and that the hosted service denies it, though the service allowed it, and a Bot that read the line switched to its profile folder's id and was denied. The line on an id sent as given now waits for the answer. When the service allows the id as one its account declared (its `agent-registry` vote allows with no finding), nothing is said and the name is recorded in `state.json` under the base URL and key, so later decides under it say nothing either. An engine that lets an undeclared id through says `not in registry` in that vote, and the line is printed as before; on any other answer it is printed and carried as `notice` as in 0.1.12. A replaced titled id is said before the decide, as before.
+
+### Changed
+
+- **The command, the library, and the skill text:** the command changed; the library's `gateToolCall`, `handleBeforeToolCall` and MCP server did not; the skill text changed only in its two version lines.
+
 ## 0.1.12
 
 Upgrade: recommended

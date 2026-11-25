@@ -10,10 +10,14 @@
  * Two readings, both made before the engine is asked:
  *   - an announced id followed by a title is sent as the announced id;
  *   - any other id this host did not announce is sent as given, with a note.
+ * The note on an id sent as given waits for the answer. When the service
+ * allows the id as one its account declared, which names announced before
+ * 0.1.12 are, nothing is said and the name is recorded as known here.
  * A host with no profiles and no recorded announce has nothing to compare
  * with, and nothing is said. The engine's answer is never changed here.
  */
 
+import type { DecisionResponse } from "./client.js";
 import { listProfileAgentIds, resolveSandRoot } from "./profiles.js";
 import {
   announceScope,
@@ -85,16 +89,38 @@ export function checkAgentId(given: string, announced: readonly string[]): Agent
     agentDid: given,
     replaced: false,
     note:
-      `agent id ${quoted(given)} is not a profile on this host or an id grokbot-artzain announce ` +
-      `recorded here (those are: ${listed}${rest > 0 ? ` and ${rest} more` : ""}). The hosted service ` +
+      `agent id ${quoted(given)} is not a profile on this host, or an id grokbot-artzain announce ` +
+      `recorded or the service allowed here (those are:${listed}${rest > 0 ? ` and ${rest} more` : ""}). The hosted service ` +
       "denies an agent id its account has not declared. Use your announced id. If this id is " +
       "the one meant, the person who runs this Bot lists it with grokbot-artzain announce.",
   };
 }
 
+/** The engine's registry check. Its allow with no finding is a declared id. */
+const REGISTRY_VOTE = "agent-registry";
+
+/**
+ * Whether an answer says the service knows the agent id: an allow whose
+ * registry vote allowed with no finding and no error. An engine that lets
+ * an undeclared id through says `not in registry` in that vote, and an
+ * answer without the vote says nothing either way.
+ */
+export function declaredByService(decision: DecisionResponse): boolean {
+  if (decision.outcome !== "allow" || !Array.isArray(decision.contributing_agents)) return false;
+  return decision.contributing_agents.some(
+    (vote) =>
+      vote?.name === REGISTRY_VOTE &&
+      vote.verdict === "allow" &&
+      !vote.error &&
+      Array.isArray(vote.findings) &&
+      vote.findings.length === 0,
+  );
+}
+
 /**
  * The ids this host announces: its profiles, then the names `announce`
- * recorded for this base URL and key that are not profiles.
+ * recorded, or the service allowed, for this base URL and key that are
+ * not profiles.
  */
 export function announcedAgentIds(input: {
   sandRoot: string;

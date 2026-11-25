@@ -22,6 +22,7 @@ import {
   enrollStateKey,
   readEnrollState,
   recordAnnounces,
+  recordDeclaredAgent,
   recordEnroll,
   replaceFile,
   setReplaceForTests,
@@ -213,6 +214,20 @@ describe("enroll state", () => {
     // An enroll written afterwards keeps the names.
     await recordEnroll(slot(), currentCliVersion(), new Date("2026-11-24T01:00:00.000Z"));
     expect(announcedNames(await saved(), scope)).toEqual(["ops-bot", "research-bot"]);
+  });
+
+  it("records a name the service allowed as declared, under its scope, apart from any announce", async () => {
+    const base = "https://engine.example";
+    const scope = announceScope(base, KEY);
+    const announced = announceStateKey(base, KEY, "ops-desk", "dr eggbot");
+    await recordDeclaredAgent(scope, "dr eggbot", new Date("2026-11-25T00:00:00.000Z"));
+
+    const state = await saved();
+    expect(announcedNames(state, scope)).toEqual(["dr eggbot"]);
+    expect(announcedNames(state, announceScope(base, "cnx_another_key"))).toEqual([]);
+    // It is not an announce: the next announce of that name is not skipped.
+    expect(announceIsFresh(state?.announces[announced], Date.parse("2026-11-25T00:00:01.000Z"))).toBe(false);
+    expect(await readFile(stateFilePath(), "utf8")).not.toContain(KEY);
   });
 
   it("does not enroll, and does not write, when enroll is exactly false", async () => {

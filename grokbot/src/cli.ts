@@ -53,7 +53,7 @@ import {
 import { formatDoctorText, runDoctor } from "./doctor.js";
 import { enrollInstance } from "./enroll.js";
 import { decisionPayload, gateToolCall, type SkillConfig } from "./gate.js";
-import { agentIdForDecide, type AgentIdCheck } from "./identity.js";
+import { agentIdForDecide, declaredByService, type AgentIdCheck } from "./identity.js";
 import { serveMcpHttp, serveMcpStdio } from "./mcp/server.js";
 import { readProfile, writeProfile, type BotProfile } from "./profile.js";
 import { resolveSandRoot, selectAnnounceAgents } from "./profiles.js";
@@ -66,6 +66,7 @@ import {
   currentCliVersion,
   readEnrollState,
   recordAnnounces,
+  recordDeclaredAgent,
 } from "./state.js";
 import { classifyTool } from "./taxonomy.js";
 import { runUpgrade } from "./upgrade.js";
@@ -591,6 +592,22 @@ async function announcedAgentId(cfg: SkillConfig): Promise<AgentIdCheck> {
   }
 }
 
+/**
+ * Record that the service allowed `cfg.agentDid` as declared, so the next
+ * decide under it says nothing. A file that cannot be written changes only
+ * that: the next decide says the note again.
+ */
+async function rememberDeclaredAgentId(cfg: SkillConfig): Promise<void> {
+  const apiKey = (cfg.apiKey ?? "").trim();
+  if (!apiKey || !cfg.agentDid) return;
+  try {
+    const scope = announceScope(resolveBaseUrlSetting(cfg.baseUrl, cfg.baseUrlSource).url, apiKey);
+    await recordDeclaredAgent(scope, cfg.agentDid, new Date());
+  } catch {
+    /* nothing recorded */
+  }
+}
+
 const NO_INSTANCE =
   "artzain announce skipped: set GROKBOT_INSTANCE (or pass --instance) to a stable name for this host";
 
@@ -892,11 +909,16 @@ async function main(argv: string[]): Promise<number> {
     }
     const cfg = loaded.config;
     // An id this host did not announce is one the account has not declared
-    // through it. The note is printed now, and goes on the JSON line when
-    // the id was replaced or the answer is not an allow.
+    // through it. A replaced id is said now. The note on an id sent as given
+    // waits for the answer: an allow from the service's registry with no
+    // finding says the account declared it (a name announced before 0.1.12),
+    // and then nothing is said and the name is remembered. The note goes on
+    // the JSON line when the id was replaced or the answer is not an allow.
     const identity = cfg.agentDid ? await announcedAgentId(cfg) : undefined;
-    if (identity?.note) log(`grokbot-artzain: ${identity.note}`);
-    if (identity?.replaced) cfg.agentDid = identity.agentDid;
+    if (identity?.replaced) {
+      if (identity.note) log(`grokbot-artzain: ${identity.note}`);
+      cfg.agentDid = identity.agentDid;
+    }
     if (cfg.announce && !cfg.instance) {
       log(NO_INSTANCE);
       cfg.announce = false;
@@ -924,7 +946,16 @@ async function main(argv: string[]): Promise<number> {
     );
     const update = clientUpdateNotice(result.allow ? result.decision.warnings : result.warnings);
     if (update) log(update);
-    const identityNotice = identity?.replaced || !result.allow ? identity?.note : undefined;
+    let identityNote = identity?.note;
+    if (identityNote && !identity?.replaced) {
+      if (result.allow && declaredByService(result.decision)) {
+        identityNote = undefined;
+        await rememberDeclaredAgentId(cfg);
+      } else {
+        log(`grokbot-artzain: ${identityNote}`);
+      }
+    }
+    const identityNotice = identity?.replaced || !result.allow ? identityNote : undefined;
     const notice = [update, identityNotice].filter(Boolean).join(" ") || undefined;
     if (result.allow) {
       print(JSON.stringify({
