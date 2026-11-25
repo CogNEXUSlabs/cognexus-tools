@@ -44,7 +44,7 @@ a token. The only state is an :class:`OperationLedger`, in memory.
   create returned. A name it cannot resolve is decided as
   ``name:<workspace>/<name>``. An allowed delete forgets the name.
 
-Pinned to OpenShell v0.1.2.
+Pinned to OpenShell v0.1.9 (from v0.1.2 in artzain 0.6.71: GHSA-94c7-w546-2p4f).
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Pro
 
 logger = logging.getLogger("artzain.openshell")
 
-PINNED_OPENSHELL = "v0.1.2"
+PINNED_OPENSHELL = "v0.1.9"
 
 #: Interceptor phases. ``post_commit`` cannot fail closed.
 PHASE_MODIFY = "modify_operation"

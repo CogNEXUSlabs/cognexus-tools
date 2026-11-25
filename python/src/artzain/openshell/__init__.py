@@ -9,7 +9,7 @@ API, and only ever calls out.
   the post-commit report, inventory, OCSF seals and the HTTP routes. Run it
   with ``artzain openshell sidecar``.
 
-Pinned to OpenShell v0.1.2. Operator steps: the ArtzAIn operator manual,
+Pinned to OpenShell v0.1.9. Operator steps: the ArtzAIn operator manual,
 chapter 17.
 """
 

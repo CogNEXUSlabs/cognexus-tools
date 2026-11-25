@@ -1,6 +1,6 @@
 """The gateway registration for the ArtzAIn sidecar, from one list of bindings.
 
-An OpenShell v0.1.2 gateway learns about an interceptor from
+An OpenShell gateway (v0.1.2 and later) learns about an interceptor from
 ``[[openshell.gateway.interceptors]]`` tables in ``gateway.toml``, and asks
 the interceptor what it binds with ``Describe``. Both have to name the same
 methods and phases: a binding the sidecar does not decide would be denied on

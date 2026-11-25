@@ -25,35 +25,35 @@ from pathlib import Path
 from typing import Any, Callable, List, Mapping, Tuple
 
 #: The OpenShell release installed: the one the interceptor is pinned to.
-RELEASE = "0.1.2"
+RELEASE = "0.1.9"
 BASE_URL = f"https://github.com/NVIDIA/OpenShell/releases/download/v{RELEASE}/"
 
 #: NVIDIA's packages of :data:`RELEASE`, by architecture as the package
 #: manager names it, with the SHA-256 the release's
-#: ``openshell-checksums-sha256.txt`` lists (read 8 October 2026). The rpm
+#: ``openshell-checksums-sha256.txt`` lists (read 24 November 2026). The rpm
 #: release is three packages, installed together.
 DEB: Mapping[str, Tuple[Tuple[str, str], ...]] = {
-    "amd64": (("openshell_0.1.2-1_amd64.deb",
-               "1f5416ea08f32fdc621f20a2cc0324298e60aba8bbe996459d9e3b44195f23df"),),
-    "arm64": (("openshell_0.1.2-1_arm64.deb",
-               "14838b811b54148060da99fd2aabe78f05c777002c0a8fc39b106e0de0ddd796"),),
+    "amd64": (("openshell_0.1.9-1_amd64.deb",
+               "5d3c758fe1860625cd28b0791865b25e25912acacdc99c8ce1c6071a95ef360b"),),
+    "arm64": (("openshell_0.1.9-1_arm64.deb",
+               "3661dfd83aadd8dd7b94ccb35b52c120bea614c9a63b6b5182b9626187e19232"),),
 }
 RPM: Mapping[str, Tuple[Tuple[str, str], ...]] = {
     "x86_64": (
-        ("openshell-0.1.2-1.fc44.x86_64.rpm",
-         "fd30a8340c0208559e874e86382c488b85d4f19b50932b97d1dede98a690141f"),
-        ("openshell-gateway-0.1.2-1.fc44.x86_64.rpm",
-         "bc79d2addf34abbd1a17d5e7eb326025120c07d1e4d95ff7330c29e968872810"),
-        ("openshell-prover-0.1.2-1.fc44.x86_64.rpm",
-         "158d40ddaaee002949274eb683143ef35d4da48b75595e1ab6cba7d09841d093"),
+        ("openshell-0.1.9-1.fc44.x86_64.rpm",
+         "e13436babd3687f1cb494898dff490ac2ff266e303af7dfca1fec376ab74c957"),
+        ("openshell-gateway-0.1.9-1.fc44.x86_64.rpm",
+         "2293b23e51bf87ff977dfe6f8456e421d66ce716790a74656fffbbde95580bcb"),
+        ("openshell-prover-0.1.9-1.fc44.x86_64.rpm",
+         "2612495c189e0ac3d1bb57a4f44f71d0491e747dfe4723637bb182d116762b03"),
     ),
     "aarch64": (
-        ("openshell-0.1.2-1.fc44.aarch64.rpm",
-         "505deb578136c27a83f5bc51feb452d2cf1b37aa45f29335a247d530de6eacd3"),
-        ("openshell-gateway-0.1.2-1.fc44.aarch64.rpm",
-         "e812d9e0133cab382e064e6866011e9edd0851cfd471336a7f605ec5725805a2"),
-        ("openshell-prover-0.1.2-1.fc44.aarch64.rpm",
-         "86bbb5e9acecc0ef98a804c7232b836a29e651a69cb3dd5d6178b652f1288481"),
+        ("openshell-0.1.9-1.fc44.aarch64.rpm",
+         "9c645c428a1b576007df589ac0384e4dba486b7d6747e5cf01469463325f0a14"),
+        ("openshell-gateway-0.1.9-1.fc44.aarch64.rpm",
+         "a31171a0cc7b6f269f704f4b93d0766d18c4f593bc693532a23d5a9c463793c5"),
+        ("openshell-prover-0.1.9-1.fc44.aarch64.rpm",
+         "4d31d136c273bd73f9daf8c48da92b48b8cfbfd638ae7ccbedd5b1ba37ec8467"),
     ),
 }
 
