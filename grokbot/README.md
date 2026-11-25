@@ -437,6 +437,20 @@ This writes `profiles/ops.json` under `~/.config/grokbot-artzain` (on Windows, `
 
 A decide with no agent id uses `grokbot-agent` and says so on stderr. `GROKBOT_REQUIRE_IDENTITY=1` makes that decide exit 2 before any network call.
 
+### The agent id is the announced one
+
+The hosted service denies an agent id its account has not declared, and a Bot is declared under the name `announce` sent: the row in the Agent Catalog ends with `#agent:<that name>`. A decide has to carry exactly that name. A Bot chooses what it passes as `--agent-did`, and one that passes its display name with its title (`Mira · Research lead` for the profile `Mira`) or the product's name (`Grok Bot`) is denied with `agent '<that name>' not in registry`, whatever the action is.
+
+From 0.1.12, `decide` compares the agent id it is given (the flag, the environment or the profile) with the ids this host announced: the profile folders under the host's sand-data directory, and the names `announce` recorded in `state.json` for the same base URL and key.
+
+- An announced id followed by a title is sent as the announced id. A title starts with a mark set off by a space (`Mira · Research lead`, `Mira - lead`, `Mira (lead)`) or with a comma or a colon and a space. The command says so on stderr, and the JSON line carries it as `notice`. `Mira-2`, `Mira/eu`, `probe:latency` and `Mira B` are ids of their own and are never replaced. Neither is an id when two announced ids could be meant.
+- Any other id that is not announced is sent as given, and the engine decides. The command says on stderr that the id is not announced and that the hosted service denies an undeclared id, with up to twelve of the announced ids. The JSON line carries that as `notice` when the answer is not an allow.
+- A host with no profile folders and no recorded announce has nothing to compare with, and the command says nothing. An id that is itself announced is never replaced.
+
+The exit code and the outcome are the engine's in every case. On a computer several Bots share, one `GROKBOT_AGENT_ID` cannot name each Bot: tell each Bot its agent id, and it passes `--agent-did <id>` on each `decide`.
+
+`announce` records a name from 0.1.12 on. If you announced names that are not profile folders (`GROKBOT_AGENT_ID`, `--agent-did` or `GROKBOT_ANNOUNCE_AGENTS`) with an earlier version, announce them once more after upgrading, with `--force` inside 24 hours. Until then a `decide` under such a name, on a host that has profile folders, prints the stderr line unless `--instance` or `GROKBOT_INSTANCE` names the instance that announce used.
+
 ### Command shims
 
 ```bash
@@ -591,7 +605,7 @@ Each can be an environment variable or, where one is listed, an option.
 |---|---|---|
 | `COGNEXUS_API_KEY` | `--api-key` | Decision API key. Prefer the variable: an option shows in the process list and the shell history. |
 | `COGNEXUS_API_BASE_URL` | `--base-url` | Your ArtzAIn deployment. Default `https://app.cognexuslabs.ai`. |
-| `GROKBOT_AGENT_ID` | `--agent-did` | The name decisions are recorded under, and the Bot's name in the Agent Catalog. Default `grokbot-agent`. Give each Bot its own, and keep it stable. |
+| `GROKBOT_AGENT_ID` | `--agent-did` | The name decisions are recorded under, and the Bot's name in the Agent Catalog. Default `grokbot-agent`. Give each Bot its own, and keep it stable. It must be the name `announce` sent: see [The agent id is the announced one](#the-agent-id-is-the-announced-one). |
 | `COGNEXUS_AGENT_DID` | `--agent-did` | The same name when `GROKBOT_AGENT_ID` is unset. `--agent-did` and `GROKBOT_AGENT_ID` win over it. |
 | `GROKBOT_INSTANCE` | `--instance` | A stable name for this host, with no `#` in it. Announce needs it. |
 | `GROKBOT_ANNOUNCE=true` | `--announce` | Announce beside each `decide`. |
@@ -628,7 +642,7 @@ grokbot-artzain announce
 
 With no agent id and no `GROKBOT_ANNOUNCE_AGENTS`, `announce` sends the current profile's agent. That is `activeAgentId` in `agents/active-agent.json` under the host's sand-data directory: `SAND_DATA_ROOT` when that path is absolute, otherwise `SAND_USER_DATA_DIR/sand-data`, otherwise `/home/box/sand-data`. The command sends the folder id. It does not read `profile.json` or `gateway.json`. `GROKBOT_ANNOUNCE_AGENTS` still names the agents to send instead of that profile. `--all-profiles` sends every profile on the host and ignores both.
 
-A list longer than 25 agents is several calls, at most 25 names each. A call stays within the server's 50-name cap and its 25 new rows. The command records the time of each agent it stored in `~/.config/grokbot-artzain/state.json` (on Windows, `%APPDATA%\grokbot-artzain\state.json`). The key is not stored. An agent announced within 24 hours is skipped unless `--force`.
+A list longer than 25 agents is several calls, at most 25 names each. A call stays within the server's 50-name cap and its 25 new rows. The command records the time and the name of each agent it stored in `~/.config/grokbot-artzain/state.json` (on Windows, `%APPDATA%\grokbot-artzain\state.json`), with a hash of the base URL and the key's fingerprint. The key is not stored. `decide` reads those names: see [The agent id is the announced one](#the-agent-id-is-the-announced-one). An agent announced within 24 hours is skipped unless `--force`.
 
 Or set `GROKBOT_ANNOUNCE=true`, and each `decide` run announces as well,
 which keeps the row's last-seen time current. The engine limits announce

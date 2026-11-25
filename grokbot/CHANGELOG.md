@@ -8,6 +8,21 @@ From 0.1.10, a section starts with `Upgrade:` (`none`, `recommended` or
 be), then `### Added`, `### Fixed` and `### Changed`. One bullet says
 whether the command, the library or the skill text changed.
 
+## 0.1.12
+
+Upgrade: recommended
+Needs: no engine change. Save the skill text again, because it changed (`grokbot-artzain upgrade --skill <path> --yes`, or compare with `grokbot-artzain skill --check <path>`). If you announced names that are not profile folders with 0.1.11 or earlier, announce them once more (`--force` inside 24 hours) so `decide` has them on record.
+
+### Fixed
+
+- **A decide sends the agent id `announce` registered.** The hosted service denies an agent id its account has not declared, and a Bot is declared under the name `announce` sent. A Bot chooses what it passes as `--agent-did`, and Bots passed their display name with its title (`Mira · Research lead` for the profile `Mira`) and the product's name (`Grok Bot`): each such decide was denied with `agent '<that name>' not in registry`, and each enrolled again under the new name. `decide` now compares the id it is given, from the flag, the environment or the profile, with the ids this host announced: the profile folders under the sand-data directory, and the names `announce` recorded for the same base URL and key. An announced id followed by a title is sent as the announced id; the command says so on stderr and in `notice` on the JSON line. A title starts with a mark set off by a space, or with a comma or a colon and a space, so `Mira-2`, `Mira/eu`, `probe:latency` and `Mira B` are never replaced, and neither is an id two announced ids could be meant by. Any other id that is not announced is sent as given: the command says on stderr that it is not announced and that the hosted service denies an undeclared id, lists up to twelve announced ids, and adds that as `notice` when the answer is not an allow. A host with no profile folders and no recorded announce is told nothing. The outcome and the exit code stay the engine's. A decide queued with `--queue` is stored under the id that was sent.
+
+### Changed
+
+- **`announce` records the name of each agent it stored.** `state.json` held the time under a hash. It now also holds the name, and a hash of the base URL and the key's fingerprint. The key is not stored. A record an earlier version wrote still skips a repeat inside 24 hours, and counts as announced for a `decide` that knows the instance (`--instance` or `GROKBOT_INSTANCE`).
+- **The skill text says which id is the Bot's.** It is the name of the Bot's profile, the one its Agent Catalog row ends with, and not a display name with a title or `Grok Bot`. A deny whose `notice` says the id is not announced is asked again once with the announced id. The setup section says that Bots on a shared computer each pass `--agent-did <id>`.
+- **The command, the library, and the skill text:** the command changed; the library's `gateToolCall`, `handleBeforeToolCall` and MCP server did not (they take the agent id from their configuration or the host); the skill text changed.
+
 ## 0.1.11
 
 Upgrade: recommended

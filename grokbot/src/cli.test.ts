@@ -20,7 +20,7 @@
  */
 
 import { execFileSync, spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
@@ -1493,6 +1493,143 @@ describe("announce profiles", () => {
     expect(announceBodies).toHaveLength(2);
     expect(existsSync(announceStateFile())).toBe(true);
     expect(readFileSync(announceStateFile(), "utf8")).not.toContain("cnx_cli_probe");
+  }, 45_000);
+});
+
+/**
+ * The hosted service denies an agent id its account has not declared, and a
+ * Bot is declared under the id `announce` sent. A Bot chooses what it passes
+ * as `--agent-did`, and has passed its display name with its title, and the
+ * product's name.
+ */
+describe("decide, an agent id that is not the announced one", () => {
+  const TITLED = "Mira · Research lead";
+
+  function decideAs(base: string, root: string, extra: NodeJS.ProcessEnv, ...more: string[]): Promise<Run> {
+    return runCli(
+      ["decide", "--action", "post_public", "--api-key", "cnx_cli_probe", "--base-url", base, ...more],
+      undefined,
+      { SAND_DATA_ROOT: root, ...extra },
+    );
+  }
+
+  it("sends the announced id when --agent-did is that id with a title", async () => {
+    const root = sandRoot(["Mira", "Otto"]);
+    const { base, bodies } = await origin(ALLOW, ALLOW);
+
+    const run = await decideAs(base, root, {}, "--agent-did", TITLED);
+
+    expect(run.status, run.stderr).toBe(0);
+    expect(sentDecision(bodies).agent_did).toBe("Mira");
+    const enrolled = JSON.parse(bodies["/api/v1/registry/enroll"] ?? "{}") as { agents?: string[] };
+    expect(enrolled.agents).toEqual(["Mira"]);
+    expect(run.stderr).toContain(`"${TITLED}"`);
+    expect(run.stderr).toContain('"Mira"');
+    const line = JSON.parse(run.stdout) as { outcome: string; notice?: string };
+    expect(line.outcome).toBe("allow");
+    expect(line.notice).toContain('"Mira"');
+    expect(run.stdout.trim().split("\n")).toHaveLength(1);
+  }, 45_000);
+
+  it("sends the announced id when GROKBOT_AGENT_ID is that id with a title", async () => {
+    const root = sandRoot(["Mira", "Otto"]);
+    const { base, bodies } = await origin(ALLOW, ALLOW);
+
+    const run = await decideAs(base, root, { GROKBOT_AGENT_ID: TITLED });
+
+    expect(run.status, run.stderr).toBe(0);
+    expect(sentDecision(bodies).agent_did).toBe("Mira");
+    expect(run.stderr).toContain(`"${TITLED}"`);
+  }, 45_000);
+
+  it("sends an id that fits no announced one as given, and says the hosted service denies it", async () => {
+    const root = sandRoot(["Mira", "Otto"]);
+    const { base, bodies } = await origin(
+      ALLOW,
+      json(200, { outcome: "deny", decision_id: "d9", reasons: ["agent 'Grok Bot' not in registry"] }),
+    );
+
+    const run = await decideAs(base, root, {}, "--agent-did", "Grok Bot");
+
+    expect(run.status, run.stderr).toBe(2);
+    expect(sentDecision(bodies).agent_did).toBe("Grok Bot");
+    expect(run.stderr).toContain('"Grok Bot"');
+    expect(run.stderr).toContain("hosted service denies");
+    const line = JSON.parse(run.stdout) as { outcome: string; error: string; notice?: string; next_step: string };
+    expect(line.outcome).toBe("deny");
+    expect(line.next_step).toBe("do not run");
+    expect(line.notice).toContain('"Grok Bot"');
+    expect(line.notice).toContain("hosted service denies");
+    expect(line.notice).toContain("Mira, Otto");
+    expect(run.stdout.trim().split("\n")).toHaveLength(1);
+  }, 45_000);
+
+  it("leaves that notice off an allow, and still says it on stderr", async () => {
+    const root = sandRoot(["Mira", "Otto"]);
+    const { base, bodies } = await origin(ALLOW, ALLOW);
+
+    const run = await decideAs(base, root, {}, "--agent-did", "Grok Bot");
+
+    expect(run.status, run.stderr).toBe(0);
+    expect(sentDecision(bodies).agent_did).toBe("Grok Bot");
+    expect(run.stderr).toContain('"Grok Bot"');
+    expect(JSON.parse(run.stdout)).toEqual({ outcome: "allow", decision_id: "d1", next_step: "run" });
+  }, 45_000);
+
+  it("says nothing about an id announce sent under this key, though it is no profile", async () => {
+    const root = sandRoot(["Mira"]);
+    const { base, bodies, announceBodies } = await origin(ALLOW, ALLOW);
+
+    const announced = await runCli(
+      [
+        "announce", "--api-key", "cnx_cli_probe", "--base-url", base,
+        "--instance", "named-desk", "--agent-did", "named-bot",
+      ],
+      undefined,
+      { SAND_DATA_ROOT: root },
+    );
+    expect(announced.status, announced.stderr).toBe(0);
+    expect((JSON.parse(announceBodies[0] ?? "{}") as { agents?: string[] }).agents).toEqual(["named-bot"]);
+
+    // No --instance here: the name is on record, not only a hash of it.
+    const run = await decideAs(base, root, {}, "--agent-did", "named-bot");
+
+    expect(run.status, run.stderr).toBe(0);
+    expect(sentDecision(bodies).agent_did).toBe("named-bot");
+    expect(run.stderr).not.toContain("announced");
+    expect(JSON.parse(run.stdout)).toEqual({ outcome: "allow", decision_id: "d1", next_step: "run" });
+  }, 45_000);
+
+  it("says nothing on a host with no profiles and no announce on record", async () => {
+    const root = mkdtempSync(join(tmpdir(), "grokbot-cli-sand-none-"));
+    const { base, bodies } = await origin(ALLOW, DENY);
+
+    const run = await decideAs(base, root, {}, "--agent-did", TITLED);
+
+    expect(run.status, run.stderr).toBe(2);
+    expect(sentDecision(bodies).agent_did).toBe(TITLED);
+    expect(run.stderr).not.toContain("announced");
+    expect((JSON.parse(run.stdout) as { notice?: string }).notice).toBeUndefined();
+  }, 45_000);
+
+  it("stores a queued decide under the announced id", async () => {
+    const root = sandRoot(["Mira", "Otto"]);
+    const down = await origin(ALLOW, (res) => {
+      res.socket?.destroy();
+    });
+
+    const run = await decideAs(down.base, root, {}, "--queue", "--request-id", "titled-queue-1", "--agent-did", TITLED);
+    await closeOrigin();
+
+    expect(run.status, run.stderr).toBe(2);
+    const stored = queuedTexts().find((text) => text.includes("titled-queue-1"));
+    // The entry is this test's alone: the queue tests below retry what is there.
+    for (const name of existsSync(queueDir()) ? readdirSync(queueDir()) : []) {
+      const file = join(queueDir(), name);
+      if (readFileSync(file, "utf8").includes("titled-queue-1")) rmSync(file);
+    }
+    expect(stored, run.stderr).toBeDefined();
+    expect((JSON.parse(stored ?? "{}") as { agent_did?: string }).agent_did).toBe("Mira");
   }, 45_000);
 });
 

@@ -53,6 +53,7 @@ import {
 import { formatDoctorText, runDoctor } from "./doctor.js";
 import { enrollInstance } from "./enroll.js";
 import { decisionPayload, gateToolCall, type SkillConfig } from "./gate.js";
+import { agentIdForDecide, type AgentIdCheck } from "./identity.js";
 import { serveMcpHttp, serveMcpStdio } from "./mcp/server.js";
 import { readProfile, writeProfile, type BotProfile } from "./profile.js";
 import { resolveSandRoot, selectAnnounceAgents } from "./profiles.js";
@@ -60,6 +61,7 @@ import { decisionWasUnreachable, enqueueDecision, listQueue, retryQueue } from "
 import { runShims } from "./shims/command.js";
 import {
   announceIsFresh,
+  announceScope,
   announceStateKey,
   currentCliVersion,
   readEnrollState,
@@ -569,6 +571,26 @@ async function loadConfig(
   };
 }
 
+/**
+ * The agent id a decide sends, read against the ids this host announced
+ * (identity.ts). A base URL that cannot be read is the gate's to report:
+ * here the id is sent as given.
+ */
+async function announcedAgentId(cfg: SkillConfig): Promise<AgentIdCheck> {
+  const given = cfg.agentDid ?? "";
+  try {
+    return await agentIdForDecide({
+      given,
+      env: process.env,
+      apiKey: (cfg.apiKey ?? "").trim() || undefined,
+      baseUrl: resolveBaseUrlSetting(cfg.baseUrl, cfg.baseUrlSource).url,
+      instance: cfg.instance || undefined,
+    });
+  } catch {
+    return { agentDid: given, replaced: false };
+  }
+}
+
 const NO_INSTANCE =
   "artzain announce skipped: set GROKBOT_INSTANCE (or pass --instance) to a stable name for this host";
 
@@ -869,6 +891,12 @@ async function main(argv: string[]): Promise<number> {
       log("grokbot-artzain: no agent id was given, so this decide uses grokbot-agent");
     }
     const cfg = loaded.config;
+    // An id this host did not announce is one the account has not declared
+    // through it. The note is printed now, and goes on the JSON line when
+    // the id was replaced or the answer is not an allow.
+    const identity = cfg.agentDid ? await announcedAgentId(cfg) : undefined;
+    if (identity?.note) log(`grokbot-artzain: ${identity.note}`);
+    if (identity?.replaced) cfg.agentDid = identity.agentDid;
     if (cfg.announce && !cfg.instance) {
       log(NO_INSTANCE);
       cfg.announce = false;
@@ -894,8 +922,10 @@ async function main(argv: string[]): Promise<number> {
       },
       fetchImpl,
     );
-    const notice = clientUpdateNotice(result.allow ? result.decision.warnings : result.warnings);
-    if (notice) log(notice);
+    const update = clientUpdateNotice(result.allow ? result.decision.warnings : result.warnings);
+    if (update) log(update);
+    const identityNotice = identity?.replaced || !result.allow ? identity?.note : undefined;
+    const notice = [update, identityNotice].filter(Boolean).join(" ") || undefined;
     if (result.allow) {
       print(JSON.stringify({
         outcome: "allow",
@@ -1105,6 +1135,7 @@ async function main(argv: string[]): Promise<number> {
           await recordAnnounces(
             out.agentsSent.map((agent) => announceStateKey(base.url, apiKey, instance, agent)),
             new Date(),
+            { scope: announceScope(base.url, apiKey), agents: out.agentsSent },
           );
         }
       } catch (err) {

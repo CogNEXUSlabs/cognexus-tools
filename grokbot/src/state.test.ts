@@ -15,7 +15,9 @@ import {
 import {
   ANNOUNCE_TTL_MS,
   announceIsFresh,
+  announceScope,
   announceStateKey,
+  announcedNames,
   currentCliVersion,
   enrollStateKey,
   readEnrollState,
@@ -187,6 +189,30 @@ describe("enroll state", () => {
     const again = await saved();
     expect(again?.entries[slot()]?.cli_version).toBe(currentCliVersion());
     expect(again?.announces[announceKey]?.last_announce_at).toBe("2026-11-05T00:00:00.000Z");
+  });
+
+  it("records the name an announce sent, under the base URL and key it was sent with", async () => {
+    const base = "https://engine.example";
+    const scope = announceScope(base, KEY);
+    const keys = ["research-bot", "ops-bot"].map((agent) => announceStateKey(base, KEY, "ops-desk", agent));
+    await recordAnnounces(keys, new Date("2026-11-24T00:00:00.000Z"), {
+      scope,
+      agents: ["research-bot", "ops-bot"],
+    });
+    const state = await saved();
+    expect(state?.announces[keys[0] ?? ""]).toEqual({
+      last_announce_at: "2026-11-24T00:00:00.000Z",
+      agent: "research-bot",
+      scope,
+    });
+    expect(announcedNames(state, scope)).toEqual(["ops-bot", "research-bot"]);
+    expect(announcedNames(state, announceScope(base, "cnx_another_key"))).toEqual([]);
+    expect(scope).not.toContain(KEY);
+    expect(await readFile(stateFilePath(), "utf8")).not.toContain(KEY);
+
+    // An enroll written afterwards keeps the names.
+    await recordEnroll(slot(), currentCliVersion(), new Date("2026-11-24T01:00:00.000Z"));
+    expect(announcedNames(await saved(), scope)).toEqual(["ops-bot", "research-bot"]);
   });
 
   it("does not enroll, and does not write, when enroll is exactly false", async () => {
