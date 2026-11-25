@@ -1576,6 +1576,59 @@ describe("decide, an agent id that is not the announced one", () => {
     expect(JSON.parse(run.stdout)).toEqual({ outcome: "allow", decision_id: "d1", next_step: "run" });
   }, 45_000);
 
+  /** The service's registry vote: no finding means the account declared the id. */
+  function registryVote(findings: string[]): Record<string, unknown> {
+    return {
+      name: "agent-registry",
+      verdict: "allow",
+      severity: findings.length ? "low" : "none",
+      score: null,
+      findings,
+      error: null,
+    };
+  }
+
+  function allowWith(votes: Record<string, unknown>[]): Answer {
+    return json(200, { outcome: "allow", decision_id: "d1", reasons: [], contributing_agents: votes });
+  }
+
+  it("says nothing when the service allowed the id as declared, and remembers it", async () => {
+    // A host whose profile folders are ids of their own, and a Bot announced by name before 0.1.12.
+    const root = sandRoot(["1cfbd6ab-4e2f-4c51-9a0e-6a1f2b3c4d5e", "7e9a0c12-3b4d-4f60-8a1b-2c3d4e5f6a7b"]);
+    let answer: Answer = allowWith([registryVote([])]);
+    const { base, bodies } = await origin(ALLOW, (res) => answer(res));
+
+    const first = await decideAs(base, root, {}, "--agent-did", "dr eggbot");
+
+    expect(first.status, first.stderr).toBe(0);
+    expect(sentDecision(bodies).agent_did).toBe("dr eggbot");
+    expect(first.stderr).not.toContain("not a profile");
+    expect(JSON.parse(first.stdout)).toEqual({ outcome: "allow", decision_id: "d1", next_step: "run" });
+
+    // The next decide under that name is quiet before the service answers, and on a deny.
+    answer = json(200, { outcome: "deny", decision_id: "d2", reasons: ["refused by policy"] });
+    const second = await decideAs(base, root, {}, "--agent-did", "dr eggbot");
+
+    expect(second.status, second.stderr).toBe(2);
+    expect(second.stderr).not.toContain("not a profile");
+    expect((JSON.parse(second.stdout) as { notice?: string }).notice).toBeUndefined();
+  }, 45_000);
+
+  it("keeps the warning when the allow says the id is not in the registry, and remembers nothing", async () => {
+    // An engine that allows an undeclared id (COGNEXUS_UNREGISTERED_AGENTS=allow) says so in its vote.
+    const root = sandRoot(["Mira", "Otto"]);
+    const { base } = await origin(ALLOW, allowWith([registryVote(["agent 'Grok Bot' not in registry"])]));
+
+    const first = await decideAs(base, root, {}, "--agent-did", "Grok Bot");
+    const second = await decideAs(base, root, {}, "--agent-did", "Grok Bot");
+
+    for (const run of [first, second]) {
+      expect(run.status, run.stderr).toBe(0);
+      expect(run.stderr).toContain('"Grok Bot"');
+      expect(run.stderr).toContain("hosted service denies");
+    }
+  }, 45_000);
+
   it("says nothing about an id announce sent under this key, though it is no profile", async () => {
     const root = sandRoot(["Mira"]);
     const { base, bodies, announceBodies } = await origin(ALLOW, ALLOW);

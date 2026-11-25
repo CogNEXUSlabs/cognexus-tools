@@ -8,7 +8,10 @@
  * announce entry adds the instance. Each stores the time. An announce entry
  * also stores the agent's name, and a hash of the base URL and the key's
  * fingerprint, so a later `decide` can tell whether the agent id it was
- * given is one this host announced. The key itself is not stored.
+ * given is one this host announced. A name the service allowed as one its
+ * account declared is recorded the same way, under an entry of its own,
+ * so a name announced before 0.1.12 is learned from its first allow. The
+ * key itself is not stored.
  *
  * A missing, corrupt or unreadable file is "enroll and rewrite". It is
  * never an error the gate reports.
@@ -120,7 +123,16 @@ export function announceScope(baseUrl: string, apiKey: string): string {
     .digest("hex");
 }
 
-/** The names `announce` recorded for that scope, sorted. */
+/**
+ * The entry for a name the service allowed as declared, under one scope.
+ * No announce entry has this name, so the announce of that name is still
+ * sent when it is due.
+ */
+export function declaredAgentKey(scope: string, agentId: string): string {
+  return createHash("sha256").update(`declared\0${scope}\0${agentId}`, "utf8").digest("hex");
+}
+
+/** The names `announce` recorded, and the service allowed, for that scope, sorted. */
 export function announcedNames(state: EnrollState | null, scope: string): string[] {
   const names = new Set<string>();
   for (const row of Object.values(state?.announces ?? {})) {
@@ -385,5 +397,17 @@ export async function recordAnnounces(
           ? { last_announce_at: stamp, agent, scope: named.scope }
           : { last_announce_at: stamp };
     });
+  });
+}
+
+/**
+ * Record that the service allowed `agent` as an id its account declared,
+ * for the base URL and key `scope` stands for. Throws when the file cannot
+ * be written; the caller swallows that.
+ */
+export async function recordDeclaredAgent(scope: string, agent: string, at: Date): Promise<void> {
+  const stamp = at.toISOString();
+  await updateState((state) => {
+    state.announces[declaredAgentKey(scope, agent)] = { last_announce_at: stamp, agent, scope };
   });
 }

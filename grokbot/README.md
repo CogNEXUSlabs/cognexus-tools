@@ -445,11 +445,12 @@ From 0.1.12, `decide` compares the agent id it is given (the flag, the environme
 
 - An announced id followed by a title is sent as the announced id. A title starts with a mark set off by a space (`Mira · Research lead`, `Mira - lead`, `Mira (lead)`) or with a comma or a colon and a space. The command says so on stderr, and the JSON line carries it as `notice`. `Mira-2`, `Mira/eu`, `probe:latency` and `Mira B` are ids of their own and are never replaced. Neither is an id when two announced ids could be meant.
 - Any other id that is not announced is sent as given, and the engine decides. The command says on stderr that the id is not announced and that the hosted service denies an undeclared id, with up to twelve of the announced ids. The JSON line carries that as `notice` when the answer is not an allow.
+- From 0.1.13, that stderr line waits for the answer. When the service allows the id as one its account declared (its `agent-registry` vote allows with no finding), the command says nothing and records the name in `state.json`, so later decides under it say nothing either. An engine that lets an undeclared id through says `not in registry` in that vote, and the line is printed as before.
 - A host with no profile folders and no recorded announce has nothing to compare with, and the command says nothing. An id that is itself announced is never replaced.
 
 The exit code and the outcome are the engine's in every case. On a computer several Bots share, one `GROKBOT_AGENT_ID` cannot name each Bot: tell each Bot its agent id, and it passes `--agent-did <id>` on each `decide`.
 
-`announce` records a name from 0.1.12 on. If you announced names that are not profile folders (`GROKBOT_AGENT_ID`, `--agent-did` or `GROKBOT_ANNOUNCE_AGENTS`) with an earlier version, announce them once more after upgrading, with `--force` inside 24 hours. Until then a `decide` under such a name, on a host that has profile folders, prints the stderr line unless `--instance` or `GROKBOT_INSTANCE` names the instance that announce used.
+`announce` records a name from 0.1.12 on. A name announced with an earlier version that is not a profile folder (`GROKBOT_AGENT_ID`, `--agent-did` or `GROKBOT_ANNOUNCE_AGENTS`) is learned from 0.1.13 on from the first decide the service allows under it, with nothing said. With 0.1.12, announce such names once more (`--force` inside 24 hours), or every decide under them prints the stderr line unless `--instance` or `GROKBOT_INSTANCE` names the instance that announce used.
 
 ### Command shims
 
